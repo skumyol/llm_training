@@ -1,0 +1,49 @@
+- scenario_id: an_001
+  scenario_type: alliance_negotiation
+  setting: war_council_chamber
+  stakes: high
+  turn_budget: 9
+  required_events: [proposal, counter, concession, agreement]
+  success_condition: obligation_established
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [general, advisor, diplomat]
+
+- scenario_id: an_002
+  scenario_type: alliance_negotiation
+  setting: guild_hall
+  stakes: medium
+  turn_budget: 7
+  required_events: [offer, haggle, trust_test, deal]
+  success_condition: obligation_established
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [guild_master, merchant_lord, factor]
+
+- scenario_id: an_003
+  scenario_type: alliance_negotiation
+  setting: forest_border_camp
+  stakes: high
+  turn_budget: 8
+  required_events: [approach, suspicion_overcome, pledge]
+  success_condition: familiarity_delta_positive
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [clan_chief, ranger_captain, scout]
+
+- scenario_id: an_004
+  scenario_type: alliance_negotiation
+  setting: prison_cell
+  stakes: high
+  turn_budget: 7
+  required_events: [offer_deal, test_sincerity, conditional_agreement]
+  success_condition: obligation_established
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [prisoner, spy, defector]
+
+- scenario_id: an_005
+  scenario_type: alliance_negotiation
+  setting: throne_room_antechamber
+  stakes: high
+  turn_budget: 9
+  required_events: [petition, resistance, persuasion, conditional_pledge]
+  success_condition: obligation_established
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [court_advisor, chamberlain, regent]

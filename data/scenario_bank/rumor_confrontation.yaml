@@ -1,0 +1,49 @@
+- scenario_id: rc_001
+  scenario_type: rumor_confrontation
+  setting: tavern_common_room
+  stakes: medium
+  turn_budget: 7
+  required_events: [rumor_reference, denial, credibility_challenge]
+  success_condition: no_full_secret_reveal
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [innkeeper, gossip, traveling_merchant]
+
+- scenario_id: rc_002
+  scenario_type: rumor_confrontation
+  setting: market_square
+  stakes: medium
+  turn_budget: 6
+  required_events: [public_accusation, denial, face_saving]
+  success_condition: face_pressure_resolved
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [merchant, noble_servant, town_crier]
+
+- scenario_id: rc_003
+  scenario_type: rumor_confrontation
+  setting: noble_court
+  stakes: high
+  turn_budget: 9
+  required_events: [whisper_campaign, formal_denial, counter_narrative]
+  success_condition: reputation_defended
+  allowed_reveal_ceiling: none
+  npc_role_pool: [courtier, lord, spy_master]
+
+- scenario_id: rc_004
+  scenario_type: rumor_confrontation
+  setting: guild_meeting_room
+  stakes: medium
+  turn_budget: 7
+  required_events: [accusation_via_rumor, challenge_source, redirect]
+  success_condition: credibility_maintained
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [guild_master, journeyman, informant]
+
+- scenario_id: rc_005
+  scenario_type: rumor_confrontation
+  setting: church_vestibule
+  stakes: high
+  turn_budget: 8
+  required_events: [moral_accusation, pious_denial, deflect_to_duty]
+  success_condition: no_full_secret_reveal
+  allowed_reveal_ceiling: none
+  npc_role_pool: [bishop, monk, inquisitor]

@@ -1,0 +1,49 @@
+- scenario_id: te_001
+  scenario_type: threat_escalation
+  setting: castle_gatehouse
+  stakes: high
+  turn_budget: 7
+  required_events: [warning, escalate, standoff]
+  success_condition: no_capitulation_without_good_reason
+  allowed_reveal_ceiling: none
+  npc_role_pool: [castle_guard, sergeant, soldier]
+
+- scenario_id: te_002
+  scenario_type: threat_escalation
+  setting: back_alley
+  stakes: high
+  turn_budget: 6
+  required_events: [intimidation, defiance, threat_peak]
+  success_condition: dominance_maintained
+  allowed_reveal_ceiling: none
+  npc_role_pool: [enforcer, gang_lieutenant, hired_thug]
+
+- scenario_id: te_003
+  scenario_type: threat_escalation
+  setting: interrogation_room
+  stakes: high
+  turn_budget: 9
+  required_events: [pressure, silence, escalate, near_break]
+  success_condition: no_full_secret_reveal
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [inquisitor, spy_master, sergeant]
+
+- scenario_id: te_004
+  scenario_type: threat_escalation
+  setting: border_checkpoint
+  stakes: medium
+  turn_budget: 6
+  required_events: [block, challenge, assert_authority]
+  success_condition: dominance_maintained
+  allowed_reveal_ceiling: none
+  npc_role_pool: [customs_officer, soldier, border_captain]
+
+- scenario_id: te_005
+  scenario_type: threat_escalation
+  setting: noble_office
+  stakes: high
+  turn_budget: 8
+  required_events: [veiled_threat, defiance, escalate, de_escalate_or_break]
+  success_condition: no_full_secret_reveal
+  allowed_reveal_ceiling: none
+  npc_role_pool: [lord, court_advisor, regent]

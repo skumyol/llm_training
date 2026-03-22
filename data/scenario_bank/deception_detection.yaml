@@ -1,0 +1,49 @@
+- scenario_id: dd_001
+  scenario_type: deception_detection
+  setting: trading_post
+  stakes: medium
+  turn_budget: 7
+  required_events: [suspicious_claim, probe, inconsistency_catch]
+  success_condition: deception_flagged_in_M_t
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [merchant, factor, customs_officer]
+
+- scenario_id: dd_002
+  scenario_type: deception_detection
+  setting: castle_entrance
+  stakes: high
+  turn_budget: 7
+  required_events: [false_credential, challenge, expose_or_admit]
+  success_condition: deception_flagged_in_M_t
+  allowed_reveal_ceiling: none
+  npc_role_pool: [castle_guard, steward, sergeant]
+
+- scenario_id: dd_003
+  scenario_type: deception_detection
+  setting: noble_dinner
+  stakes: high
+  turn_budget: 9
+  required_events: [social_lie, subtle_probe, trap_laid]
+  success_condition: deception_flagged_in_M_t
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [courtier, spy, lady_in_waiting]
+
+- scenario_id: dd_004
+  scenario_type: deception_detection
+  setting: church_confession_booth
+  stakes: high
+  turn_budget: 7
+  required_events: [false_confession, gentle_probe, confrontation]
+  success_condition: deception_flagged_in_M_t
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [priest, bishop, inquisitor]
+
+- scenario_id: dd_005
+  scenario_type: deception_detection
+  setting: underground_meeting
+  stakes: high
+  turn_budget: 8
+  required_events: [cover_story, inconsistency_probe, revelation]
+  success_condition: deception_flagged_in_M_t
+  allowed_reveal_ceiling: none
+  npc_role_pool: [resistance_leader, spy_master, informant]

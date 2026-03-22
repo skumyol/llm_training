@@ -1,5 +1,67 @@
-/data.md
-/impl.md
-/plan.md
-/schema.md
-/traininig_plan.md
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Environments
+.venv/
+.env
+.env.*
+
+# Editors/OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Checkpoints & logs
+mlruns/
+logs/
+*.log
+*.pid
+
+# Data artifacts
+/data/raw_episodes/
+/data/validated_turns/
+/data/counterfactuals/
+/data/packaged/
+/data/merged_validated/
+/data/splits/
+/data/npc_profiles/
+/data/scenario_bank/*.tmp
+/data/world_contexts/*.tmp
+
+# Model artifacts
+checkpoints/
+outputs/
+*.ckpt
+*.safetensors
+*.bin
+
+# Hugging Face cache
+~/.cache/
+~/.huggingface/
+
+# Notebooks
+*.ipynb_checkpoints/
+
+# Local configs/creds
+*.secret
+*.local
+*.bak
+
+# Profiling
+.prof
+.profraw
+.coverage
+
+# Build/Dist
+build/
+dist/
+*.egg-info/
+
+# Temporary
+/tmp/
+*.tmp

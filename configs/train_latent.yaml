@@ -1,0 +1,59 @@
+base_model: Qwen/Qwen3-0.6B
+debug_model: Qwen/Qwen3-0.6B
+
+quantization: null
+# bnb_4bit_compute_dtype: bfloat16
+# bnb_4bit_quant_type: nf4
+# bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  lr: 2.0e-4
+  lr_scheduler: cosine
+  warmup_ratio: 0.05
+  epochs: 5
+  max_seq_len: 512
+  batch_size: 1
+  grad_accum: 32
+  gradient_checkpointing: true
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  dataloader_num_workers: 0
+  eval_steps: 200
+  save_steps: 400
+  logging_steps: 20
+  load_best_model_at_end: true
+  metric_for_best_model: val/response_policy_f1
+
+loss_weights:
+  lambda_C: 1.0
+  lambda_A: 1.0
+  lambda_M: 1.5
+  lambda_R: 2.0
+  lambda_N: 1.0
+  lambda_D: 2.0
+
+data:
+  train_file: data/splits/train_heads.jsonl
+  val_file: data/splits/val_heads.jsonl
+  artifact_type: head_supervision
+
+output:
+  checkpoint_dir: checkpoints/latent_predictor
+  best_model_dir: checkpoints/latent_predictor_best
+
+mlflow:
+  experiment_name: latent_state_prediction
+  run_name: qwen3_0.6b_schema_v1_latent
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42

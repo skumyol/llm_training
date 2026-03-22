@@ -1,0 +1,89 @@
+world_name: "The Siege of Oakhaven"
+description: >
+  Oakhaven is a border town currently under siege by the Iron Legion. 
+  Food is scarce, morale is low, and the town council is divided on whether to surrender or fight to the last.
+  There are rumors of a traitor within the walls signaling the enemy.
+
+factions:
+  - name: "Town Council"
+    goals: ["Maintain order", "Decide fate of town"]
+  - name: "Town Guard"
+    goals: ["Defend the walls", "Root out spies"]
+  - name: "Iron Legion (Enemy)"
+    goals: ["Conquer Oakhaven", "Crush resistance"]
+  - name: "Merchants Guild"
+    goals: ["Protect wealth", "Survive siege"]
+
+npcs:
+  - npc_id: "commander_vance"
+    role: "castle_guard"
+    name: "Commander Vance"
+    persona_style: ["stoic", "exhausted", "dutiful"]
+    values: ["duty", "honor", "protection"]
+    core_goals: ["hold the walls", "catch the spy"]
+    secrets: 
+      - secret_id: "low_supplies"
+        severity: "high"
+        description: "The town only has food for 3 more days."
+    faction: "Town Guard"
+
+  - npc_id: "mayor_elara"
+    role: "steward"
+    name: "Mayor Elara"
+    persona_style: ["diplomatic", "anxious", "calculating"]
+    values: ["peace", "survival", "community"]
+    core_goals: ["negotiate surrender", "save citizens"]
+    secrets:
+      - secret_id: "secret_negotiation"
+        severity: "high"
+        description: "She has already sent a messenger to the Legion offering surrender terms."
+    faction: "Town Council"
+
+  - npc_id: "merchant_garrick"
+    role: "merchant"
+    name: "Garrick the Supplier"
+    persona_style: ["greedy", "pragmatic", "shifty"]
+    values: ["profit", "self_preservation"]
+    core_goals: ["hoard grain", "bribe guards"]
+    secrets:
+      - secret_id: "hoarded_grain"
+        severity: "medium"
+        description: "He has a hidden cellar full of grain he's selling at 10x price."
+    faction: "Merchants Guild"
+
+relationships:
+  - source: "commander_vance"
+    target: "mayor_elara"
+    type: "rival"
+    history: "Vance believes Elara is weak and willing to sell them out. Elara thinks Vance is a warmonger who will get everyone killed."
+    stance:
+      affection: "VL"
+      respect: "L"
+      trust: "VL"
+
+  - source: "mayor_elara"
+    target: "commander_vance"
+    type: "rival"
+    history: "Elara respects Vance's bravery but fears his stubbornness."
+    stance:
+      affection: "N"
+      respect: "H"
+      trust: "L"
+
+  - source: "merchant_garrick"
+    target: "mayor_elara"
+    type: "ally"
+    history: "Garrick funds Elara's campaigns. She turns a blind eye to his price gouging."
+    stance:
+      affection: "L"
+      respect: "N"
+      trust: "H"
+
+  - source: "commander_vance"
+    target: "merchant_garrick"
+    type: "enemy"
+    history: "Vance threatened to hang Garrick for hoarding last week."
+    stance:
+      affection: "VL"
+      respect: "VL"
+      trust: "VL"

@@ -1,0 +1,54 @@
+teachers:
+  - provider: local_hf
+    model: Qwen/Qwen3-0.6B
+    quantization: none          # 0.6B is ~1.2GB bf16 — no need to quantize
+    device_map: auto
+    torch_dtype: bfloat16
+    temperature: 0.85
+    max_tokens: 512
+
+generation:
+  n_episodes: 150               # ~10 hours at 251 s/episode (benchmarked on Qwen3-0.6B)
+  turns_per_episode_min: 5
+  turns_per_episode_max: 10
+  counterfactuals_per_episode: 3
+  player_utterance_sampled_ratio: 0.0
+
+scenario:
+  bank_dir: data/scenario_bank
+  npc_profiles_dir: data/npc_profiles
+  world_context: data/world_contexts/oakhaven_siege.yaml
+  scenario_type_weights:
+    secret_extraction: 0.20
+    apology_repair: 0.15
+    alliance_negotiation: 0.15
+    rumor_confrontation: 0.15
+    threat_escalation: 0.10
+    trust_building: 0.15
+    deception_detection: 0.10
+
+output:
+  raw_episodes_dir: data/raw_episodes
+  validated_turns_dir: data/validated_turns
+  counterfactuals_dir: data/counterfactuals
+
+validation:
+  max_rejection_rate: 0.30
+  min_response_tokens: 5
+  max_response_tokens: 150
+  strict_arc_adherence: true
+
+prompts:
+  scenario_instantiation: prompts/scenario_instantiation.txt
+  label_C: prompts/label_C.txt
+  label_A_M: prompts/label_A_M.txt
+  label_R_N_D: prompts/label_R_N_D.txt
+  response_generation: prompts/response_generation.txt
+  player_generation: prompts/player_generation.txt
+
+mlflow:
+  experiment_name: social_state_data_generation
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42

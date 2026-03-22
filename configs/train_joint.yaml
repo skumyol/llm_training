@@ -1,0 +1,67 @@
+base_model: Qwen/Qwen3-4B
+debug_model: Qwen/Qwen3-1.7B
+
+quantization: 4bit
+bnb_4bit_compute_dtype: bfloat16
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
+
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  lr: 5.0e-5
+  lr_scheduler: cosine
+  warmup_ratio: 0.03
+  epochs: 3
+  max_seq_len: 1024
+  heads_max_seq_len: 512
+  batch_size: 1
+  grad_accum: 8
+  gradient_checkpointing: true
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  dataloader_num_workers: 0
+  eval_steps: 200
+  save_steps: 400
+  logging_steps: 1
+  load_best_model_at_end: true
+  metric_for_best_model: val/joint_score
+
+loss_weights:
+  lambda_C: 1.0
+  lambda_A: 1.0
+  lambda_M: 1.5
+  lambda_R: 2.0
+  lambda_N: 1.0
+  lambda_D: 2.0
+  lambda_Y: 1.0
+  lambda_consistency: 0.5
+
+init_from:
+  latent_checkpoint: checkpoints/latent_predictor_best
+  response_checkpoint: checkpoints/response_generator_best
+
+data:
+  train_file: data/splits/train_sft.jsonl
+  val_file: data/splits/val_sft.jsonl
+  heads_train_file: data/splits/train_heads.jsonl
+  heads_val_file: data/splits/val_heads.jsonl
+
+output:
+  checkpoint_dir: checkpoints/joint_model
+  best_model_dir: checkpoints/joint_model_best
+
+mlflow:
+  experiment_name: latent_state_prediction
+  run_name: qwen3_4b_schema_v1_joint
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42

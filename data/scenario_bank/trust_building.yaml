@@ -1,0 +1,49 @@
+- scenario_id: tb_001
+  scenario_type: trust_building
+  setting: remote_farmstead
+  stakes: low
+  turn_budget: 8
+  required_events: [cautious_greeting, small_help, gradual_openness]
+  success_condition: familiarity_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [farmer, shepherd, miller]
+
+- scenario_id: tb_002
+  scenario_type: trust_building
+  setting: healers_cottage
+  stakes: medium
+  turn_budget: 7
+  required_events: [request_help, empathy, confidence_build]
+  success_condition: trust_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [healer, herbalist, midwife]
+
+- scenario_id: tb_003
+  scenario_type: trust_building
+  setting: refugee_camp
+  stakes: medium
+  turn_budget: 8
+  required_events: [offer_aid, test_motives, acceptance]
+  success_condition: affection_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [refugee_leader, elder, community_guard]
+
+- scenario_id: tb_004
+  scenario_type: trust_building
+  setting: scholars_study
+  stakes: low
+  turn_budget: 7
+  required_events: [intellectual_exchange, shared_interest, earned_disclosure]
+  success_condition: respect_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [scholar, archivist, tutor]
+
+- scenario_id: tb_005
+  scenario_type: trust_building
+  setting: city_underground_hideout
+  stakes: high
+  turn_budget: 9
+  required_events: [vetting, loyalty_signal, conditional_trust]
+  success_condition: trust_delta_positive
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [resistance_leader, spy, informant]

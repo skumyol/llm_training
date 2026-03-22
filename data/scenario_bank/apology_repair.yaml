@@ -1,0 +1,49 @@
+- scenario_id: ap_001
+  scenario_type: apology_repair
+  setting: market_square
+  stakes: medium
+  turn_budget: 6
+  required_events: [conflict, apology, stance_repair]
+  success_condition: trust_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [merchant, vendor, craftsman]
+
+- scenario_id: ap_002
+  scenario_type: apology_repair
+  setting: temple_courtyard
+  stakes: medium
+  turn_budget: 7
+  required_events: [offense, remorse, ritual_repair]
+  success_condition: face_pressure_resolved
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [priest, acolyte, elder]
+
+- scenario_id: ap_003
+  scenario_type: apology_repair
+  setting: noble_hall
+  stakes: high
+  turn_budget: 8
+  required_events: [public_insult, formal_apology, reputation_repair]
+  success_condition: face_pressure_resolved
+  allowed_reveal_ceiling: hint
+  npc_role_pool: [lord, steward, herald]
+
+- scenario_id: ap_004
+  scenario_type: apology_repair
+  setting: smithy
+  stakes: low
+  turn_budget: 5
+  required_events: [misunderstanding, clarify, reconcile]
+  success_condition: affection_delta_positive
+  allowed_reveal_ceiling: full
+  npc_role_pool: [blacksmith, apprentice]
+
+- scenario_id: ap_005
+  scenario_type: apology_repair
+  setting: docks
+  stakes: medium
+  turn_budget: 6
+  required_events: [accusation, defend, negotiate_repair]
+  success_condition: trust_delta_positive
+  allowed_reveal_ceiling: partial
+  npc_role_pool: [dockworker, captain, harbormaster]

@@ -1,0 +1,192 @@
+import json
+from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import get_peft_model, LoraConfig, TaskType, PeftModel
+
+
+STANCE_DIMS = ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
+
+HEAD_SPECS: dict[str, dict] = {
+    "dialogue_act":       {"n_classes": 10, "multi_label": True},
+    "tone":               {"n_classes": 6,  "multi_label": False},
+    "risk_type":          {"n_classes": 5,  "multi_label": False},
+    "valence":            {"n_classes": 3,  "multi_label": False},
+    "arousal":            {"n_classes": 3,  "multi_label": False},
+    "threat":             {"n_classes": 3,  "multi_label": False},
+    "control":            {"n_classes": 3,  "multi_label": False},
+    "player_intent":      {"n_classes": 9,  "multi_label": False},
+    "player_knowledge":   {"n_classes": 4,  "multi_label": False},
+    "player_credibility": {"n_classes": 3,  "multi_label": False},
+    "duty_pressure":      {"n_classes": 3,  "multi_label": False},
+    "secrecy_pressure":   {"n_classes": 3,  "multi_label": False},
+    "face_pressure":      {"n_classes": 3,  "multi_label": False},
+    "value_conflict":     {"n_classes": 3,  "multi_label": False},
+    "response_policy":    {"n_classes": 10, "multi_label": False},
+    "reveal_decision":    {"n_classes": 4,  "multi_label": False},
+    "repair_strategy":    {"n_classes": 5,  "multi_label": False},
+}
+
+for dim in STANCE_DIMS:
+    HEAD_SPECS[f"{dim}_level"] = {"n_classes": 5, "multi_label": False}
+    HEAD_SPECS[f"{dim}_delta"] = {"n_classes": 5, "multi_label": False}
+
+
+class ClassificationHead(nn.Module):
+    def __init__(self, hidden_size: int, n_classes: int, dropout: float = 0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, n_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class LatentStatePredictor(nn.Module):
+    def __init__(self, backbone: nn.Module, hidden_size: int, head_specs: dict = HEAD_SPECS):
+        super().__init__()
+        self.backbone = backbone
+        self.hidden_size = hidden_size
+        self.heads = nn.ModuleDict({
+            name: ClassificationHead(hidden_size, spec["n_classes"])
+            for name, spec in head_specs.items()
+        })
+        self.head_specs = head_specs
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+    ) -> dict:
+        outputs = self.backbone(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_hidden_states=True,
+        )
+        last_hidden = outputs.hidden_states[-1]
+        seq_lengths = attention_mask.sum(dim=1) - 1
+        pooled = last_hidden[torch.arange(last_hidden.size(0), device=last_hidden.device), seq_lengths]
+        pooled = pooled.to(torch.float32)
+
+        logits = {name: head(pooled) for name, head in self.heads.items()}
+        
+        return {
+            "logits": logits, 
+            "pooled": pooled,
+            "lm_loss": outputs.loss if labels is not None else None,
+            "backbone_outputs": outputs
+        }
+
+
+def load_backbone(
+    model_name: str,
+    quantization: str = "4bit",
+    lora_config: Optional[dict] = None,
+) -> tuple:
+    bnb_config = None
+    if quantization == "4bit":
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+    elif quantization == "8bit":
+        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+    )
+
+    if lora_config is not None:
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=lora_config.get("r", 16),
+            lora_alpha=lora_config.get("alpha", 32),
+            lora_dropout=lora_config.get("dropout", 0.05),
+            target_modules=lora_config.get("target_modules", ["q_proj", "v_proj"]),
+            bias=lora_config.get("bias", "none"),
+        )
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
+    hidden_size = model.config.hidden_size
+    return model, tokenizer, hidden_size
+
+
+def build_latent_predictor(
+    model_name: str,
+    quantization: str = "4bit",
+    lora_config: Optional[dict] = None,
+) -> tuple:
+    backbone, tokenizer, hidden_size = load_backbone(model_name, quantization, lora_config)
+    predictor = LatentStatePredictor(backbone, hidden_size)
+    _move_heads_to_backbone_device(predictor)
+    return predictor, tokenizer
+
+
+def _move_heads_to_backbone_device(predictor: "LatentStatePredictor") -> None:
+    """Move classification heads to the same device as the backbone."""
+    try:
+        device = next(predictor.backbone.parameters()).device
+    except StopIteration:
+        return
+    predictor.heads.to(device)
+
+
+def save_predictor(predictor: LatentStatePredictor, save_dir: str) -> None:
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    predictor.backbone.save_pretrained(str(save_dir / "backbone"))
+    head_state = {
+        k: {pk: pv.detach().cpu() for pk, pv in v.state_dict().items()}
+        for k, v in predictor.heads.items()
+    }
+    torch.save(head_state, save_dir / "heads.pt")
+    print(f"Saved predictor to {save_dir}")
+
+
+def load_predictor(
+    save_dir: str,
+    model_name: str,
+    quantization: str = "4bit",
+) -> tuple:
+    save_dir = Path(save_dir)
+    backbone_dir = save_dir / "backbone"
+    
+    # Always load base model and tokenizer from model_name
+    backbone, tokenizer, hidden_size = load_backbone(
+        model_name,
+        quantization,
+        lora_config=None,
+    )
+    
+    if backbone_dir.exists():
+        backbone = PeftModel.from_pretrained(backbone, str(backbone_dir))
+
+    predictor = LatentStatePredictor(backbone, hidden_size)
+    heads_path = save_dir / "heads.pt"
+    if heads_path.exists():
+        head_state = torch.load(heads_path, map_location="cpu")
+        for name, state in head_state.items():
+            if name in predictor.heads:
+                predictor.heads[name].load_state_dict(state)
+    _move_heads_to_backbone_device(predictor)
+    return predictor, tokenizer
