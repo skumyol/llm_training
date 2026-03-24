@@ -48,7 +48,11 @@ def train_joint(config_path: str, debug: bool = False) -> None:
     from peft import PeftModel
 
     # 1. Load Base Model
-    backbone, tokenizer, hidden_size = load_backbone(model_name, cfg.get("quantization", "4bit"))
+    backbone, tokenizer, hidden_size = load_backbone(
+        model_name,
+        cfg.get("quantization", "4bit"),
+        torch_dtype=cfg.get("torch_dtype", "bfloat16"),
+    )
     
     # 2. Load Adapter
     if response_ckpt and Path(response_ckpt).exists():

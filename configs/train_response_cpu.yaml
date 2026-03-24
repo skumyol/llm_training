@@ -1,0 +1,46 @@
+base_model: Qwen/Qwen3-0.6B
+debug_model: Qwen/Qwen3-0.6B
+
+quantization: null
+torch_dtype: float32
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj]
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  lr: 1.0e-4
+  epochs: 1
+  max_seq_len: 256
+  batch_size: 1
+  grad_accum: 4
+  gradient_checkpointing: false
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: false
+  dataloader_num_workers: 0
+  logging_steps: 5
+
+conditioning_mode: gold
+latent_predictor_checkpoint: null
+
+data:
+  train_file: data/splits/train_sft.jsonl
+  val_file: data/splits/val_sft.jsonl
+  artifact_type: sft
+
+output:
+  checkpoint_dir: checkpoints/response_generator_cpu
+  best_model_dir: checkpoints/response_generator_cpu_best
+
+mlflow:
+  experiment_name: response_generation
+  run_name: qwen3_0.6b_cpu_test
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42

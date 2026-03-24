@@ -47,6 +47,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             "target_modules": lora_cfg.get("target_modules", ["q_proj", "v_proj"]),
             "bias": lora_cfg.get("bias", "none"),
         },
+        torch_dtype=cfg.get("torch_dtype", "bfloat16"),
     )
 
     if train_cfg.get("gradient_checkpointing", False):

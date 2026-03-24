@@ -5,10 +5,9 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import get_peft_model, LoraConfig, TaskType
 
 from src.training.dataset import SFTDataset, collate_sft_batch
+from src.training.model import load_backbone
 
 
 def train_response(config_path: str, debug: bool = False) -> None:
@@ -25,36 +24,22 @@ def train_response(config_path: str, debug: bool = False) -> None:
     lora_cfg = cfg.get("lora", {})
     train_cfg = cfg["training"]
 
+    quantization = cfg.get("quantization", "4bit")
+    torch_dtype = cfg.get("torch_dtype", "bfloat16")
+
     print(f"Loading model: {model_name}")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
+    model, tokenizer, _ = load_backbone(
         model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        quantization=quantization,
+        lora_config={
+            "r": lora_cfg.get("r", 32),
+            "alpha": lora_cfg.get("alpha", 64),
+            "dropout": lora_cfg.get("dropout", 0.05),
+            "target_modules": lora_cfg.get("target_modules", ["q_proj", "v_proj"]),
+            "bias": lora_cfg.get("bias", "none"),
+        },
+        torch_dtype=torch_dtype,
     )
-
-    peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=lora_cfg.get("r", 32),
-        lora_alpha=lora_cfg.get("alpha", 64),
-        lora_dropout=lora_cfg.get("dropout", 0.05),
-        target_modules=lora_cfg.get("target_modules", ["q_proj", "v_proj"]),
-        bias=lora_cfg.get("bias", "none"),
-    )
-    model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
 
     if train_cfg.get("gradient_checkpointing", False):
         model.gradient_checkpointing_enable()

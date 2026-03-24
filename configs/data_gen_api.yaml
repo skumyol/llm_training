@@ -1,0 +1,74 @@
+# API-based data generation — no GPU required.
+# Set ONE of the provider blocks below; comment out the others.
+# Export the corresponding env vars before running:
+#
+#   OpenRouter:  export OPENROUTER_API_KEY=<your key>
+#   Azure:       export AZURE_API_KEY=<your key>
+#                export AZURE_OPENAI_ENDPOINT=https://YOUR_RESOURCE.openai.azure.com
+#
+# Quick test (no model at all):
+#   python run_data_gen.py --config configs/data_gen_api.yaml --dry-run --n-episodes 5
+
+teachers:
+  # ── OpenRouter (uncomment and set OPENROUTER_API_KEY) ───────────────────
+  - provider: openrouter
+    model: qwen/qwen3-8b
+    api_key: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    temperature: 0.7
+    max_tokens: 512
+
+  # ── Azure OpenAI (uncomment and set AZURE_API_KEY + AZURE_OPENAI_ENDPOINT)
+  # - provider: azure
+  #   model: gpt-4o-mini
+  #   api_key: AZURE_API_KEY
+  #   azure_endpoint: AZURE_OPENAI_ENDPOINT   # env var name or literal URL
+  #   api_version: "2024-02-01"
+  #   temperature: 0.7
+  #   max_tokens: 512
+
+generation:
+  n_episodes: 50
+  turns_per_episode_min: 5
+  turns_per_episode_max: 10
+  counterfactuals_per_episode: 3
+  player_utterance_sampled_ratio: 0.0
+
+scenario:
+  bank_dir: data/scenario_bank
+  npc_profiles_dir: data/npc_profiles
+  world_context: data/world_contexts/oakhaven_siege.yaml
+  scenario_type_weights:
+    secret_extraction: 0.20
+    apology_repair: 0.15
+    alliance_negotiation: 0.15
+    rumor_confrontation: 0.15
+    threat_escalation: 0.10
+    trust_building: 0.15
+    deception_detection: 0.10
+
+output:
+  raw_episodes_dir: data/raw_episodes
+  validated_turns_dir: data/validated_turns
+  counterfactuals_dir: data/counterfactuals
+
+validation:
+  max_rejection_rate: 0.30
+  min_response_tokens: 5
+  max_response_tokens: 150
+  strict_arc_adherence: true
+
+prompts:
+  scenario_instantiation: prompts/scenario_instantiation.txt
+  label_C: prompts/label_C.txt
+  label_A_M: prompts/label_A_M.txt
+  label_R_N_D: prompts/label_R_N_D.txt
+  response_generation: prompts/response_generation.txt
+  player_generation: prompts/player_generation.txt
+
+mlflow:
+  experiment_name: social_state_data_generation
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42

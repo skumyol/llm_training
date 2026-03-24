@@ -2,6 +2,7 @@ base_model: Qwen/Qwen3-0.6B
 debug_model: Qwen/Qwen3-0.6B
 
 quantization: null
+torch_dtype: float32
 # bnb_4bit_compute_dtype: bfloat16
 # bnb_4bit_quant_type: nf4
 # bnb_4bit_use_double_quant: true

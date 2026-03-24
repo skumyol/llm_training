@@ -87,10 +87,18 @@ class LatentStatePredictor(nn.Module):
         }
 
 
+_DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "float32": torch.float32,
+}
+
+
 def load_backbone(
     model_name: str,
     quantization: str = "4bit",
     lora_config: Optional[dict] = None,
+    torch_dtype: str = "bfloat16",
 ) -> tuple:
     bnb_config = None
     if quantization == "4bit":
@@ -103,6 +111,8 @@ def load_backbone(
     elif quantization == "8bit":
         bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
+    _dtype = _DTYPE_MAP.get(torch_dtype, torch.bfloat16)
+
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -112,7 +122,7 @@ def load_backbone(
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=_dtype,
     )
 
     if lora_config is not None:
@@ -135,8 +145,9 @@ def build_latent_predictor(
     model_name: str,
     quantization: str = "4bit",
     lora_config: Optional[dict] = None,
+    torch_dtype: str = "bfloat16",
 ) -> tuple:
-    backbone, tokenizer, hidden_size = load_backbone(model_name, quantization, lora_config)
+    backbone, tokenizer, hidden_size = load_backbone(model_name, quantization, lora_config, torch_dtype)
     predictor = LatentStatePredictor(backbone, hidden_size)
     _move_heads_to_backbone_device(predictor)
     return predictor, tokenizer
@@ -167,15 +178,17 @@ def load_predictor(
     save_dir: str,
     model_name: str,
     quantization: str = "4bit",
+    torch_dtype: str = "bfloat16",
 ) -> tuple:
     save_dir = Path(save_dir)
     backbone_dir = save_dir / "backbone"
-    
+
     # Always load base model and tokenizer from model_name
     backbone, tokenizer, hidden_size = load_backbone(
         model_name,
         quantization,
         lora_config=None,
+        torch_dtype=torch_dtype,
     )
     
     if backbone_dir.exists():
