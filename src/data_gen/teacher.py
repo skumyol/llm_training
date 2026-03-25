@@ -473,17 +473,27 @@ def build_teacher_client(teacher_cfg: dict) -> Any:
         )
 
     if provider == "azure":
-        api_key      = _resolve_key(teacher_cfg.get("api_key", "AZURE_OPENAI_API_KEY"))
+        api_key = _resolve_key(teacher_cfg.get("api_key", "AZURE_OPENAI_API_KEY"))
+
+        # New-style: Azure AI Foundry / inference endpoints expose an OpenAI-compatible
+        # /openai/v1/ base URL.  When `base_url` is set, delegate directly to the
+        # standard OpenAI SDK — no api-version needed.
+        if "base_url" in teacher_cfg:
+            from openai import OpenAI
+            base_url = teacher_cfg["base_url"]
+            return OpenAI(base_url=base_url, api_key=api_key)
+
+        # Legacy-style: construct full REST URL from azure_endpoint + deployment name.
         azure_endpoint = teacher_cfg.get("azure_endpoint") or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
         # Ensure azure_endpoint doesn't end with slash
         azure_endpoint = azure_endpoint.rstrip("/")
-        
+
         model = teacher_cfg.get("model", "gpt-4o")
         api_version = teacher_cfg.get("api_version", "2024-02-01")
-        
+
         # Construct full REST URL: {endpoint}/openai/deployments/{model}/chat/completions?api-version={ver}
         endpoint = f"{azure_endpoint}/openai/deployments/{model}/chat/completions?api-version={api_version}"
-        
+
         return RemoteHTTPXClient(
             provider="azure",
             model=model,
