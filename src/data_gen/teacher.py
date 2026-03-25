@@ -480,7 +480,7 @@ def build_teacher_client(teacher_cfg: dict) -> Any:
         # standard OpenAI SDK — no api-version needed.
         if "base_url" in teacher_cfg:
             from openai import OpenAI
-            base_url = teacher_cfg["base_url"]
+            base_url = _resolve_key(teacher_cfg["base_url"])
             return OpenAI(base_url=base_url, api_key=api_key)
 
         # Legacy-style: construct full REST URL from azure_endpoint + deployment name.

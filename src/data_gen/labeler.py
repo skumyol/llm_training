@@ -337,7 +337,7 @@ class Labeler:
                 model=self.model,
                 messages=messages_template,
                 temperature=0.7 + (attempt * 0.1),
-                max_tokens=200,
+                max_completion_tokens=200,
             )
             content = response.choices[0].message.content.strip()
 
@@ -471,7 +471,7 @@ class Labeler:
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7 + (attempt * 0.1), # Increase temp slightly on retries
-                max_tokens=150,
+                max_completion_tokens=150,
             )
             content = response.choices[0].message.content.strip()
             

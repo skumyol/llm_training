@@ -11,21 +11,21 @@
 
 teachers:
   # ── OpenRouter (uncomment and set OPENROUTER_API_KEY) ───────────────────
-  - provider: openrouter
-    model: qwen/qwen3-8b
-    api_key: OPENROUTER_API_KEY
-    base_url: https://openrouter.ai/api/v1
-    temperature: 0.7
-    max_tokens: 512
-
-  # ── Azure OpenAI — new-style inference endpoint (Azure AI Foundry / /openai/v1/)
-  # export AZURE_API_KEY=<your key>
-  # - provider: azure
-  #   model: gpt-4o-mini          # deployment name
-  #   api_key: AZURE_API_KEY
-  #   base_url: https://<resource>-<id>-<region>.openai.azure.com/openai/v1/
+  # - provider: openrouter
+  #   model: qwen/qwen3-8b
+  #   api_key: OPENROUTER_API_KEY
+  #   base_url: https://openrouter.ai/api/v1
   #   temperature: 0.7
   #   max_tokens: 512
+
+  # ── Azure OpenAI — new-style inference endpoint (Azure AI Foundry / /openai/v1/)
+  # Uses AZURE_API_KEY and AZURE_ENDPOINT from .env
+  - provider: azure
+    model: gpt-5.4-mini
+    api_key: AZURE_API_KEY
+    base_url: AZURE_ENDPOINT
+    temperature: 0.7
+    max_tokens: 512
 
   # ── Azure OpenAI — legacy deployment endpoint
   # export AZURE_API_KEY=<your key>
