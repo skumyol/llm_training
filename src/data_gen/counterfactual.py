@@ -38,28 +38,44 @@ class CounterfactualAugmenter:
         return variants
 
     def _apply_flip(self, episode: list[dict], arc: dict, dim_spec: dict) -> Optional[list[dict]]:
+        """Apply a counterfactual flip that preserves per-turn arc dynamics.
+        
+        Instead of sampling a midpoint value and applying it globally (which erases
+        arc dynamics), we check each turn individually and flip only if that turn's
+        value matches a flip_pair source. This preserves temporal variation.
+        """
         var = dim_spec["var"]
         group = dim_spec["group"]
         flip_pairs = dim_spec["flip_pairs"]
 
-        sample_turn = episode[len(episode) // 2] if episode else None
-        if sample_turn is None:
-            return None
-
-        current_val = self._get_val(sample_turn, group, var)
-        flip_to = None
-        for src, dst in flip_pairs:
-            if current_val == src:
-                flip_to = dst
+        # Check if ANY turn in the episode has a flippable value
+        has_flippable = False
+        for turn in episode:
+            val = self._get_val(turn, group, var)
+            for src, _ in flip_pairs:
+                if val == src:
+                    has_flippable = True
+                    break
+            if has_flippable:
                 break
 
-        if flip_to is None:
+        if not has_flippable:
             return None
 
         new_episode = []
         for turn in episode:
             new_turn = copy.deepcopy(turn)
-            self._set_val(new_turn, group, var, flip_to)
+            
+            # Per-turn flip: only flip if this turn's value matches a source
+            current_val = self._get_val(turn, group, var)
+            flip_to = None
+            for src, dst in flip_pairs:
+                if current_val == src:
+                    flip_to = dst
+                    break
+            
+            if flip_to is not None:
+                self._set_val(new_turn, group, var, flip_to)
 
             try:
                 npc_profile = {
@@ -107,6 +123,11 @@ class CounterfactualAugmenter:
                 new_turn["flip_var"] = var
                 new_turn["flip_to"] = flip_to
                 new_turn["flip_from"] = current_val
+                
+                # Re-apply flip to ensure counterfactual value is preserved
+                # (labeler may have overwritten it with original value)
+                if flip_to is not None:
+                    self._set_val(new_turn, group, var, flip_to)
 
             except Exception:
                 new_turn["counterfactual"] = True

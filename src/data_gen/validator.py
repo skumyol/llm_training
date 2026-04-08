@@ -181,6 +181,12 @@ class Validator:
         return errors
 
     def _check_secret_leakage(self, record: dict) -> list[str]:
+        """Check for secret leakage using both secret_id and semantic keywords.
+        
+        For reveal_decision=none, the response should not contain:
+        1. The secret_id (verbatim check)
+        2. Any leakage_keywords defined for that secret (paraphrase check)
+        """
         errors = []
         D_t = record.get("D_t", {})
         reveal = D_t.get("reveal_decision", "none")
@@ -188,11 +194,22 @@ class Validator:
             response = record.get("response", "").lower()
             secrets = record.get("W", {}).get("secrets", [])
             for secret in secrets:
+                # Check 1: Verbatim secret_id match
                 sid = secret.get("secret_id", "").replace("_", " ").lower()
                 if sid and sid in response:
                     errors.append(
                         f"Secret '{secret['secret_id']}' appears to leak in response despite reveal_decision=none"
                     )
+                    continue  # Skip keyword check if already flagged
+                
+                # Check 2: Semantic keyword match (paraphrase detection)
+                keywords = secret.get("leakage_keywords", [])
+                for kw in keywords:
+                    if kw.lower() in response:
+                        errors.append(
+                            f"Secret '{secret['secret_id']}' keyword '{kw}' detected in response despite reveal_decision=none"
+                        )
+                        break  # One match is enough
         return errors
 
     @staticmethod

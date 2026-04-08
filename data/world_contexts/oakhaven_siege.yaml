@@ -25,6 +25,7 @@ npcs:
       - secret_id: "low_supplies"
         severity: "high"
         description: "The town only has food for 3 more days."
+        leakage_keywords: ["three days", "3 days", "food runs out", "starvation", "famine", "no food"]
     faction: "Town Guard"
 
   - npc_id: "mayor_elara"
@@ -37,6 +38,7 @@ npcs:
       - secret_id: "secret_negotiation"
         severity: "high"
         description: "She has already sent a messenger to the Legion offering surrender terms."
+        leakage_keywords: ["messenger", "surrender terms", "negotiating with legion", "offering surrender", "peace offering", "envoy"]
     faction: "Town Council"
 
   - npc_id: "merchant_garrick"
@@ -49,6 +51,7 @@ npcs:
       - secret_id: "hoarded_grain"
         severity: "medium"
         description: "He has a hidden cellar full of grain he's selling at 10x price."
+        leakage_keywords: ["hidden cellar", "secret grain", "hoarding grain", "grain stash", "ten times", "10x price", "selling grain", "stockpile"]
     faction: "Merchants Guild"
 
 relationships:

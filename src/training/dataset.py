@@ -186,7 +186,7 @@ class JointDataset(Dataset):
     """Merges SFT and HeadSupervision records by index for joint training.
 
     Both JSONL files are produced from the same validated turns in the same
-    order, so zipping by index is safe.
+    order, so zipping by index is safe. Verifies alignment on init.
     """
 
     def __init__(
@@ -196,12 +196,36 @@ class JointDataset(Dataset):
         tokenizer,
         sft_max_seq_len: int = 2048,
         heads_max_seq_len: int = 1024,
+        alignment_check_n: int = 100,
     ):
         self.sft_ds   = SFTDataset(sft_jsonl_path,   tokenizer, sft_max_seq_len)
         self.heads_ds = HeadSupervisionDataset(heads_jsonl_path, tokenizer, heads_max_seq_len)
         assert len(self.sft_ds) == len(self.heads_ds), (
             f"SFT ({len(self.sft_ds)}) and heads ({len(self.heads_ds)}) record counts must match"
         )
+        
+        # Cross-check episode_id + turn_idx alignment on first N records
+        self._verify_alignment(alignment_check_n)
+
+    def _verify_alignment(self, n: int) -> None:
+        """Verify that (episode_id, turn_idx) pairs match between datasets."""
+        check_count = min(n, len(self.sft_ds))
+        for i in range(check_count):
+            sft_rec = self.sft_ds.records[i]
+            heads_rec = self.heads_ds.records[i]
+            
+            sft_ep = sft_rec.get("episode_id", "")
+            sft_turn = sft_rec.get("turn_idx", sft_rec.get("turn", -1))
+            heads_ep = heads_rec.get("episode_id", "")
+            heads_turn = heads_rec.get("turn_idx", heads_rec.get("turn", -1))
+            
+            if sft_ep != heads_ep or sft_turn != heads_turn:
+                raise ValueError(
+                    f"Dataset misalignment at index {i}: "
+                    f"SFT has (episode_id={sft_ep}, turn_idx={sft_turn}) but "
+                    f"heads has (episode_id={heads_ep}, turn_idx={heads_turn}). "
+                    f"Re-run data packaging to regenerate aligned datasets."
+                )
 
     def __len__(self) -> int:
         return len(self.sft_ds)

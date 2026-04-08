@@ -84,23 +84,41 @@ def _split_system_user(template: str):
 
 def _extract_json(text: str) -> dict:
     text = text.strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        raw = match.group()
-        # Coerce Python-style literals that break JSON parsing
-        raw = re.sub(r"\bNone\b", "null", raw)
-        raw = re.sub(r"\bTrue\b", "true", raw)
-        raw = re.sub(r"\bFalse\b", "false", raw)
-        # Remove trailing commas before } or ]
-        raw = re.sub(r",\s*([}\]])", r"\1", raw)
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            # Last ditch: try to fix unquoted keys (simple case) or single quotes
-            # This is risky but helps with some bad LLM outputs
-            raw = raw.replace("'", '"')
-            return json.loads(raw)
-    raise ValueError(f"No JSON found in response: {text[:200]}")
+    
+    # Remove markdown code blocks if present
+    text = re.sub(r"```json\s*", "", text)
+    text = re.sub(r"```\s*", "", text)
+    
+    # Try to find JSON object or array
+    for pattern in [r"\{.*\}", r"\[.*\]"]:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            raw = match.group()
+            # Coerce Python-style literals
+            raw = re.sub(r"\bNone\b", "null", raw)
+            raw = re.sub(r"\bTrue\b", "true", raw)
+            raw = re.sub(r"\bFalse\b", "false", raw)
+            # Remove trailing commas
+            raw = re.sub(r",\s*([}\]])", r"\1", raw)
+            
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                # Try fixing single quotes
+                try:
+                    return json.loads(raw.replace("'", '"'))
+                except json.JSONDecodeError:
+                    pass
+                
+                # Try fixing unquoted keys
+                try:
+                    fixed = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', raw)
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
+    
+    # If all extraction attempts fail, raise with context
+    raise ValueError(f"No valid JSON found in response: {text[:200]}...")
 
 
 class Labeler:

@@ -9,11 +9,11 @@
 
 teachers:
   - provider: local_hf
-    model: Qwen/Qwen3-8B
-    quantization: 4bit          # 4bit | 8bit | none
+    model: Qwen/Qwen2.5-3B-Instruct
+    quantization: 4bit
     device_map: auto
     torch_dtype: bfloat16
-    temperature: 0.3
+    temperature: 0.7
     max_tokens: 512
 
   # ── Uncomment to add Azure worker ───────────────────────────────────────
