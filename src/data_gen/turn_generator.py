@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from src.data_gen.episode_planner import get_phase_for_turn, get_required_shifts_for_turn
+from src.data_gen.episode_planner import get_phase_for_turn, get_required_shifts_for_turn, sample_target_policy
 from src.data_gen.labeler import Labeler
 from src.data_gen.validator import Validator
 
@@ -113,6 +113,9 @@ class TurnGenerator:
         for turn_idx in range(1, turn_budget + 1):
             arc_phase = get_phase_for_turn(arc, turn_idx)
             required_shifts = get_required_shifts_for_turn(arc, turn_idx)
+            target_policy = sample_target_policy(
+                scenario["scenario_type"], arc_phase, self.rng
+            )
 
             if turn_idx == 1:
                 player_utterance = first_player_utterance
@@ -136,6 +139,7 @@ class TurnGenerator:
                 prior_R_t=current_R_t,
                 history=history,
                 scene_description=scene_description,
+                target_policy=target_policy,
             )
 
             if turn_record is not None:
@@ -162,21 +166,14 @@ class TurnGenerator:
         prior_R_t: dict,
         history: list[dict],
         scene_description: str,
+        target_policy: str = "",
     ) -> Optional[dict]:
         try:
-            C_t = self.labeler.label_C(
+            C_t, A_t, M_t = self.labeler.label_C_A_M(
                 player_utterance=player_utterance,
                 npc_profile=npc_profile,
                 scenario=scenario,
                 arc_phase=arc_phase,
-                history=history,
-            )
-
-            A_t, M_t = self.labeler.label_A_M(
-                player_utterance=player_utterance,
-                C_t=C_t,
-                npc_profile=npc_profile,
-                scenario=scenario,
                 prior_stance=prior_R_t,
                 history=history,
             )
@@ -193,6 +190,7 @@ class TurnGenerator:
                 required_shifts=required_shifts,
                 prior_R_t=prior_R_t,
                 history=history,
+                target_policy=target_policy,
             )
             R_t = _normalize_R_t(R_t)
 

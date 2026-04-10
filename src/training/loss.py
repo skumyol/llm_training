@@ -1,3 +1,7 @@
+import json
+from collections import Counter
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,11 +24,53 @@ GROUP_FIELDS: dict[str, list[str]] = {
 }
 
 
+def compute_class_weights(train_file: str, label_maps: dict) -> dict[str, torch.Tensor]:
+    """Compute inverse-frequency class weights from training data."""
+    from src.training.dataset import LABEL_TO_IDX
+    records = []
+    with open(train_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+
+    weights = {}
+    for field, idx_map in LABEL_TO_IDX.items():
+        if field == "dialogue_act":
+            continue
+        n_classes = len(label_maps.get(field, []))
+        if n_classes == 0:
+            continue
+        counts = Counter()
+        for r in records:
+            val = r.get("labels", {}).get(field)
+            if val is not None:
+                idx = idx_map.get(str(val), -1)
+                if idx != -1:
+                    counts[idx] += 1
+        if not counts:
+            continue
+        total = sum(counts.values())
+        w = torch.ones(n_classes, dtype=torch.float32)
+        for cls_idx in range(n_classes):
+            c = counts.get(cls_idx, 0)
+            if c > 0:
+                w[cls_idx] = total / (n_classes * c)
+            else:
+                w[cls_idx] = 1.0
+        # Clamp to avoid extreme weights
+        w = w.clamp(min=0.2, max=5.0)
+        weights[field] = w
+    return weights
+
+
 class MultiHeadLoss(nn.Module):
-    def __init__(self, loss_weights: dict[str, float]):
+    def __init__(self, loss_weights: dict[str, float], class_weights: dict[str, torch.Tensor] | None = None, label_smoothing: float = 0.0):
         super().__init__()
         self.weights = loss_weights
-        self.ce = nn.CrossEntropyLoss(ignore_index=-1)
+        self.class_weights = class_weights or {}
+        self.label_smoothing = label_smoothing
+        self.ce = nn.CrossEntropyLoss(ignore_index=-1, label_smoothing=label_smoothing)
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(self, logits: dict, batch: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -53,7 +99,11 @@ class MultiHeadLoss(nn.Module):
                 else:
                     valid_mask = gold != -1
                     if valid_mask.any():
-                        field_loss = self.ce(pred[valid_mask], gold[valid_mask])
+                        if field in self.class_weights:
+                            cw = self.class_weights[field].to(device)
+                            field_loss = F.cross_entropy(pred[valid_mask], gold[valid_mask], weight=cw, ignore_index=-1)
+                        else:
+                            field_loss = self.ce(pred[valid_mask], gold[valid_mask])
                     else:
                         field_loss = torch.tensor(0.0, device=device)
 

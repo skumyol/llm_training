@@ -1,11 +1,10 @@
-base_model: Qwen/Qwen3-0.6B
-debug_model: Qwen/Qwen3-0.6B
+base_model: Qwen/Qwen3-4B
+debug_model: Qwen/Qwen3-1.7B
 
-quantization: null
-torch_dtype: float32
-# bnb_4bit_compute_dtype: bfloat16
-# bnb_4bit_quant_type: nf4
-# bnb_4bit_use_double_quant: true
+quantization: 4bit
+bnb_4bit_compute_dtype: bfloat16
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
 
 lora:
   r: 16
@@ -15,8 +14,12 @@ lora:
   bias: none
   task_type: CAUSAL_LM
 
+pooling: last  # Options: last, mean, attention
+
 training:
   lr: 2.0e-4
+  head_lr: 4.0e-4  # 2x backbone LR for classification heads
+  use_progressive_lr: true  # Higher LR for heads vs backbone
   lr_scheduler: cosine
   warmup_ratio: 0.05
   epochs: 5
@@ -28,11 +31,13 @@ training:
   max_grad_norm: 1.0
   bf16: true
   dataloader_num_workers: 0
-  eval_steps: 200
-  save_steps: 400
+  eval_steps: 500
+  save_steps: 1000
   logging_steps: 20
   load_best_model_at_end: true
   metric_for_best_model: val/response_policy_f1
+  use_weighted_sampler: true  # Oversample minority classes
+  label_smoothing: 0.1  # 0.0 to disable
 
 loss_weights:
   lambda_C: 1.0
@@ -53,7 +58,7 @@ output:
 
 mlflow:
   experiment_name: latent_state_prediction
-  run_name: qwen3_0.6b_schema_v1_latent
+  run_name: qwen3_4b_schema_v1_latent
   tracking_uri: mlruns
 
 schema_version: v1

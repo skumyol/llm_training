@@ -5,11 +5,13 @@ from typing import Optional
 
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from sklearn.metrics import f1_score
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
+from transformers import get_cosine_schedule_with_warmup
 
-from src.training.dataset import HeadSupervisionDataset, collate_head_batch
-from src.training.loss import MultiHeadLoss
+from src.training.dataset import HeadSupervisionDataset, collate_head_batch, LABEL_MAPS, LABEL_TO_IDX
+from src.training.loss import MultiHeadLoss, compute_class_weights
 from src.training.model import build_latent_predictor, save_predictor
 
 
@@ -37,6 +39,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
     loss_weights = cfg.get("loss_weights", {})
 
     print(f"Loading model: {model_name}")
+    pooling = cfg.get("pooling", "last")
     predictor, tokenizer = build_latent_predictor(
         model_name=model_name,
         quantization=cfg.get("quantization", "4bit"),
@@ -48,7 +51,9 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             "bias": lora_cfg.get("bias", "none"),
         },
         torch_dtype=cfg.get("torch_dtype", "bfloat16"),
+        pooling=pooling,
     )
+    print(f"Pooling strategy: {pooling}")
 
     if train_cfg.get("gradient_checkpointing", False):
         predictor.backbone.gradient_checkpointing_enable()
@@ -64,22 +69,69 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         max_seq_len=train_cfg.get("max_seq_len", 1024),
     )
 
+    # Compute class weights early (needed for sampler and loss)
+    class_weights = compute_class_weights(cfg["data"]["train_file"], LABEL_MAPS)
+    print(f"Computed class weights for {len(class_weights)} heads")
+
     batch_size = train_cfg.get("batch_size", 4)
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        collate_fn=collate_head_batch,
-        num_workers=train_cfg.get("dataloader_num_workers", 0),
-    )
+    use_weighted_sampler = train_cfg.get("use_weighted_sampler", True)
+
+    if use_weighted_sampler:
+        # Compute per-sample weights based on rarest label present
+        sample_weights = []
+        for record in train_ds.records:
+            labels = record.get("labels", {})
+            max_weight = 1.0
+            for field, idx_map in LABEL_TO_IDX.items():
+                if field == "dialogue_act":
+                    continue
+                val = labels.get(field)
+                if val is not None:
+                    idx = idx_map.get(str(val), -1)
+                    if idx != -1 and field in class_weights:
+                        w = class_weights[field][idx].item()
+                        max_weight = max(max_weight, w)
+            sample_weights.append(max_weight)
+
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, sampler=sampler,
+            collate_fn=collate_head_batch,
+            num_workers=train_cfg.get("dataloader_num_workers", 0),
+        )
+        print(f"Using WeightedRandomSampler (oversampling minority classes)")
+    else:
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True,
+            collate_fn=collate_head_batch,
+            num_workers=train_cfg.get("dataloader_num_workers", 0),
+        )
     val_loader = DataLoader(
         val_ds, batch_size=batch_size, shuffle=False,
         collate_fn=collate_head_batch,
         num_workers=0,
     )
 
-    loss_fn = MultiHeadLoss(loss_weights)
+    label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
+    loss_fn = MultiHeadLoss(loss_weights, class_weights=class_weights, label_smoothing=label_smoothing)
+    if label_smoothing > 0:
+        print(f"Using label smoothing: {label_smoothing}")
+    base_lr = float(train_cfg.get("lr", 2e-4))
+    head_lr = float(train_cfg.get("head_lr", base_lr * 2))  # 2x for heads
+    use_progressive_lr = train_cfg.get("use_progressive_lr", True)
+
+    if use_progressive_lr:
+        param_groups = [
+            {"params": predictor.heads.parameters(), "lr": head_lr, "weight_decay": float(train_cfg.get("weight_decay", 0.01))},
+            {"params": [p for n, p in predictor.backbone.named_parameters() if p.requires_grad], "lr": base_lr, "weight_decay": float(train_cfg.get("weight_decay", 0.01))},
+        ]
+        print(f"Progressive LR: heads={head_lr}, backbone={base_lr}")
+    else:
+        param_groups = [p for p in predictor.parameters() if p.requires_grad]
+
     optimizer = torch.optim.AdamW(
-        [p for p in predictor.parameters() if p.requires_grad],
-        lr=float(train_cfg.get("lr", 2e-4)),
+        param_groups,
+        lr=base_lr,
         weight_decay=float(train_cfg.get("weight_decay", 0.01)),
     )
 
@@ -87,8 +139,13 @@ def train_latent(config_path: str, debug: bool = False) -> None:
     grad_accum = train_cfg.get("grad_accum", 8)
     max_grad_norm = float(train_cfg.get("max_grad_norm", 1.0))
     total_steps = math.ceil(len(train_loader) / grad_accum) * epochs
+    warmup_ratio = float(train_cfg.get("warmup_ratio", 0.05))
+    warmup_steps = int(total_steps * warmup_ratio)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps,
+    )
+    print(f"Scheduler: cosine with {warmup_steps} warmup steps / {total_steps} total steps")
 
     output_dir = Path(cfg["output"]["checkpoint_dir"])
     best_dir = Path(cfg["output"]["best_model_dir"])
@@ -102,8 +159,13 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         mlflow.log_param("n_train", len(train_ds))
         mlflow.log_param("n_val", len(val_ds))
 
-        best_val_loss = float("inf")
+        best_metric_value = None
+        best_metric_name = train_cfg.get("metric_for_best_model", "val/response_policy_f1")
+        # Determine if higher is better (True for acc/f1, False for loss)
+        higher_is_better = "loss" not in best_metric_name
         global_step = 0
+
+        print(f"Best model selection: {best_metric_name} (higher_is_better={higher_is_better})")
 
         for epoch in range(1, epochs + 1):
             predictor.train()
@@ -138,13 +200,26 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             for k, v in val_metrics.items():
                 mlflow.log_metric(f"val/{k}", v, step=epoch)
 
-            print(f"Epoch {epoch}: train_loss={epoch_loss/len(train_loader):.4f}  val_loss={val_loss:.4f}")
+            # Resolve the metric used for best-model selection
+            metric_key = best_metric_name.replace("val/", "")
+            current_metric = val_metrics.get(metric_key, val_loss)
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            summary_parts = [f"train_loss={epoch_loss/len(train_loader):.4f}", f"val_loss={val_loss:.4f}"]
+            for key in ["response_policy_f1", "mean_accuracy", "trust_delta_f1"]:
+                if key in val_metrics:
+                    summary_parts.append(f"{key}={val_metrics[key]:.4f}")
+            print(f"Epoch {epoch}: {' | '.join(summary_parts)}")
+
+            is_better = (
+                best_metric_value is None
+                or (higher_is_better and current_metric > best_metric_value)
+                or (not higher_is_better and current_metric < best_metric_value)
+            )
+            if is_better:
+                best_metric_value = current_metric
                 save_predictor(predictor, str(best_dir))
-                mlflow.log_metric("val/best_loss", best_val_loss, step=epoch)
-                print(f"  → New best model saved to {best_dir}")
+                mlflow.log_metric(f"val/best_{metric_key}", best_metric_value, step=epoch)
+                print(f"  → New best model ({best_metric_name}={best_metric_value:.4f}) saved to {best_dir}")
 
         save_predictor(predictor, str(output_dir / "final"))
         mlflow.log_artifact(str(best_dir))
@@ -155,8 +230,8 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
     predictor.eval()
     total_loss = 0.0
-    correct: dict = {}
-    total: dict = {}
+    all_preds: dict[str, list] = {}
+    all_golds: dict[str, list] = {}
 
     for batch in tqdm(val_loader, desc="Evaluating", leave=False):
         device = predictor.backbone.device
@@ -181,16 +256,34 @@ def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
             if not valid.any():
                 continue
             pred = logit_tensor.argmax(dim=-1)
-            correct[field] = correct.get(field, 0) + (pred[valid] == gold[valid]).sum().item()
-            total[field] = total.get(field, 0) + valid.sum().item()
+            if field not in all_preds:
+                all_preds[field] = []
+                all_golds[field] = []
+            all_preds[field].extend(pred[valid].cpu().tolist())
+            all_golds[field].extend(gold[valid].cpu().tolist())
 
     metrics = {}
-    if total:
-        per_field_acc = {f: correct[f] / total[f] for f in correct if total.get(f, 0) > 0}
-        metrics["mean_accuracy"] = sum(per_field_acc.values()) / len(per_field_acc) if per_field_acc else 0.0
-        metrics["response_policy_acc"] = per_field_acc.get("response_policy", 0.0)
-        metrics["trust_delta_acc"] = per_field_acc.get("trust_delta", 0.0)
-        metrics["reveal_decision_acc"] = per_field_acc.get("reveal_decision", 0.0)
+    if all_golds:
+        accs = {}
+        f1s = {}
+        for field in all_golds:
+            preds = all_preds[field]
+            golds = all_golds[field]
+            acc = sum(p == g for p, g in zip(preds, golds)) / len(golds)
+            accs[field] = acc
+            n_classes = len(LABEL_MAPS.get(field, []))
+            labels = list(range(n_classes)) if n_classes > 0 else None
+            f1 = f1_score(golds, preds, labels=labels, average="macro", zero_division=0)
+            f1s[field] = f1
+
+        metrics["mean_accuracy"] = sum(accs.values()) / len(accs) if accs else 0.0
+        metrics["mean_f1"] = sum(f1s.values()) / len(f1s) if f1s else 0.0
+        metrics["response_policy_acc"] = accs.get("response_policy", 0.0)
+        metrics["response_policy_f1"] = f1s.get("response_policy", 0.0)
+        metrics["trust_delta_acc"] = accs.get("trust_delta", 0.0)
+        metrics["trust_delta_f1"] = f1s.get("trust_delta", 0.0)
+        metrics["reveal_decision_acc"] = accs.get("reveal_decision", 0.0)
+        metrics["reveal_decision_f1"] = f1s.get("reveal_decision", 0.0)
 
     avg_loss = total_loss / max(1, len(val_loader))
     return avg_loss, metrics

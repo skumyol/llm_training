@@ -340,6 +340,12 @@ class MockLabeler:
     def __init__(self, seed: int = 42):
         self.rng = random.Random(seed)
 
+    def label_C_A_M(self, player_utterance, npc_profile, scenario, arc_phase, prior_stance, history):
+        """Merged C_t + A_t + M_t labeling (mirrors Labeler.label_C_A_M)."""
+        C_t = self.label_C(player_utterance, npc_profile, scenario, arc_phase, history)
+        A_t, M_t = self.label_A_M(player_utterance, C_t, npc_profile, scenario, prior_stance, history)
+        return C_t, A_t, M_t
+
     def label_C(self, player_utterance, npc_profile, scenario, arc_phase, history):
         acts = self.rng.choice([["probe"], ["accuse", "probe"], ["ask"], ["threaten"], ["flatter"]])
         return {
@@ -363,7 +369,7 @@ class MockLabeler:
         return A_t, M_t
 
     def label_R_N_D(self, player_utterance, C_t, A_t, M_t, npc_profile, scenario,
-                    arc, arc_phase, required_shifts, prior_R_t, history):
+                    arc, arc_phase, required_shifts, prior_R_t, history, target_policy=""):
         dims = ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
         levels = ["VL", "L", "N", "H", "VH"]
         deltas = ["-", "0", "+"]
@@ -406,8 +412,14 @@ class MockLabeler:
             "face_pressure":    self.rng.choice(["low", "medium"]),
             "value_conflict":   self.rng.choice(["none", "mild"]),
         }
+        # Use target_policy if provided (simulates policy-targeted generation)
+        if target_policy:
+            policy = target_policy
+        else:
+            policy = self.rng.choice(["deflect", "withhold", "challenge", "partial", "soothe",
+                                      "answer", "threaten", "negotiate", "test", "clarify"])
         D_t = {
-            "response_policy":  self.rng.choice(["deflect", "withhold", "challenge", "partial", "soothe"]),
+            "response_policy":  policy,
             "reveal_decision":  self.rng.choice(reveal_options),
             "repair_strategy":  self.rng.choice(["none", "soften", "clarify"]),
         }

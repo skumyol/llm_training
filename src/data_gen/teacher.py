@@ -383,6 +383,119 @@ def _force_json(text: str) -> str:
     return text
 
 
+class VLLMOfflineClient:
+    """
+    Local vLLM offline client — 2-3x faster than HuggingFace generate().
+    Uses vLLM's optimized engine with PagedAttention and continuous batching.
+    
+    Requires: pip install vllm
+    
+    Usage in config:
+        teachers:
+          - provider: vllm_offline
+            model: Qwen/Qwen3-8B
+            quantization: awq  # awq | gptq | none
+            gpu_memory_utilization: 0.85
+            max_tokens: 512
+    """
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-8B",
+        quantization: str = "none",
+        max_new_tokens: int = 512,
+        gpu_memory_utilization: float = 0.85,
+        tensor_parallel_size: int = 1,
+    ):
+        try:
+            from vllm import LLM, SamplingParams
+        except ImportError:
+            raise ImportError(
+                "vllm is required for vllm_offline provider. "
+                "Install with: pip install vllm"
+            )
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        self._lock = threading.Lock()
+        self._SamplingParams = SamplingParams
+
+        print(f"[VLLMOfflineClient] Loading {model_name} (quantization={quantization}) ...")
+        kwargs = {
+            "model": model_name,
+            "trust_remote_code": True,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "tensor_parallel_size": tensor_parallel_size,
+            "max_model_len": 4096,
+        }
+        if quantization and quantization != "none":
+            kwargs["quantization"] = quantization
+
+        self._llm = LLM(**kwargs)
+        self._tokenizer = self._llm.get_tokenizer()
+        print(f"[VLLMOfflineClient] Model loaded.")
+
+        self.chat = _VLLMChatNamespace(self)
+
+    def _generate(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+        response_format: Optional[dict] = None,
+    ) -> str:
+        text = self._tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+
+        params = self._SamplingParams(
+            temperature=temperature if temperature > 0 else 0.01,
+            max_tokens=min(max_tokens, self.max_new_tokens),
+            repetition_penalty=1.15,
+        )
+
+        with self._lock:
+            outputs = self._llm.generate([text], params, use_tqdm=False)
+
+        raw = outputs[0].outputs[0].text.strip()
+
+        # Strip think tokens
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        raw = re.sub(r"</think>|<think>", "", raw).strip()
+
+        if response_format and response_format.get("type") == "json_object":
+            raw = _force_json(raw)
+
+        return raw
+
+
+class _VLLMCompletionsNamespace:
+    def __init__(self, client: VLLMOfflineClient):
+        self._client = client
+
+    def create(
+        self,
+        model: str,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+        response_format: Optional[dict] = None,
+        **kwargs,
+    ) -> _ChatCompletionsResponse:
+        content = self._client._generate(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        return _ChatCompletionsResponse(content)
+
+
+class _VLLMChatNamespace:
+    def __init__(self, client: VLLMOfflineClient):
+        self.completions = _VLLMCompletionsNamespace(client)
+
+
 def build_teacher_pool(cfg: dict) -> list:
     """
     Build a list of provider clients from config.
@@ -445,6 +558,15 @@ def build_teacher_client(teacher_cfg: dict) -> Any:
             device_map=teacher_cfg.get("device_map", "auto"),
             max_new_tokens=teacher_cfg.get("max_tokens", 512),
             torch_dtype=teacher_cfg.get("torch_dtype", "bfloat16"),
+        )
+
+    if provider == "vllm_offline":
+        return VLLMOfflineClient(
+            model_name=teacher_cfg.get("model", "Qwen/Qwen3-8B"),
+            quantization=teacher_cfg.get("quantization", "none"),
+            max_new_tokens=teacher_cfg.get("max_tokens", 512),
+            gpu_memory_utilization=teacher_cfg.get("gpu_memory_utilization", 0.85),
+            tensor_parallel_size=teacher_cfg.get("tensor_parallel_size", 1),
         )
 
     if provider == "vllm":

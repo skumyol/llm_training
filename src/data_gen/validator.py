@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from src.data_gen.labeler import normalize_labels, _normalize_stance_entry, STANCE_DIMS as _NORM_STANCE_DIMS
+
 
 VALID_VALUES = {
     "dialogue_act": {"ask", "accuse", "threaten", "flatter", "apologize", "negotiate", "joke", "confess", "probe", "command"},
@@ -46,6 +48,16 @@ class Validator:
         prior_R_t: dict,
         arc: dict,
     ) -> tuple[bool, list[str]]:
+        # Normalize labels in-place before validation to fix known teacher errors
+        if "D_t" in record:
+            record["D_t"] = normalize_labels(record["D_t"])
+        if "N_t" in record:
+            record["N_t"] = normalize_labels(record["N_t"])
+        if "R_t" in record:
+            for dim in _NORM_STANCE_DIMS:
+                if dim in record["R_t"] and isinstance(record["R_t"][dim], dict):
+                    record["R_t"][dim] = _normalize_stance_entry(record["R_t"][dim])
+
         errors = []
 
         errors.extend(self._check_C_t(record.get("C_t", {})))

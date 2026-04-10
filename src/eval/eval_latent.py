@@ -27,8 +27,10 @@ def eval_latent(config_path: str) -> dict:
     checkpoint = cfg["latent_predictor_checkpoint"]
     model_name = cfg.get("base_model", "Qwen/Qwen3-4B")
 
-    print(f"Loading predictor from {checkpoint}")
-    predictor, tokenizer = load_predictor(checkpoint, model_name, quantization="4bit")
+    quantization = cfg.get("quantization", "4bit")
+    torch_dtype = cfg.get("torch_dtype", "bfloat16")
+    print(f"Loading predictor from {checkpoint} (quantization={quantization}, dtype={torch_dtype})")
+    predictor, tokenizer = load_predictor(checkpoint, model_name, quantization=quantization, torch_dtype=torch_dtype)
 
     test_ds = HeadSupervisionDataset(
         cfg["data"]["test_heads_file"],
@@ -97,18 +99,26 @@ def eval_latent(config_path: str) -> dict:
         correct = sum(p == g for p, g in zip(preds, golds))
         acc = correct / len(golds) if golds else 0.0
         metrics[f"{field}_accuracy"] = acc
-        if label_names and cfg["output"].get("save_confusion_matrices", True):
+        if label_names:
+            n_classes = len(label_names)
+            all_labels = list(range(n_classes))
+            target_names = [str(l) for l in label_names]
             try:
                 report = classification_report(
                     golds, preds,
-                    target_names=[str(l) for l in label_names[:max(golds + preds) + 1]],
+                    labels=all_labels,
+                    target_names=target_names,
                     output_dict=True, zero_division=0,
                 )
                 per_field_reports[field] = report
-                cm = confusion_matrix(golds, preds)
-                _save_confusion_matrix(cm, field, results_dir, label_names)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [WARN] classification_report failed for {field}: {e}")
+            if cfg["output"].get("save_confusion_matrices", True):
+                try:
+                    cm = confusion_matrix(golds, preds, labels=all_labels)
+                    _save_confusion_matrix(cm, field, results_dir, label_names)
+                except Exception as e:
+                    print(f"  [WARN] confusion_matrix failed for {field}: {e}")
 
     metrics["secret_leakage_rate"] = secret_leakage / max(1, total_turns)
     metrics["response_policy_f1"] = per_field_reports.get("response_policy", {}).get("macro avg", {}).get("f1-score", 0.0)

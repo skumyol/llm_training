@@ -10,6 +10,145 @@ def _load_prompt(path: str) -> str:
     return Path(path).read_text()
 
 
+# ── Label normalization (fixes known teacher LLM output errors) ──────────────
+
+_VALID_STANCE_LEVELS = {"VL", "L", "N", "H", "VH"}
+_VALID_STANCE_DELTAS = {"--", "-", "0", "+", "++"}
+
+_RESPONSE_POLICY_TYPOS = {
+    "defect": "deflect",
+    "challenged": "challenge",
+    "redirect": "deflect",
+    "reveal": "answer",
+    "ignore": "withhold",
+    "evade": "deflect",
+    "avoid": "deflect",
+    "confront": "challenge",
+    "reassure": "soothe",
+    "comfort": "soothe",
+    "bargain": "negotiate",
+    "warn": "threaten",
+    "deny": "withhold",
+}
+
+_VALID_RESPONSE_POLICIES = {"answer", "partial", "withhold", "deflect", "challenge",
+                            "soothe", "test", "threaten", "negotiate", "clarify"}
+_VALID_REVEAL = {"none", "hint", "partial", "full"}
+_VALID_REPAIR = {"none", "soften", "apologize", "clarify", "redirect"}
+_VALID_THREE = {"low", "medium", "high"}
+_VALID_VALUE_CONFLICT = {"none", "mild", "strong"}
+
+STANCE_DIMS = ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
+
+
+def _normalize_stance_entry(entry: dict) -> dict:
+    """Fix stance entries where teacher merged level+delta into one field.
+
+    Examples of corrupted values:
+        level="H+"  → level="H", delta="+"
+        level="VH(-)" → level="VH", delta="-"
+        level="H(++)" → level="H", delta="++"
+        level="+"   → level unchanged from prior, delta="+"
+        level="- "  → level unchanged from prior, delta="-"
+    """
+    if not isinstance(entry, dict):
+        return {"level": "N", "delta": "0"}
+
+    level = str(entry.get("level", "N")).strip()
+    delta = str(entry.get("delta", "0")).strip()
+
+    # Fix delta: normalize unicode minus, strip whitespace/periods
+    delta = delta.replace("\u2212", "-").rstrip(".").strip()
+
+    # Case 1: level contains parenthetical delta like "H(+)" or "VH(--)"
+    import re
+    paren_match = re.match(r"^(VL|VH|[LNHV])\s*\(([^)]+)\)", level)
+    if paren_match:
+        level = paren_match.group(1)
+        delta = paren_match.group(2).strip()
+
+    # Case 2: level has delta appended like "H+", "VH+", "L-"
+    suffix_match = re.match(r"^(VL|VH|[LNHV])([+\-]+)$", level)
+    if suffix_match:
+        level = suffix_match.group(1)
+        delta = suffix_match.group(2).strip()
+
+    # Case 3: level is just a delta value like "+", "-", "0"
+    if level in _VALID_STANCE_DELTAS and level not in _VALID_STANCE_LEVELS:
+        delta = level
+        level = "N"  # default to neutral when level is missing
+
+    # Final validation
+    if level not in _VALID_STANCE_LEVELS:
+        level = "N"
+    if delta not in _VALID_STANCE_DELTAS:
+        delta = "0"
+
+    return {"level": level, "delta": delta}
+
+
+def normalize_labels(labels: dict) -> dict:
+    """Normalize and fix all label fields in a turn record.
+
+    Call this after extracting JSON from teacher LLM output and before
+    validation. Fixes known typos, malformed stance entries, and
+    out-of-vocabulary values.
+    """
+    # ── D_t: response_policy ──
+    rp = labels.get("response_policy", "")
+    if isinstance(rp, str):
+        rp = rp.strip().lower()
+        rp = _RESPONSE_POLICY_TYPOS.get(rp, rp)
+        if rp not in _VALID_RESPONSE_POLICIES:
+            rp = "soothe"  # safe default for unknown policies
+        labels["response_policy"] = rp
+
+    rd = labels.get("reveal_decision", "")
+    if isinstance(rd, str):
+        rd = rd.strip().lower()
+        if rd not in _VALID_REVEAL:
+            rd = "none"
+        labels["reveal_decision"] = rd
+
+    rs = labels.get("repair_strategy", "")
+    if isinstance(rs, str):
+        rs = rs.strip().lower()
+        if rs not in _VALID_REPAIR:
+            rs = "none"
+        labels["repair_strategy"] = rs
+
+    # ── N_t: pressure fields ──
+    for field in ["duty_pressure", "secrecy_pressure", "face_pressure"]:
+        val = labels.get(field, "")
+        if isinstance(val, str):
+            val = val.strip().lower()
+            if val not in _VALID_THREE:
+                val = "medium"
+            labels[field] = val
+
+    vc = labels.get("value_conflict", "")
+    if isinstance(vc, str):
+        vc = vc.strip().lower()
+        if vc not in _VALID_VALUE_CONFLICT:
+            vc = "none"
+        labels["value_conflict"] = vc
+
+    # ── R_t: stance dimensions ──
+    for dim in STANCE_DIMS:
+        if dim in labels and isinstance(labels[dim], dict):
+            labels[dim] = _normalize_stance_entry(labels[dim])
+        # Also handle flat keys like "affection_level", "affection_delta"
+        level_key = f"{dim}_level"
+        delta_key = f"{dim}_delta"
+        if level_key in labels or delta_key in labels:
+            entry = {"level": labels.get(level_key, "N"), "delta": labels.get(delta_key, "0")}
+            fixed = _normalize_stance_entry(entry)
+            labels[level_key] = fixed["level"]
+            labels[delta_key] = fixed["delta"]
+
+    return labels
+
+
 def _format_dialogue_history(history: list[dict]) -> str:
     lines = []
     for turn in history:
@@ -161,6 +300,53 @@ class Labeler:
         )
         return response.choices[0].message.content
 
+    def label_C_A_M(
+        self,
+        player_utterance: str,
+        npc_profile: dict,
+        scenario: dict,
+        arc_phase: str,
+        prior_stance: dict,
+        history: list[dict],
+    ) -> tuple[dict, dict, dict]:
+        """Merged labeling: produce C_t, A_t, M_t in a single LLM call."""
+        if "label_C_A_M" in self.prompts:
+            prompt = self.prompts["label_C_A_M"].format(
+                setting=scenario.get("setting", "unknown"),
+                npc_role=npc_profile["role"],
+                npc_goals=", ".join(npc_profile.get("core_goals", [])),
+                npc_secrets=", ".join(s["secret_id"] for s in npc_profile.get("secrets", [])),
+                npc_values=", ".join(npc_profile.get("values", [])),
+                arc_phase=arc_phase,
+                prior_stance=_format_stance(prior_stance),
+                dialogue_history=_format_dialogue_history(history),
+                player_utterance=player_utterance,
+            )
+            raw = self._call_llm(prompt)
+            result = _extract_json(raw)
+            C_t = normalize_labels(result.get("C_t", {}))
+            A_t = normalize_labels(result.get("A_t", {}))
+            M_t = normalize_labels(result.get("M_t", {}))
+            return C_t, A_t, M_t
+        else:
+            # Fallback: two separate calls (backwards compatible)
+            C_t = self.label_C(
+                player_utterance=player_utterance,
+                npc_profile=npc_profile,
+                scenario=scenario,
+                arc_phase=arc_phase,
+                history=history,
+            )
+            A_t, M_t = self.label_A_M(
+                player_utterance=player_utterance,
+                C_t=C_t,
+                npc_profile=npc_profile,
+                scenario=scenario,
+                prior_stance=prior_stance,
+                history=history,
+            )
+            return C_t, A_t, M_t
+
     def label_C(
         self,
         player_utterance: str,
@@ -179,7 +365,8 @@ class Labeler:
             player_utterance=player_utterance,
         )
         raw = self._call_llm(prompt)
-        return _extract_json(raw)
+        result = _extract_json(raw)
+        return normalize_labels(result)
 
     def label_A_M(
         self,
@@ -203,7 +390,9 @@ class Labeler:
         )
         raw = self._call_llm(prompt)
         result = _extract_json(raw)
-        return result.get("A_t", result), result.get("M_t", {})
+        A_t = normalize_labels(result.get("A_t", result))
+        M_t = normalize_labels(result.get("M_t", {}))
+        return A_t, M_t
 
     def label_R_N_D(
         self,
@@ -218,6 +407,7 @@ class Labeler:
         required_shifts: list[dict],
         prior_R_t: dict,
         history: list[dict],
+        target_policy: str = "",
     ) -> dict:
         prompt = self.prompts["label_R_N_D"].format(
             setting=scenario.get("setting", "unknown"),
@@ -235,14 +425,18 @@ class Labeler:
             C_t=json.dumps(C_t),
             A_t=json.dumps(A_t),
             M_t=json.dumps(M_t),
+            target_policy=target_policy,
         )
         raw = self._call_llm(prompt)
         result = _extract_json(raw)
-        return (
-            result.get("R_t", {}),
-            result.get("N_t", {}),
-            result.get("D_t", {}),
-        )
+        R_t = result.get("R_t", {})
+        N_t = normalize_labels(result.get("N_t", {}))
+        D_t = normalize_labels(result.get("D_t", {}))
+        # Normalize each stance dimension inside R_t
+        for dim in STANCE_DIMS:
+            if dim in R_t and isinstance(R_t[dim], dict):
+                R_t[dim] = _normalize_stance_entry(R_t[dim])
+        return R_t, N_t, D_t
 
     def generate_response(
         self,

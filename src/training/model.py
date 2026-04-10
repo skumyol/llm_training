@@ -50,10 +50,11 @@ class ClassificationHead(nn.Module):
 
 
 class LatentStatePredictor(nn.Module):
-    def __init__(self, backbone: nn.Module, hidden_size: int, head_specs: dict = HEAD_SPECS):
+    def __init__(self, backbone: nn.Module, hidden_size: int, head_specs: dict = HEAD_SPECS, pooling: str = "last"):
         super().__init__()
         self.backbone = backbone
         self.hidden_size = hidden_size
+        self.pooling = pooling
         self.heads = nn.ModuleDict({
             name: ClassificationHead(hidden_size, spec["n_classes"])
             for name, spec in head_specs.items()
@@ -73,8 +74,7 @@ class LatentStatePredictor(nn.Module):
             output_hidden_states=True,
         )
         last_hidden = outputs.hidden_states[-1]
-        seq_lengths = attention_mask.sum(dim=1) - 1
-        pooled = last_hidden[torch.arange(last_hidden.size(0), device=last_hidden.device), seq_lengths]
+        pooled = self._pool(last_hidden, attention_mask)
         pooled = pooled.to(torch.float32)
 
         logits = {name: head(pooled) for name, head in self.heads.items()}
@@ -85,6 +85,23 @@ class LatentStatePredictor(nn.Module):
             "lm_loss": outputs.loss if labels is not None else None,
             "backbone_outputs": outputs
         }
+
+    def _pool(self, last_hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        if self.pooling == "mean":
+            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
+            sum_hidden = (last_hidden * mask_expanded).sum(dim=1)
+            return sum_hidden / mask_expanded.sum(dim=1).clamp(min=1)
+        elif self.pooling == "attention":
+            # Learnable attention pooling (simple single-vector attention)
+            if not hasattr(self, "attention_vector"):
+                self.attention_vector = nn.Parameter(torch.randn(self.hidden_size))
+            scores = torch.matmul(last_hidden, self.attention_vector)  # (batch, seq)
+            scores = scores.masked_fill(~attention_mask.bool(), float('-inf'))
+            weights = torch.softmax(scores, dim=1).unsqueeze(-1)  # (batch, seq, 1)
+            return (last_hidden * weights).sum(dim=1)
+        else:  # "last"
+            seq_lengths = attention_mask.sum(dim=1) - 1
+            return last_hidden[torch.arange(last_hidden.size(0), device=last_hidden.device), seq_lengths]
 
 
 _DTYPE_MAP = {
@@ -146,9 +163,10 @@ def build_latent_predictor(
     quantization: str = "4bit",
     lora_config: Optional[dict] = None,
     torch_dtype: str = "bfloat16",
+    pooling: str = "last",
 ) -> tuple:
     backbone, tokenizer, hidden_size = load_backbone(model_name, quantization, lora_config, torch_dtype)
-    predictor = LatentStatePredictor(backbone, hidden_size)
+    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling)
     _move_heads_to_backbone_device(predictor)
     return predictor, tokenizer
 

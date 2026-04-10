@@ -109,12 +109,16 @@ class HeadSupervisionDataset(Dataset):
 
         label_tensors = _encode_labels(record.get("labels", {}))
 
+        # Store raw labels for sampler weight computation
+        raw_labels = record.get("labels", {})
+
         return {
             "input_ids": encoding["input_ids"].squeeze(0),
             "attention_mask": encoding["attention_mask"].squeeze(0),
             **{f"label_{k}": v for k, v in label_tensors.items()},
             "episode_id": record.get("episode_id", ""),
             "scenario_type": record.get("scenario_type", ""),
+            "_raw_labels": raw_labels,  # for sampler, removed in collate
         }
 
 
@@ -170,7 +174,7 @@ class SFTDataset(Dataset):
 
 
 def collate_head_batch(batch: list[dict]) -> dict:
-    keys = [k for k in batch[0] if k not in ("episode_id", "scenario_type")]
+    keys = [k for k in batch[0] if k not in ("episode_id", "scenario_type", "_raw_labels")]
     result: dict = {}
     for k in keys:
         tensors = [b[k] for b in batch]
