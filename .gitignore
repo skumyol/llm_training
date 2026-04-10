@@ -65,3 +65,37 @@ dist/
 # Temporary
 /tmp/
 *.tmp
+
+# NPC Backend Scaffold - generated artifacts only
+slm/**/artifacts/*/
+slm/**/logs/
+slm/**/runs/
+slm/**/.venv/
+slm/**/node_modules/
+slm/**/dist/
+slm/**/*.log
+slm/**/__pycache__/
+slm/**/*.pyc
+slm/**/.DS_Store
+slm/**/cache_*.jsonl
+
+# Model weights (large binaries)
+slm/**/*.pt
+slm/**/*.pth
+slm/**/*.safetensors
+slm/**/*.bin
+
+# Training data (can be regenerated)
+slm/**/data/**/*.jsonl
+slm/**/data/**/*.txt
+slm/**/data/**/*.csv
+slm/**/data/raw/*/
+!slm/**/data/**/.gitkeep
+
+# Cache files
+slm/**/*cache*
+slm/**/npc_profiles*.csv
+
+# Archives
+slm/**/*.tar.gz
+slm/**/*.zip

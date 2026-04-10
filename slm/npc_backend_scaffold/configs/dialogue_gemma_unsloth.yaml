@@ -1,0 +1,33 @@
+# ── Base model ──────────────────────────────────────────────────────────────
+base_model_name: unsloth/gemma-4-E2B-it-unsloth-bnb-4bit
+download_if_missing: true
+local_model_root: models
+
+# ── Data ────────────────────────────────────────────────────────────────────
+train_path: data/dialogue/from_gen_train.jsonl
+val_path: data/dialogue/from_gen_val.jsonl
+
+# ── Sequence / batch ────────────────────────────────────────────────────────
+max_seq_length: 2048
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+
+# ── Optimisation ────────────────────────────────────────────────────────────
+learning_rate: 2.0e-4
+weight_decay: 0.01
+warmup_steps: 20
+epochs: 3
+
+# ── LoRA ────────────────────────────────────────────────────────────────────
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0.0
+
+# ── Logging / eval ──────────────────────────────────────────────────────────
+logging_steps: 10
+eval_steps: 100
+save_steps: 100
+max_eval_samples: 512
+
+# ── Output ──────────────────────────────────────────────────────────────────
+output_dir: artifacts/gemma_unsloth

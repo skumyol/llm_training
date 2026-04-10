@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #070b14;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', monospace;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#root { height: 100vh; display: flex; flex-direction: column; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #374151; }
+
+/* Smooth pulse animation for loading */
+@keyframes typing { 0%,80%,100%{opacity:0} 40%{opacity:1} }
+.typing-dot { animation: typing 1.4s infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Radar chart override */
+.recharts-polar-grid-angle line { stroke: #1f2937; }
+.recharts-polar-grid-concentric polygon { stroke: #1f2937; fill: none; }

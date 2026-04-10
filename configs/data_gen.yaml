@@ -9,7 +9,7 @@
 
 teachers:
   - provider: local_hf
-    model: Qwen/Qwen2.5-3B-Instruct
+    model: google/gemma-4-4b-it
     quantization: 4bit
     device_map: auto
     torch_dtype: bfloat16

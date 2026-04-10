@@ -1,0 +1,22 @@
+# ── Model ────────────────────────────────────────────────────────────────────
+model_name: distilbert-base-uncased
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+train_path:  data/affect/train.csv
+val_path:    data/affect/val.csv
+text_column: text
+target_columns:
+  - valence
+  - arousal
+  - dominance
+
+# ── Training ─────────────────────────────────────────────────────────────────
+max_length:  256
+batch_size:  16
+lr:          2.0e-5
+epochs:      3
+log_every:   20
+seed:        42
+
+# ── Output ───────────────────────────────────────────────────────────────────
+output_dir: artifacts/affect_encoder

@@ -1,0 +1,41 @@
+# ── Backbone ─────────────────────────────────────────────────────────────────
+base_model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+# ── Data (from Synthetic-Persona-Chat) ────────────────────────────────────────
+train_path:          data/dialogue/from_persona_train.jsonl
+val_path:            data/dialogue/from_persona_val.jsonl
+npc_profiles_path:   data/npc_profiles_from_persona.csv
+
+# ── Conditioning artifacts (from real_v1 runs) ────────────────────────────────
+personality_cache_path:    artifacts/personality_cache_from_persona.jsonl
+affect_encoder_path:       artifacts/affect_encoder/real_v1_affect/best_model
+sentence_transformer_name: sentence-transformers/all-MiniLM-L6-v2
+
+# ── LoRA ─────────────────────────────────────────────────────────────────────
+lora_r:       16
+lora_alpha:   32
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+
+# ── Prefix tuning ────────────────────────────────────────────────────────────
+prefix_length: 8
+
+# ── Sequence lengths ─────────────────────────────────────────────────────────
+max_source_length: 512
+max_target_length: 128
+
+# ── Training (tuned for MPS 16GB) ────────────────────────────────────────────
+batch_size:       1
+grad_accum_steps: 4     # effective batch = 4 (conservative for 16GB)
+lr:               2.0e-4
+warmup_steps:     100
+epochs:           2
+log_every:        50
+seed:             42
+
+# ── Output ───────────────────────────────────────────────────────────────────
+output_dir: artifacts/dialogue_model_persona

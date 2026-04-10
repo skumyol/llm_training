@@ -1,0 +1,30 @@
+# ── Architecture ─────────────────────────────────────────────────────────────
+arch:             gpt        # gru | awdlstm | gpt | prefix_gpt | moe | mamba_like
+hardware_profile: m1_small   # m1_small | rtx4070_small  (sets model size from RECOMMENDED_CONFIGS)
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+# Plain text files produced by src/data/prepare_dialogue_data.py
+train_text: data/dialogue/train.txt
+val_text:   data/dialogue/val.txt
+
+# ── Sequence + batch ─────────────────────────────────────────────────────────
+seq_len:    256
+batch_size: 16
+grad_accum: 4       # effective batch = 64
+
+# ── Optimisation ─────────────────────────────────────────────────────────────
+lr:           3.0e-4
+weight_decay: 0.1
+epochs:       3
+use_amp:      false  # set true on CUDA for ~30% speedup
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+log_every:        20    # log train loss every N optimizer steps
+eval_every_steps: 200   # mid-epoch eval frequency
+
+# ── Conditioning (prefix_gpt only) ───────────────────────────────────────────
+cond_dim: 8     # OCEAN(5) + VAD(3); zero-vector used during standalone training
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+seed:       42
+output_dir: artifacts/small_lm
