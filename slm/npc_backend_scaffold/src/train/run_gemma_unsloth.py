@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Gemma 4 + Unsloth training runner
+Gemma 3 + Unsloth training runner
 =================================
-Fine-tunes Gemma 4 on the scaffold's dialogue JSONL format using Unsloth + TRL.
+Fine-tunes Gemma 3 on the scaffold's dialogue JSONL format using Unsloth + TRL.
 
 This script is intentionally isolated from the TinyLlama pipeline so it can:
-  * auto-download a Gemma 4 base model when missing
+  * auto-download a Gemma 3 base model when missing
   * emit the same run_summary.json / epoch_metrics.csv artifact shape used elsewhere
   * show up in the frontend's model catalog like the other dialogue generators
 
@@ -32,12 +32,32 @@ from typing import Any, Dict, Iterable, List, Optional
 import torch
 import yaml
 
+# Disable FP8 to avoid accelerate FP8BackendType issues
+os.environ['UNSLOTH_DISABLE_FP8'] = '1'
+os.environ['ACCELERATE_FP8'] = '0'
+
+# Monkey patch accelerate.utils BEFORE unsloth loads
+import accelerate.utils
+if not hasattr(accelerate.utils, 'FP8BackendType'):
+    from enum import Enum
+    class _FP8BackendType(Enum):
+        AUTO = "auto"
+        TE = "te"
+        MSAMP = "msamp"
+    accelerate.utils.FP8BackendType = _FP8BackendType
+    # Also inject into accelerate.utils namespace
+    import accelerate.utils as _acc_utils
+    _acc_utils.FP8BackendType = _FP8BackendType
+    # Ensure it's in sys.modules
+    import sys as _sys
+    _sys.modules['accelerate.utils'].FP8BackendType = _FP8BackendType
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 
 DEFAULTS: Dict[str, Any] = {
-    "base_model_name": "unsloth/gemma-4-E2B-it-unsloth-bnb-4bit",
+    "base_model_name": "unsloth/gemma-3-4b-it",
     "download_if_missing": True,
     "local_model_root": "models",
     "train_path": "data/dialogue/from_gen_train.jsonl",
@@ -188,16 +208,60 @@ def _resolve_model_path(cfg: Dict[str, Any], log: logging.Logger) -> str:
 
 def _load_unsloth_components(cfg: Dict[str, Any], model_path: str, log: logging.Logger):
     try:
-        from unsloth import FastLanguageModel, FastModel
+        from unsloth import FastModel
+        from unsloth.chat_templates import get_chat_template
     except ImportError as exc:
         raise RuntimeError(
             "Unsloth is not installed in this environment. "
             "Install it with: pip install unsloth unsloth_zoo trl"
         ) from exc
 
+    # Unsloth exec's a patched Accelerator.prepare whose __globals__ lack
+    # FP8BackendType.  Inject the real enum so the function can resolve it.
+    try:
+        from accelerate.utils.dataclasses import FP8BackendType
+        import accelerate.accelerator
+        _prepare = accelerate.accelerator.Accelerator.prepare
+        if callable(_prepare) and hasattr(_prepare, '__globals__'):
+            if 'FP8BackendType' not in _prepare.__globals__:
+                _prepare.__globals__['FP8BackendType'] = FP8BackendType
+    except Exception:
+        pass
+
+    # Replace fused_linear_cross_entropy with a standard-torch fallback so we
+    # skip the cut_cross_entropy Triton kernels that fail on this GPU.
+    def _fallback_fused_lce(
+        hidden_states, lm_weight, labels,
+        num_items_in_batch=None, ignore_index=-100, reduction="mean",
+        logit_softcapping=0, accuracy_threshold="auto",
+    ):
+        reduction = "sum" if num_items_in_batch is not None else "mean"
+        logits = torch.nn.functional.linear(
+            hidden_states.to(lm_weight.dtype), lm_weight,
+        ).float()
+        if logit_softcapping and logit_softcapping != 0:
+            logits = logits / logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * logit_softcapping
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        loss = torch.nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=ignore_index,
+            reduction=reduction,
+        )
+        if num_items_in_batch is not None:
+            loss = loss / num_items_in_batch
+        return loss
+
+    import unsloth_zoo.loss_utils as _lutils
+    _lutils.fused_linear_cross_entropy = _fallback_fused_lce
+    log.info("Patched fused_linear_cross_entropy with standard-torch fallback")
+
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "Gemma 4 Unsloth training currently requires CUDA in this scaffold. "
+            "Gemma 3 Unsloth training currently requires CUDA in this scaffold. "
             "Run this stage on a CUDA machine."
         )
 
@@ -207,25 +271,29 @@ def _load_unsloth_components(cfg: Dict[str, Any], model_path: str, log: logging.
         max_seq_length=cfg["max_seq_length"],
         load_in_4bit=True,
         load_in_8bit=False,
-        load_in_16bit=False,
         full_finetuning=False,
     )
 
-    model = FastLanguageModel.get_peft_model(
+    # After model load the compiled module is in sys.modules; patch its local binding too.
+    for _mname, _mod in list(sys.modules.items()):
+        if hasattr(_mod, 'fused_linear_cross_entropy') and \
+                getattr(_mod, 'fused_linear_cross_entropy') is not _fallback_fused_lce:
+            _mod.fused_linear_cross_entropy = _fallback_fused_lce
+
+    tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
+
+    model = FastModel.get_peft_model(
         model,
+        finetune_vision_layers=False,
+        finetune_language_layers=True,
+        finetune_attention_modules=True,
+        finetune_mlp_modules=True,
         r=cfg["lora_r"],
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
         lora_alpha=cfg["lora_alpha"],
         lora_dropout=cfg["lora_dropout"],
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=cfg["seed"],
-        max_seq_length=cfg["max_seq_length"],
-        use_rslora=False,
-        loftq_config=None,
     )
     return model, tokenizer
 
@@ -242,7 +310,7 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
             _to_messages(record, cfg["system_prompt_template"]),
             tokenize=False,
             add_generation_prompt=False,
-        )
+        ).removeprefix("<bos>")
         rows.append({"text": text})
     return Dataset.from_list(rows)
 
@@ -390,7 +458,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train Gemma 4 with Unsloth")
+    p = argparse.ArgumentParser(description="Train Gemma 3 with Unsloth")
     p.add_argument("--config", type=str)
     p.add_argument("--run-id", type=str, dest="run_id")
     p.add_argument("--base-model-name", type=str, dest="base_model_name")

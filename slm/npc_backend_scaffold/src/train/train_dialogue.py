@@ -31,8 +31,8 @@ class DialogueCollator:
         self.device = device
         self.personality_cache = PersonalityCache(cfg.personality_cache_path)
 
-        self.affect_tokenizer = AutoTokenizer.from_pretrained(cfg.affect_encoder_path)
-        self.affect_encoder = DistilBertRegressor(cfg.affect_encoder_path, out_dim=3).to(device)
+        self.affect_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+        self.affect_encoder = DistilBertRegressor("distilbert-base-uncased", out_dim=3).to(device)
         self.affect_encoder.load_state_dict(
             torch.load(f"{cfg.affect_encoder_path}/pytorch_model.bin", map_location=device), strict=False
         )

@@ -48,6 +48,7 @@ import torch
 import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader, Dataset
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src" / "train"))  # for small_lm_architectures
@@ -66,6 +67,13 @@ try:
     _TIKTOKEN_OK = True
 except ImportError:
     _TIKTOKEN_OK = False
+
+# Embedding model support for semantic conditioning (A/B testing)
+try:
+    from transformers import AutoTokenizer as _AutoTok, AutoModel as _AutoModel
+    _TRANSFORMERS_OK = True
+except ImportError:
+    _TRANSFORMERS_OK = False
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -86,6 +94,17 @@ DEFAULTS: Dict[str, Any] = {
     "output_dir":        "artifacts/small_lm",
     "cond_dim":          8,    # OCEAN(5)+VAD(3); used by prefix_gpt only
     "use_amp":           False,
+    # Embedding model for semantic conditioning (A/B testing)
+    "embedding_model":   None,  # e.g., "Qwen/Qwen3-Embedding-4B" or "sentence-transformers/all-MiniLM-L6-v2"
+    "embedding_cache":   True,  # Cache extracted embeddings to disk
+    # Scheduler: cosine warm restarts to escape local minima
+    "scheduler":         "cosine_warm_restarts",  # cosine_warm_restarts | none
+    "T_0":               5,       # restart period in epochs
+    "T_mult":            2,       # multiply period after each restart
+    "eta_min":           1e-6,    # minimum LR
+    # MLflow tracking
+    "mlflow_experiment": "small_lm",
+    "mlflow_enabled":    True,
 }
 
 
@@ -124,6 +143,84 @@ class MetricsWriter:
             csv.DictWriter(f, fieldnames=self.fieldnames).writerow(
                 {k: row.get(k, "") for k in self.fieldnames}
             )
+
+
+# ── Embedding Extractor (for semantic conditioning A/B testing) ───────────────
+
+class EmbeddingExtractor:
+    """Extracts sentence embeddings from a pre-trained model for conditioning."""
+
+    def __init__(self, model_name: str, device: torch.device, cache_dir: Optional[Path] = None):
+        if not _TRANSFORMERS_OK:
+            raise RuntimeError("transformers library required for embedding extraction")
+        self.model_name = model_name
+        self.device = device
+        self.cache_dir = cache_dir
+        self.cache: Dict[str, torch.Tensor] = {}
+
+        # Load model
+        self.tokenizer = _AutoTok.from_pretrained(model_name, trust_remote_code=True)
+        self.model = _AutoModel.from_pretrained(model_name, trust_remote_code=True)
+        self.model.to(device)
+        self.model.eval()
+
+        # Determine embedding dimension
+        with torch.no_grad():
+            dummy = self.tokenizer("test", return_tensors="pt").to(device)
+            out = self.model(**dummy)
+            if hasattr(out, 'last_hidden_state'):
+                self.dim = out.last_hidden_state.shape[-1]
+            elif hasattr(out, 'pooler_output') and out.pooler_output is not None:
+                self.dim = out.pooler_output.shape[-1]
+            else:
+                self.dim = out[0].shape[-1]
+
+    def _cache_key(self, text: str) -> str:
+        import hashlib
+        return hashlib.md5(text.encode()).hexdigest()[:16]
+
+    def _load_from_cache(self, key: str) -> Optional[torch.Tensor]:
+        if not self.cache_dir or key not in self._disk_cache:
+            return None
+        return self._disk_cache[key]
+
+    def _save_to_cache(self, key: str, tensor: torch.Tensor) -> None:
+        if self.cache_dir:
+            self._disk_cache[key] = tensor
+
+    def encode(self, texts: List[str], max_length: int = 512) -> torch.Tensor:
+        """Return [batch, dim] sentence embeddings (mean pooled)."""
+        if not texts:
+            return torch.zeros(0, self.dim, device=self.device)
+
+        inputs = self.tokenizer(
+            texts, padding=True, truncation=True, max_length=max_length,
+            return_tensors="pt"
+        ).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            if hasattr(outputs, 'last_hidden_state'):
+                hidden = outputs.last_hidden_state
+                mask = inputs['attention_mask'].unsqueeze(-1).expand(hidden.size()).float()
+                sum_emb = (hidden * mask).sum(dim=1)
+                mean_emb = sum_emb / mask.sum(dim=1).clamp(min=1e-9)
+                return mean_emb
+            elif hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                return outputs.pooler_output
+            else:
+                return outputs[0][:, 0]
+
+    def project_to_dim(self, embeddings: torch.Tensor, target_dim: int) -> torch.Tensor:
+        """Project embeddings to target dimension (simple truncation/padding)."""
+        if embeddings.shape[-1] == target_dim:
+            return embeddings
+        if embeddings.shape[-1] > target_dim:
+            return embeddings[:, :target_dim]  # Truncate
+        # Pad with zeros
+        pad = torch.zeros(embeddings.shape[0], target_dim - embeddings.shape[-1],
+                         device=embeddings.device, dtype=embeddings.dtype)
+        return torch.cat([embeddings, pad], dim=-1)
 
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -184,6 +281,8 @@ def amp_ctx(device: torch.device, enabled: bool):
 def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
     cond_dim: int, use_amp: bool, max_batches: int = 200,
+    extractor: Optional[EmbeddingExtractor] = None,
+    text_samples: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     model.eval()
     losses = []
@@ -193,7 +292,14 @@ def evaluate(
         x, y = x.to(device), y.to(device)
         with amp_ctx(device, use_amp):
             if isinstance(model, PrefixTinyGPTLM):
-                cond = torch.zeros(x.size(0), cond_dim, device=device)
+                if extractor is not None and text_samples is not None:
+                    # Semantic conditioning from embedding model
+                    batch_texts = text_samples[bi * x.size(0) : (bi + 1) * x.size(0)]
+                    embs = extractor.encode(batch_texts)
+                    cond = extractor.project_to_dim(embs, cond_dim)
+                else:
+                    # Baseline: zero conditioning
+                    cond = torch.zeros(x.size(0), cond_dim, device=device)
                 out  = model(x, cond, y)
             else:
                 out  = model(x, y)
@@ -246,6 +352,26 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True,  num_workers=0)
     val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, num_workers=0)
 
+    # ── Embedding Extractor (for semantic conditioning A/B testing) ────────────
+    extractor: Optional[EmbeddingExtractor] = None
+    if cfg.get("embedding_model") and _TRANSFORMERS_OK:
+        try:
+            cache_dir = out_dir / "embedding_cache" if cfg.get("embedding_cache") else None
+            extractor = EmbeddingExtractor(cfg["embedding_model"], device, cache_dir)
+            log.info(f"Embedding model loaded: {extractor.model_name} (dim={extractor.dim})")
+        except Exception as e:
+            log.warning(f"Failed to load embedding model: {e}. Using zero conditioning.")
+
+    # Helper to get conditioning vectors from token windows
+    def get_cond(x: torch.Tensor, is_training: bool = True) -> torch.Tensor:
+        """Get conditioning vector: semantic if extractor available, else zeros."""
+        if extractor is None or not isinstance(model, PrefixTinyGPTLM):
+            return torch.zeros(x.size(0), cfg["cond_dim"], device=device)
+        # Decode tokens to text and extract embeddings
+        texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))]
+        embs = extractor.encode(texts)
+        return extractor.project_to_dim(embs, cfg["cond_dim"])
+
     # ── Model ─────────────────────────────────────────────────────────────────
     device  = select_device()
     profile = RECOMMENDED_CONFIGS.get(cfg["hardware_profile"], {})
@@ -263,6 +389,34 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     scaler    = torch.cuda.amp.GradScaler(enabled=(cfg["use_amp"] and device.type == "cuda"))
 
+    # ── LR Scheduler (cosine warm restarts to escape local minima) ─────────
+    scheduler = None
+    sched_name = cfg.get("scheduler", "none")
+    if sched_name == "cosine_warm_restarts":
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=cfg.get("T_0", 5),
+            T_mult=cfg.get("T_mult", 2),
+            eta_min=cfg.get("eta_min", 1e-6),
+        )
+        log.info(f"Scheduler: CosineAnnealingWarmRestarts (T_0={cfg.get('T_0', 5)}, T_mult={cfg.get('T_mult', 2)})")
+    else:
+        log.info("Scheduler: none (constant LR)")
+
+    # ── MLflow tracking ────────────────────────────────────────────────────────
+    from mlflow_tracker import MLflowTracker
+    tracker = MLflowTracker(
+        experiment=cfg.get("mlflow_experiment", "small_lm"),
+        enabled=cfg.get("mlflow_enabled", True),
+    )
+    tracker.start_run(run_name=run_id, tags={
+        "arch": arch,
+        "seed": str(cfg["seed"]),
+        "task": "dialogue_lm",
+        "embedding_model": str(cfg.get("embedding_model", "none")),
+    })
+    tracker.log_params(cfg)
+
     # ── Metric writers ────────────────────────────────────────────────────────
     step_writer  = MetricsWriter(out_dir / "step_metrics.csv",  ["epoch", "global_step", "train_loss", "grad_norm"])
     epoch_writer = MetricsWriter(out_dir / "epoch_metrics.csv", ["epoch", "val_loss", "val_ppl"])
@@ -277,6 +431,12 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "model_params": total,
         "tokenizer":   tokenizer.name,
         "data":        {"train_tokens": len(train_ids), "val_tokens": len(val_ids)},
+        "embedding":   {
+            "model": cfg.get("embedding_model"),
+            "dim":   extractor.dim if extractor else None,
+            "cond_dim": cfg["cond_dim"],
+            "enabled": extractor is not None,
+        },
         "epochs":      [],
         "best":        {},
     }
@@ -295,7 +455,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
             with amp_ctx(device, cfg["use_amp"]):
                 if isinstance(model, PrefixTinyGPTLM):
-                    cond = torch.zeros(x.size(0), cfg["cond_dim"], device=device)
+                    cond = get_cond(x, is_training=True)
                     out  = model(x, cond, y)
                 else:
                     out  = model(x, y)
@@ -317,6 +477,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
                     optimizer.step()
+                if scheduler is not None:
+                    scheduler.step(epoch - 1 + bi / len(train_loader))
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
@@ -325,18 +487,23 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     ppl  = math.exp(min(avg, 20))
                     log.info(f"  step {global_step:5d} | loss={avg:.4f}  ppl={ppl:.2f}  grad_norm={gn:.4f}")
                     step_writer.write({"epoch": epoch, "global_step": global_step, "train_loss": avg, "grad_norm": gn})
+                    tracker.log_metrics({"train_loss": avg, "train_ppl": ppl, "grad_norm": gn,
+                                         "lr": optimizer.param_groups[0]["lr"]}, step=global_step)
                     running_loss = 0.0; running_n = 0
 
                 if global_step % cfg["eval_every_steps"] == 0:
-                    vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"])
+                    vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"],
+                                  extractor=extractor)
                     log.info(f"  [eval] val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
                     model.train()
 
         # ── End-of-epoch validation ───────────────────────────────────────────
-        vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"])
+        vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"],
+                      extractor=extractor)
         log.info(f"  epoch {epoch} end → val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
         epoch_writer.write({"epoch": epoch, **vm})
         summary["epochs"].append({"epoch": epoch, **vm})
+        tracker.log_metrics({"val_loss": vm["val_loss"], "val_ppl": vm["val_ppl"]}, step=epoch)
 
         if vm["val_loss"] < best_val:
             best_val = vm["val_loss"]
@@ -352,6 +519,19 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     with open(out_dir / "run_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
+
+    # ── MLflow: log final metrics and artifacts ──────────────────────────────────
+    tracker.log_metrics({
+        "best_val_loss": best_val,
+        "best_val_ppl":  best_ep["val_ppl"],
+        "best_epoch":    best_ep["epoch"],
+        "num_params":    total,
+    })
+    tracker.log_artifact(out_dir / "run_summary.json")
+    tracker.log_artifact(out_dir / "epoch_metrics.csv")
+    if best_path.exists():
+        tracker.log_artifact(best_path)
+    tracker.end_run()
 
     log.info("=" * 60)
     log.info(f"DONE  arch={arch}  best val_ppl={best_ep['val_ppl']:.2f}  (epoch {best_ep['epoch']})")
@@ -379,6 +559,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-every-steps", type=int,   dest="eval_every_steps")
     p.add_argument("--seed",             type=int)
     p.add_argument("--amp",              action="store_true", dest="use_amp")
+    p.add_argument("--embedding-model",  type=str,   dest="embedding_model",
+                   help="Pre-trained model for semantic conditioning (e.g., Qwen/Qwen3-Embedding-4B)")
     return p.parse_args()
 
 

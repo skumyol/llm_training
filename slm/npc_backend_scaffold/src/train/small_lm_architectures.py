@@ -138,6 +138,11 @@ class WeightDropLSTM(nn.Module):
             else:
                 w = raw
             self.lstm._parameters[f"weight_hh_l{i}"] = w
+        # Reset flat-weights cache so cuDNN picks up the new weight_hh tensors
+        self.lstm._flat_weights = [
+            getattr(self.lstm, w) if hasattr(self.lstm, w) else self.lstm._parameters.get(w)
+            for w in self.lstm._flat_weights_names
+        ]
 
     def forward(self, x: torch.Tensor, hx=None):
         self._apply_weight_drop()

@@ -1,28 +1,24 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 *.so
 
 # Environments
 .venv/
 .env
-.env.*
 
 # Editors/OS
 .DS_Store
-.idea/
 .vscode/
 *.swp
 
-# Checkpoints & logs
+# Generated artifacts
 mlruns/
 logs/
 *.log
 *.pid
 
-# Data artifacts
+# Data (regeneratable)
 /data/raw_episodes/
 /data/validated_turns/
 /data/counterfactuals/
@@ -30,72 +26,31 @@ logs/
 /data/merged_validated/
 /data/splits/
 /data/npc_profiles/
-/data/scenario_bank/*.tmp
-/data/world_contexts/*.tmp
+*.tmp
 
-# Model artifacts
+# Model weights
 checkpoints/
 outputs/
 *.ckpt
 *.safetensors
 *.bin
+*.pt
+*.pth
 
-# Hugging Face cache
-~/.cache/
-~/.huggingface/
+# Compiled caches
+unsloth_compiled_cache/
 
-# Notebooks
-*.ipynb_checkpoints/
-
-# Local configs/creds
-*.secret
-*.local
-*.bak
-
-# Profiling
-.prof
-.profraw
-.coverage
-
-# Build/Dist
+# Build
 build/
 dist/
 *.egg-info/
 
-# Temporary
-/tmp/
-*.tmp
-
-# NPC Backend Scaffold - generated artifacts only
-slm/**/artifacts/*/
-slm/**/logs/
-slm/**/runs/
-slm/**/.venv/
-slm/**/node_modules/
-slm/**/dist/
-slm/**/*.log
-slm/**/__pycache__/
-slm/**/*.pyc
-slm/**/.DS_Store
-slm/**/cache_*.jsonl
-
-# Model weights (large binaries)
-slm/**/*.pt
-slm/**/*.pth
-slm/**/*.safetensors
-slm/**/*.bin
-
-# Training data (can be regenerated)
-slm/**/data/**/*.jsonl
-slm/**/data/**/*.txt
-slm/**/data/**/*.csv
-slm/**/data/raw/*/
-!slm/**/data/**/.gitkeep
-
-# Cache files
-slm/**/*cache*
-slm/**/npc_profiles*.csv
-
-# Archives
-slm/**/*.tar.gz
-slm/**/*.zip
+# Scaffold artifacts
+slm/**/artifacts/
+slm/**/data/
+slm/**/models/
+slm/**/configs/
+slm/**/*.cache*
+slm/**/*.faiss
+slm/**/*.csv
+slm/**/eval_results*

@@ -35,6 +35,12 @@ _ESSAY_COL_MAP = {
     "cAGR": "agreeableness",
     "cCON": "conscientiousness",
     "cOPN": "openness",
+    # Some mirrors use single-letter column names
+    "E": "extraversion",
+    "N": "neuroticism",
+    "A": "agreeableness",
+    "C": "conscientiousness",
+    "O": "openness",
 }
 
 OCEAN_COLS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"]
