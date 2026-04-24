@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-Gemma 3 + Unsloth training runner
+Gemma 4 Training Runner (E2B / E4B)
 =================================
-Fine-tunes Gemma 3 on the scaffold's dialogue JSONL format using Unsloth + TRL.
+Fine-tunes Gemma 4 MoE models on the scaffold's dialogue JSONL format.
 
-This script is intentionally isolated from the TinyLlama pipeline so it can:
-  * auto-download a Gemma 3 base model when missing
-  * emit the same run_summary.json / epoch_metrics.csv artifact shape used elsewhere
-  * show up in the frontend's model catalog like the other dialogue generators
+Supported Models:
+  - google/gemma-4-E2B: 2 active experts (~2B active params, 16B total)
+  - google/gemma-4-E4B: 4 active experts (~4B active params, 16B total)
 
-Notes
------
-This path assumes a CUDA environment for practical training. If Unsloth or TRL are
-not installed, the script fails with a direct install hint instead of silently
-falling back to a different training stack.
+Gemma 4 uses sparse mixture-of-experts (MoE) with 16B total parameters but
+only activates 2B (E2B) or 4B (E4B) per token for efficiency.
+
+Requirements:
+  - transformers >= 4.50
+  - peft (for LoRA)
+  - bitsandbytes (for 4-bit quantization)
+  - trl (for SFTTrainer)
 """
 from __future__ import annotations
 
@@ -32,32 +34,17 @@ from typing import Any, Dict, Iterable, List, Optional
 import torch
 import yaml
 
-# Disable FP8 to avoid accelerate FP8BackendType issues
-os.environ['UNSLOTH_DISABLE_FP8'] = '1'
+# Gemma 4 uses native transformers + peft + trl (no Unsloth needed)
+# Ensure compatible accelerate version
 os.environ['ACCELERATE_FP8'] = '0'
-
-# Monkey patch accelerate.utils BEFORE unsloth loads
-import accelerate.utils
-if not hasattr(accelerate.utils, 'FP8BackendType'):
-    from enum import Enum
-    class _FP8BackendType(Enum):
-        AUTO = "auto"
-        TE = "te"
-        MSAMP = "msamp"
-    accelerate.utils.FP8BackendType = _FP8BackendType
-    # Also inject into accelerate.utils namespace
-    import accelerate.utils as _acc_utils
-    _acc_utils.FP8BackendType = _FP8BackendType
-    # Ensure it's in sys.modules
-    import sys as _sys
-    _sys.modules['accelerate.utils'].FP8BackendType = _FP8BackendType
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 
 DEFAULTS: Dict[str, Any] = {
-    "base_model_name": "unsloth/gemma-3-4b-it",
+    # Gemma 4 models: E2B (~2B active), E4B (~4B active)
+    "base_model_name": "google/gemma-4-E2B",  # Default: E2B (faster, less VRAM)
     "download_if_missing": True,
     "local_model_root": "models",
     "train_path": "data/dialogue/from_gen_train.jsonl",
@@ -78,7 +65,7 @@ DEFAULTS: Dict[str, Any] = {
     "eval_steps": 100,
     "save_steps": 100,
     "seed": 42,
-    "output_dir": "artifacts/gemma_unsloth",
+    "output_dir": "artifacts/gemma4",
     "system_prompt_template": (
         "You are roleplaying an NPC in a dialogue simulation. Stay in character, "
         "reply naturally, and use the NPC profile below as a hard constraint.\n"
@@ -206,95 +193,59 @@ def _resolve_model_path(cfg: Dict[str, Any], log: logging.Logger) -> str:
     return str(local_dir)
 
 
-def _load_unsloth_components(cfg: Dict[str, Any], model_path: str, log: logging.Logger):
-    try:
-        from unsloth import FastModel
-        from unsloth.chat_templates import get_chat_template
-    except ImportError as exc:
-        raise RuntimeError(
-            "Unsloth is not installed in this environment. "
-            "Install it with: pip install unsloth unsloth_zoo trl"
-        ) from exc
-
-    # Unsloth exec's a patched Accelerator.prepare whose __globals__ lack
-    # FP8BackendType.  Inject the real enum so the function can resolve it.
-    try:
-        from accelerate.utils.dataclasses import FP8BackendType
-        import accelerate.accelerator
-        _prepare = accelerate.accelerator.Accelerator.prepare
-        if callable(_prepare) and hasattr(_prepare, '__globals__'):
-            if 'FP8BackendType' not in _prepare.__globals__:
-                _prepare.__globals__['FP8BackendType'] = FP8BackendType
-    except Exception:
-        pass
-
-    # Replace fused_linear_cross_entropy with a standard-torch fallback so we
-    # skip the cut_cross_entropy Triton kernels that fail on this GPU.
-    def _fallback_fused_lce(
-        hidden_states, lm_weight, labels,
-        num_items_in_batch=None, ignore_index=-100, reduction="mean",
-        logit_softcapping=0, accuracy_threshold="auto",
-    ):
-        reduction = "sum" if num_items_in_batch is not None else "mean"
-        logits = torch.nn.functional.linear(
-            hidden_states.to(lm_weight.dtype), lm_weight,
-        ).float()
-        if logit_softcapping and logit_softcapping != 0:
-            logits = logits / logit_softcapping
-            logits = torch.tanh(logits)
-            logits = logits * logit_softcapping
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        loss = torch.nn.functional.cross_entropy(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1),
-            ignore_index=ignore_index,
-            reduction=reduction,
-        )
-        if num_items_in_batch is not None:
-            loss = loss / num_items_in_batch
-        return loss
-
-    import unsloth_zoo.loss_utils as _lutils
-    _lutils.fused_linear_cross_entropy = _fallback_fused_lce
-    log.info("Patched fused_linear_cross_entropy with standard-torch fallback")
-
+def _load_gemma4_components(cfg: Dict[str, Any], model_path: str, log: logging.Logger):
+    """Load Gemma 4 model with native transformers + PEFT LoRA."""
+    base_model = cfg["base_model_name"]
+    
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "Gemma 3 Unsloth training currently requires CUDA in this scaffold. "
+            "CUDA is required for Gemma 4 training. "
             "Run this stage on a CUDA machine."
         )
-
-    log.info(f"Loading Gemma model from {model_path}")
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=model_path,
-        max_seq_length=cfg["max_seq_length"],
+    
+    log.info(f"Loading Gemma 4 model from {model_path}")
+    log.info(f"Model type: {'E2B (2 active experts)' if 'E2B' in base_model else 'E4B (4 active experts)'}")
+    
+    from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    
+    # 4-bit quantization config for Gemma 4
+    bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
-        load_in_8bit=False,
-        full_finetuning=False,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
     )
-
-    # After model load the compiled module is in sys.modules; patch its local binding too.
-    for _mname, _mod in list(sys.modules.items()):
-        if hasattr(_mod, 'fused_linear_cross_entropy') and \
-                getattr(_mod, 'fused_linear_cross_entropy') is not _fallback_fused_lce:
-            _mod.fused_linear_cross_entropy = _fallback_fused_lce
-
-    tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
-
-    model = FastModel.get_peft_model(
-        model,
-        finetune_vision_layers=False,
-        finetune_language_layers=True,
-        finetune_attention_modules=True,
-        finetune_mlp_modules=True,
+    
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_path,
+        quantization_config=bnb_config,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+    )
+    processor = AutoProcessor.from_pretrained(model_path)
+    tokenizer = processor.tokenizer
+    
+    # Prepare for LoRA
+    model = prepare_model_for_kbit_training(model)
+    
+    # LoRA config for Gemma 4 (text-only, no vision layers)
+    lora_config = LoraConfig(
         r=cfg["lora_r"],
         lora_alpha=cfg["lora_alpha"],
+        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
+                      "gate_proj", "up_proj", "down_proj"],
         lora_dropout=cfg["lora_dropout"],
         bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=cfg["seed"],
+        task_type="CAUSAL_LM",
     )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    log.info(f"Gemma 4 loaded: {total_params/1e9:.1f}B total params")
+    log.info(f"Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.1f}M")
+    
     return model, tokenizer
 
 
@@ -302,7 +253,7 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
     try:
         from datasets import Dataset
     except ImportError as exc:
-        raise RuntimeError("datasets is required for Gemma Unsloth training") from exc
+        raise RuntimeError("datasets is required for Gemma 4 training") from exc
 
     rows: List[Dict[str, str]] = []
     for record in records:
@@ -322,7 +273,7 @@ def _safe_ppl(loss_value: Optional[float]) -> Optional[float]:
 
 
 def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    run_id = cfg.get("run_id") or f"gemma_unsloth_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_id = cfg.get("run_id") or f"gemma4_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     out_dir = Path(cfg["output_dir"]) / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     log = setup_logger(out_dir, run_id)
@@ -343,8 +294,16 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if not Path(cfg[key]).exists():
             raise FileNotFoundError(f"Missing dataset file: {cfg[key]}")
 
+    # Validate Gemma 4 only
+    if not _is_gemma4(cfg["base_model_name"]):
+        raise ValueError(
+            f"This script only supports Gemma 4 models (E2B/E4B). "
+            f"Got: {cfg['base_model_name']}. "
+            f"Use 'google/gemma-4-E2B' or 'google/gemma-4-E4B'"
+        )
+    
     model_path = _resolve_model_path(cfg, log)
-    model, tokenizer = _load_unsloth_components(cfg, model_path, log)
+    model, tokenizer = _load_gemma4_components(cfg, model_path, log)
 
     train_records = _load_records(cfg["train_path"], cfg.get("max_train_samples"))
     val_records = _load_records(cfg["val_path"], cfg.get("max_eval_samples"))
@@ -361,7 +320,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from trl import SFTConfig, SFTTrainer
     except ImportError as exc:
-        raise RuntimeError("trl is required for Gemma Unsloth training") from exc
+        raise RuntimeError("trl is required for Gemma 4 training") from exc
 
     trainer = SFTTrainer(
         model=model,
@@ -420,8 +379,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "run_id": run_id,
         "backbone": cfg["base_model_name"],
-        "task": "dialogue_lm_unsloth",
-        "framework": "unsloth",
+        "task": "dialogue_lm_gemma4",
+        "framework": "transformers+peft",
         "hyperparams": {k: v for k, v in cfg.items() if k != "run_id"},
         "data": {
             "train_size": len(train_ds),
@@ -458,7 +417,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train Gemma 3 with Unsloth")
+    p = argparse.ArgumentParser(description="Train Gemma 4 (E2B/E4B) with native transformers + PEFT")
     p.add_argument("--config", type=str)
     p.add_argument("--run-id", type=str, dest="run_id")
     p.add_argument("--base-model-name", type=str, dest="base_model_name")

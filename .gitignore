@@ -54,3 +54,4 @@ slm/**/*.cache*
 slm/**/*.faiss
 slm/**/*.csv
 slm/**/eval_results*
+slm/npc_backend_scaffold/IMPROVEMENT_PLAN.md

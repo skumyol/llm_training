@@ -93,7 +93,7 @@ DEFAULTS: Dict[str, Any] = {
     "seed":              42,
     "output_dir":        "artifacts/small_lm",
     "cond_dim":          8,    # OCEAN(5)+VAD(3); used by prefix_gpt only
-    "use_amp":           False,
+    "use_amp":           True,
     # Embedding model for semantic conditioning (A/B testing)
     "embedding_model":   None,  # e.g., "Qwen/Qwen3-Embedding-4B" or "sentence-transformers/all-MiniLM-L6-v2"
     "embedding_cache":   True,  # Cache extracted embeddings to disk
@@ -349,8 +349,20 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     train_ds   = TokenDataset(train_ids, cfg["seq_len"])
     val_ds     = TokenDataset(val_ids,   cfg["seq_len"])
-    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True,  num_workers=0)
-    val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, num_workers=0)
+    # Use multiple workers + pinned memory to hide data-loading latency on GPU
+    _cuda_available = torch.cuda.is_available()
+    num_workers = 4 if _cuda_available else 0
+    pin_memory  = _cuda_available
+    train_loader = DataLoader(
+        train_ds, batch_size=cfg["batch_size"], shuffle=True,
+        num_workers=num_workers, pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )
+    val_loader = DataLoader(
+        val_ds,   batch_size=cfg["batch_size"], shuffle=False,
+        num_workers=num_workers, pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )
 
     # ── Embedding Extractor (for semantic conditioning A/B testing) ────────────
     extractor: Optional[EmbeddingExtractor] = None
@@ -381,25 +393,34 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         params["max_seq_len"] = cfg["seq_len"]
     if arch == "prefix_gpt":
         params["cond_dim"] = cfg["cond_dim"]
+    # Allow YAML (e.g. Optuna trials) to override any arch-specific param
+    for k, v in cfg.get("arch_params", {}).items():
+        params[k] = v
 
     model   = build_model(arch, params).to(device)
     total   = sum(p.numel() for p in model.parameters())
     log.info(f"Device: {device}  |  Parameters: {total:,} ({total/1e6:.1f} M)")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
+    # Ensure numeric types (YAML may load as strings)
+    lr = float(cfg["lr"])
+    weight_decay = float(cfg["weight_decay"])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scaler    = torch.cuda.amp.GradScaler(enabled=(cfg["use_amp"] and device.type == "cuda"))
 
     # ── LR Scheduler (cosine warm restarts to escape local minima) ─────────
     scheduler = None
     sched_name = cfg.get("scheduler", "none")
     if sched_name == "cosine_warm_restarts":
+        T_0 = int(cfg.get("T_0", 5))
+        T_mult = int(cfg.get("T_mult", 2))
+        eta_min = float(cfg.get("eta_min", 1e-6))
         scheduler = CosineAnnealingWarmRestarts(
             optimizer,
-            T_0=cfg.get("T_0", 5),
-            T_mult=cfg.get("T_mult", 2),
-            eta_min=cfg.get("eta_min", 1e-6),
+            T_0=T_0,
+            T_mult=T_mult,
+            eta_min=eta_min,
         )
-        log.info(f"Scheduler: CosineAnnealingWarmRestarts (T_0={cfg.get('T_0', 5)}, T_mult={cfg.get('T_mult', 2)})")
+        log.info(f"Scheduler: CosineAnnealingWarmRestarts (T_0={T_0}, T_mult={T_mult})")
     else:
         log.info("Scheduler: none (constant LR)")
 
@@ -507,9 +528,16 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
         if vm["val_loss"] < best_val:
             best_val = vm["val_loss"]
+            _state = model.state_dict()
+            if arch == "awdlstm":
+                # WeightDropLSTM stores both weight_hh_raw_l{i} (persistent)
+                # and weight_hh_l{i} (derived, injected into _parameters at
+                # runtime). Save only the raw keys to avoid load key mismatch.
+                _state = {k: v for k, v in _state.items()
+                          if not ("weight_hh_l" in k and "_raw" not in k)}
             torch.save({
                 "arch":   arch, "params": params,
-                "state":  model.state_dict(),
+                "state":  _state,
                 "epoch":  epoch, "val_loss": best_val,
             }, best_path)
             log.info(f"  ✓ Best checkpoint saved  (val_loss={best_val:.4f})")

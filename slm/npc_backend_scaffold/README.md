@@ -1,299 +1,327 @@
-# NPC Backend Scaffold
+# NPC Backend — Research Training Stack
 
-Modular training and inference stack for personality-conditioned, affect-aware NPC dialogue.
-Covers the full pipeline from raw data through encoder training, personality caching, and
-conditional dialogue fine-tuning — plus a from-scratch small-LM benchmark suite for A/B comparison.
+Personality-conditioned, affect-aware NPC dialogue generation.
+This repository contains **three independent but interacting research tracks**:
 
----
+| Track | Goal | Models |
+|-------|------|--------|
+| **A — Encoders** | Predict NPC personality (OCEAN) and emotional state (VAD) from text | Fine-tuned DistilBERT |
+| **B — Small LMs** | Train compact dialogue models from scratch; compare architectures | GRU, AWD-LSTM, TinyGPT, PrefixGPT, MoE, Mamba-like |
+| **C — LLM Fine-tuning** | Fine-tune a production-grade dialogue LM with LoRA + soft-prefix conditioning | TinyLlama-1.1B, Gemma-3 |
 
-## Architecture overview
-
-```
-                  ┌─────────────────────┐
-  NPC profile ──► │ Personality Encoder │ ──► p_vec (5-dim OCEAN)  ──► cached
-                  │  (DistilBERT OCEAN) │                               in FAISS
-                  └─────────────────────┘
-
-  Conversation  ► │  Affect Encoder     │ ──► a_vec (3-dim VAD)    ──► live
-  context         │  (DistilBERT VAD)   │
-                  └─────────────────────┘
-
-  FAISS memory  ► │  Episodic Memory    │ ──► retrieved memories
-                  │  (Sentence-BERT)    │
-                  └─────────────────────┘
-
-  p_vec + a_vec ► │  ConditionalSoft-   │ ──► prefix tokens
-                  │  Prefix (MLP)       │
-                  └─────────────────────┘
-                           │
-                           ▼
-                  ┌─────────────────────┐
-  Prompt ───────► │  Causal LM + LoRA   │ ──► NPC response
-                  │  (TinyLlama default)│
-                  └─────────────────────┘
-```
-
-The soft-prefix module prepends learned conditioning embeddings to the token stream.
-Upgrade path to true per-layer KV-prefix injection is clean — only `src/models/dialogue.py` changes.
+> **If you are new here:** Start with `bash train_personality_encoder.sh` and
+> `bash train_affect_encoder.sh` (Track A), then run `bash train_small_lms.sh` (Track B).
+> Track C (LLM fine-tuning) requires a GPU with ≥16 GB VRAM.
 
 ---
 
-## Quick start (smoke test)
+## System Architecture
 
-```bash
-cd slm/npc_backend_scaffold
-bash smoke_test.sh
 ```
+  NPC profile text
+       │
+       ▼
+  ┌─────────────────────┐
+  │  Personality Encoder │──► p_vec  (5-dim OCEAN)   ──► FAISS personality cache
+  │  DistilBERT + head   │    [O, C, E, A, N] ∈ ℝ⁵
+  └─────────────────────┘
 
-Runs the full pipeline end-to-end with tiny synthetic data and lightweight models
-(DistilBERT + DistilGPT-2). Verifies data loading, training, caching, and inference.
+  Conversation context
+       │
+       ▼
+  ┌─────────────────────┐
+  │  Affect Encoder      │──► a_vec  (3-dim VAD)      ──► live inference
+  │  DistilBERT + head   │    [valence, arousal, dom] ∈ ℝ³
+  └─────────────────────┘
 
----
-
-## Data preparation
-
-### Option A — Public datasets (PersonaChat, CRD3, EmpathyDialogues)
-
-```bash
-# 1. Download raw data
-python -m src.data.datasets \
-    --datasets personachat crd3 empathetic_dialogues dailydialog
-
-# 2. Convert to training formats
-python -m src.data.prepare_dialogue_data
-```
-
-Produces:
-- `data/dialogue/train.jsonl` + `val.jsonl`  → ConditionalDialogueModel
-- `data/dialogue/train.txt`  + `val.txt`     → small LM architectures
-- `data/affect/train.csv`    + `val.csv`     → affect encoder (VAD approximated from emotion labels)
-- `data/npc_profiles.csv`                   → personality cache builder
-
-### Option B — Upper-level generated data (recommended for domain quality)
-
-The upper-level repo generates structured NPC dialogue via `run_data_gen.py` using
-scenario templates (`data/scenario_bank/`) and world contexts (`data/world_contexts/`).
-This data has **real VAD affect labels** (not approximations) and rich NPC personas.
-
-```bash
-# From repo root — generate episodes:
-python run_data_gen.py --config configs/data_gen.yaml
-
-# From scaffold — convert to training formats:
-python -m src.data.convert_generated_data \
-    --source-dir ../../data \
-    --out-dir    data
-```
-
-Produces `from_gen_*` variants of all training files. Affect labels come directly from
-`A_t.valence / A_t.arousal / A_t.control` in the validated turns.
-
-Label mapping:
-| Label value | valence | arousal / dominance |
-|-------------|---------|---------------------|
-| negative / low | 0.1 | 0.2 |
-| neutral / medium | 0.5 | 0.5 |
-| positive / high | 0.9 | 0.8 |
-
-Update `configs/affect.yaml` to point `train_path` at `data/affect/from_gen_train.csv`
-to use these higher-quality labels.
-
-### Option C — Merge both sources
-
-```python
-import pandas as pd, json
-# Affect: simply concatenate CSVs
-pd.concat([
-    pd.read_csv("data/affect/train.csv"),
-    pd.read_csv("data/affect/from_gen_train.csv"),
-]).to_csv("data/affect/merged_train.csv", index=False)
-
-# Dialogue: cat JSONL files
-import subprocess
-subprocess.run("cat data/dialogue/train.jsonl data/dialogue/from_gen_train.jsonl "
-               "> data/dialogue/merged_train.jsonl", shell=True)
+  p_vec + a_vec
+       │
+       ▼
+  ┌────────────────────────────────────────────────┐
+  │  Soft-Prefix MLP                               │
+  │  Concatenates [p_vec; a_vec] → prefix tokens  │
+  └────────────────────────────────────────────────┘
+                          │
+       ┌──────────────────┴────────────────────┐
+       │    Dialogue LM  (Track C)              │
+       │    TinyLlama-1.1B  +  LoRA  +  Prefix │──► NPC response
+       │    ─── OR ───                          │
+       │    Track B SLM (from scratch)          │
+       └────────────────────────────────────────┘
 ```
 
 ---
 
-## Training pipeline
+## Track A — Personality & Affect Encoders
 
-### Automated (recommended)
+### What they do
+Both encoders fine-tune **DistilBERT-base-uncased** (66M parameters) with a lightweight
+regression/classification head on top of the `[CLS]` token embedding.
 
-```bash
-./train_all.sh                        # auto hardware detection, all stages
-./train_all.sh --run-id exp_01        # tag all artifacts
-./train_all.sh --sequential           # force sequential (low-RAM machines)
-./train_all.sh --skip-stage1          # restart from cache + dialogue only
-```
+### Personality Encoder (OCEAN)
+Predicts the Big Five personality dimensions (Openness, Conscientiousness, Extraversion,
+Agreeableness, Neuroticism) as a 5-way multi-label classification from free-text NPC profiles.
+Training uses **focal loss** to handle class imbalance in the generated profiles.
 
-**Stage ordering:**
-```
-Stage 1 [parallel] ─┬─ personality encoder
-                    └─ affect encoder
-Stage 2             ─── build personality cache
-Stage 3             ─── dialogue model (LoRA + prefix)
-```
+- **Architecture:** `DistilBERT → [CLS] → Dropout → Linear(768 → 5) → Sigmoid`
+- **Loss:** Focal loss (γ tuned via Optuna)
+- **Metric:** Macro F1 per OCEAN dimension
+- **Optimiser:** AdamW with differential LR (encoder 10× lower than head), cosine warm-up
+- **Hyperparameter search:** `scripts/hyperparam_search.py` (Optuna, 30 trials)
+- **Train:** `bash train_personality_encoder.sh`
 
-Hardware auto-profile sets batch sizes based on detected VRAM (8/16/24+ GB CUDA, MPS, CPU).
+### Affect Encoder (VAD)
+Predicts continuous valence, arousal, and dominance scores from conversation context.
+Uses **Concordance Correlation Coefficient (CCC)** loss to optimise rank+scale agreement
+simultaneously, critical for affect tasks where per-dimension variance differs greatly.
 
-### Individual scripts (ablation / debug)
-
-```bash
-# Personality encoder
-python -m src.train.run_personality \
-    --config configs/personality.yaml \
-    --run-id ablation_roberta \
-    --model-name roberta-base
-
-# Affect encoder
-python -m src.train.run_affect \
-    --config configs/affect.yaml \
-    --run-id ablation_lr_1e5 \
-    --lr 1e-5 --epochs 5
-
-# Personality cache
-python -m src.data.build_caches \
-    --profiles-path data/npc_profiles.csv \
-    --encoder-dir   artifacts/personality_encoder/my_run/best_model \
-    --out-path      artifacts/personality_cache.jsonl
-
-# Dialogue model
-python -m src.train.run_dialogue \
-    --config configs/dialogue.yaml \
-    --run-id ablation_lora_r32 \
-    --lora-r 32
-```
-
-Every run produces under `artifacts/<model>/<run_id>/`:
-- `run.log` — timestamped log
-- `step_metrics.csv` — per-step loss / lr / grad_norm
-- `epoch_metrics.csv` — val MSE / MAE / R² (encoders) or val_loss / ppl (dialogue)
-- `predictions_epoch{N}.csv` — predictions vs ground truth per dimension (encoders)
-- `run_summary.json` — full hyperparams + results for ablation table
+- **Architecture:** `DistilBERT → [CLS] → Dropout → Linear(768 → 3) → Tanh (scaled to [0,1])`
+- **Loss:** CCC loss + MSE regulariser (α tuned via Optuna)
+- **Metric:** Mean CCC across V/A/D dimensions
+- **Train:** `bash train_affect_encoder.sh`
 
 ---
 
-## Small-LM A/B benchmark
+## Track B — Small Language Models (from scratch)
 
-Six from-scratch architectures for comparison against the fine-tuned LLM path:
+### Why from scratch?
+We benchmark six architectures trained from scratch on the same NPC dialogue corpus (~545K tokens,
+~2,183 dialogues). This gives a controlled comparison of inductive biases: sequential memory
+(RNNs), self-attention (Transformers), sparse routing (MoE), and state-space models (Mamba).
+All models use the same GPT-2 BPE tokeniser (tiktoken, vocab=50,257) for fair perplexity comparison.
 
-| Architecture | Class | Params (m1_small) | Key feature |
+### Architecture Descriptions
+
+#### 1. GRU-LM (`SmallGRULM`)
+A stacked **Gated Recurrent Unit** language model. GRUs (Cho et al., 2014) use reset and update
+gates to control information flow across time, providing a computationally cheaper alternative to
+LSTMs while retaining comparable performance on short sequences. Our implementation uses 2–3 layers
+with tied input/output embeddings.
+
+- **Key hyperparameter:** `seq_len` is critically short (64–128) — BPTT gradients vanish rapidly
+  in deep stacks; longer contexts harm rather than help.
+- **Parameters (default):** ~4–8M
+
+#### 2. AWD-LSTM (`AWDLSTMLM`)
+**ASGD Weight-Dropped LSTM** (Merity et al., 2018). Extends the vanilla LSTM with three
+regularisation techniques proven to prevent overfitting on small corpora:
+- **DropConnect** on hidden-to-hidden weight matrices (`wdrop`) — drops entire weight entries,
+  not just activations, forcing robust hidden state usage
+- **Variational (locked) dropout** — the same dropout mask is applied at every time step,
+  preserving temporal structure
+- **Embedding dropout** — drops entire word vectors with probability `dropouti`
+
+This is the standard strong baseline for small-data recurrent LMs.
+
+- **Parameters (default):** ~8–20M (width-dependent)
+
+#### 3. TinyGPT-LM (`TinyGPTLM`)
+A small **decoder-only causal Transformer** in the GPT style (Radford et al., 2018). Uses
+multi-head causal self-attention with a causal mask, position embeddings, and pre-norm layer
+normalisation. Our implementation targets 4–6 layers with `n_embd=128–256`, providing a compact
+but expressive model well-suited to dialogue-length sequences.
+
+- **Key advantage:** Parallelisable training (no sequential dependency); global context window
+- **Parameters (default):** ~4–10M
+
+#### 4. PrefixGPT-LM (`PrefixTinyGPTLM`)
+**TinyGPT + conditioning prefix.** Prepends `prefix_length` learnable soft-token embeddings
+derived from the personality+affect conditioning vector `c ∈ ℝ⁸` via a small MLP. This is
+the minimal compatible interface with the production Track C model — the architecture can be
+swapped in at inference time with zero API changes.
+
+- **Key difference from TinyGPT:** Accepts `cond_vec` input; outputs are personality-conditioned
+- **Research question:** Does even a tiny (8-dim) conditioning signal improve NPC dialogue consistency?
+
+#### 5. TinyMoE-LM (`TinyMoELM`)
+A **Mixture-of-Experts Transformer** with sparse routing (Shazeer et al., 2017; Fedus et al., 2022).
+The FFN block in each Transformer layer is replaced by `num_experts` parallel feed-forward networks,
+with a learned router selecting the top-K experts per token. A **load-balancing auxiliary loss**
+(weight 0.01) prevents expert collapse. MoE models can achieve higher effective capacity with the
+same per-token compute, but are sensitive to `top_k` and `num_experts` choices.
+
+- **Parameters (active per token):** ~3–5M (sparse; total ~8–20M across experts)
+
+#### 6. Mamba-like SSM (`MambaLikeLM`)
+A **selective state-space model** inspired by Mamba (Gu & Dao, 2023). Replaces self-attention
+with a linear-recurrent SSM layer where the state transition matrices (A, B, C) are
+**input-dependent** (selected from the input token), allowing the model to selectively remember
+or forget information. Our pure-PyTorch implementation uses a sequential scan (no CUDA kernels).
+
+- **Critical constraint:** The Python sequential scan is O(seq_len) — use `seq_len ≤ 64`.
+  With seq_len=32 this model matches GPT-level perplexity at lower parameter count.
+- **Parameters (default):** ~5–15M
+
+### Hyperparameter Optimisation
+Each architecture has a dedicated search space in `scripts/optuna_small_lm.py`. Key axes differ
+by architecture: RNNs need shorter `seq_len` and lower `lr`; Transformers tolerate larger models.
+
+```bash
+# Run HPO for one architecture (20 trials × 5 epochs each)
+bash train_small_lms.sh --hpo-only --arch gru
+
+# Run full pipeline: HPO → retrain best × 3 seeds × 30 epochs
+bash train_small_lms.sh
+```
+
+### Current Results (5 epochs, Optuna-found params)
+
+| Architecture | Val PPL (mean ± std) | Params | seq_len |
 |---|---|---|---|
-| `gru` | `SmallGRULM` | ~8M | fast, low memory |
-| `awdlstm` | `AWDLSTMLM` | ~8M | DropConnect + variational dropout |
-| `gpt` | `TinyGPTLM` | ~5M | causal transformer |
-| `prefix_gpt` | `PrefixTinyGPTLM` | ~5M | GPT + cond_vec prefix — same interface as ConditionalDialogueModel |
-| `moe` | `TinyMoELM` | ~10M | sparse mixture-of-experts FFN |
-| `mamba_like` | `MambaLikeLM` | ~5M | selective SSM, pure PyTorch |
+| PrefixGPT | 46.6 ± 0.4 | ~5M | 128 |
+| GPT | 81.8 ± 0.3 | ~2M | 256 |
+| MoE | 140.4 ± 6.8 | ~8M | 256 |
+| GRU | 299.6 ± 32.0 | ~4M | 64 |
+| AWD-LSTM | 296.2 ± 70.2 | ~12M | 128 |
+| Mamba-like | ~53 (1 trial) | ~4M | 32 |
+
+*Full 30-epoch × 3-seed results in progress.*
+
+---
+
+## Track C — Large LM Fine-tuning
+
+### TinyLlama-1.1B + LoRA + Soft-Prefix
+Fine-tunes **TinyLlama-1.1B** (Zhang et al., 2024) on the NPC dialogue corpus using
+**Low-Rank Adaptation** (LoRA; Hu et al., 2022). LoRA freezes the base model and injects
+trainable rank-decomposition matrices `W = W₀ + BA` (rank r=16) into the attention projections,
+reducing trainable parameters by ~1000× vs full fine-tuning. The soft-prefix from Track A
+is prepended to the prompt, injecting personality conditioning without modifying architecture.
 
 ```bash
-# Train all six on the same data split
-for arch in gru awdlstm gpt prefix_gpt moe mamba_like; do
-  python -m src.train.run_small_lm \
-    --config configs/small_lm.yaml \
-    --arch $arch \
-    --run-id bench_v1_$arch
-done
-
-# Compare results
-python -c "
-import json, glob
-for f in sorted(glob.glob('artifacts/small_lm/bench_v1_*/run_summary.json')):
-    s = json.load(open(f))
-    print(f\"{s['arch']:12s}  {s['model_params']/1e6:.1f}M params  val_ppl={s['best']['val_ppl']:.2f}\")
-"
+bash finetune_dialogue_lm.sh --model tinyllama
 ```
 
-The `val_ppl` metric uses tiktoken (GPT-2 BPE) and is comparable across all architectures
-and to the ConditionalDialogueModel's reported perplexity.
+### Gemma-3 + Unsloth
+Fine-tunes **Gemma-3** with **Unsloth** (2–4× faster training via custom CUDA kernels and
+Flash Attention). Uses 4-bit NF4 quantisation for memory efficiency on consumer GPUs.
 
-Hardware profiles (`m1_small` / `rtx4070_small`) in `src/train/small_lm_architectures.py`
-control model width and depth. Pass `--hardware-profile rtx4070_small` for larger models.
-
----
-
-## Inference
-
-```python
-from src.common.config import InferenceConfig
-from src.infer.service import NPCInferenceService
-
-svc = NPCInferenceService(InferenceConfig())
-svc.register_npc("commander_vance", "A stoic, exhausted commander who values duty above all.")
-
-reply = svc.chat("commander_vance", "Have you caught the spy yet?")
-print(reply)
-```
-
-Or run the interactive demo:
 ```bash
-python src/infer/run_demo.py
+bash finetune_dialogue_lm.sh --model gemma
 ```
 
 ---
 
-## Ablation study guide
+## Quick Start
 
-All `run_summary.json` files share a common schema for easy aggregation:
+```bash
+# 1. Install
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-```python
-import json, glob, pandas as pd
+# 2. Verify everything works (2–3 min)
+bash smoke_test.sh
 
-rows = []
-for f in glob.glob("artifacts/**/run_summary.json", recursive=True):
-    s = json.load(open(f))
-    rows.append({
-        "run_id":  s["run_id"],
-        "model":   s.get("arch") or s.get("backbone") or s.get("model"),
-        "task":    s["task"],
-        "val_mse": s["best"].get("val_mse"),
-        "val_ppl": s["best"].get("val_ppl"),
-        "params":  s.get("model_params") or s.get("model_stats", {}).get("trainable_params"),
-    })
-pd.DataFrame(rows).sort_values("val_ppl").to_csv("ablation_table.csv", index=False)
+# 3. Train encoders (Track A, ~2 hrs each on RTX 4070)
+bash train_personality_encoder.sh
+bash train_affect_encoder.sh
+
+# 4. Train small LMs (Track B, ~6 hrs HPO + ~4 hrs final)
+bash train_small_lms.sh
+
+# 5. Fine-tune dialogue LM (Track C, ~4 hrs on RTX 4070)
+bash finetune_dialogue_lm.sh --model tinyllama
+
+# 6. Evaluate all models
+bash evaluate.sh
 ```
 
 ---
 
-## File layout
+## Training Scripts Reference
+
+| Script | Track | What it does |
+|--------|-------|--------------|
+| `train_personality_encoder.sh` | A | Optuna HPO → fine-tune DistilBERT for OCEAN personality |
+| `train_affect_encoder.sh` | A | Optuna HPO → fine-tune DistilBERT for VAD affect |
+| `train_small_lms.sh` | B | Optuna HPO for all 6 architectures → retrain × 3 seeds |
+| `finetune_dialogue_lm.sh` | C | Fine-tune TinyLlama or Gemma with LoRA + soft-prefix |
+| `evaluate.sh` | A+B+C | Evaluate all trained models; print comparison table |
+| `smoke_test.sh` | all | End-to-end pipeline test with tiny data (~3 min) |
+
+---
+
+## Logs and Artifacts
+
+All runs write to `artifacts/<model>/<run_id>/`:
+
+```
+artifacts/
+├── personality_encoder/
+│   └── <run_id>/
+│       ├── run.log               # timestamped training log
+│       ├── step_metrics.csv      # loss, lr, grad_norm per step
+│       ├── epoch_metrics.csv     # val F1 / MSE per epoch
+│       └── run_summary.json      # hyperparams + best results
+├── affect_encoder/
+│   └── <run_id>/  (same structure)
+├── small_lm/
+│   └── <run_id>/  (same structure; val_ppl instead of val_mse)
+├── dialogue/
+│   └── <run_id>/  (same structure)
+└── optuna/
+    ├── personality_best.json     # best Optuna params for personality
+    ├── affect_best.json          # best Optuna params for affect
+    └── small_lm_<arch>_best.json # best Optuna params per SLM arch
+```
+
+MLflow tracks all runs. View with:
+```bash
+mlflow ui --backend-store-uri ./mlruns
+# open http://localhost:5000
+```
+
+---
+
+## File Layout
 
 ```
 slm/npc_backend_scaffold/
+│
+├── Train scripts (run these)
+│   ├── train_personality_encoder.sh   Track A: personality encoder HPO + training
+│   ├── train_affect_encoder.sh        Track A: affect encoder HPO + training
+│   ├── train_small_lms.sh             Track B: SLM HPO + multi-seed training
+│   ├── finetune_dialogue_lm.sh        Track C: TinyLlama or Gemma fine-tuning
+│   ├── evaluate.sh                    Evaluate all models, print results table
+│   └── smoke_test.sh                  Quick end-to-end sanity check
+│
 ├── configs/
-│   ├── personality.yaml          encoder hyperparams
-│   ├── affect.yaml               encoder hyperparams
-│   ├── dialogue.yaml             dialogue model hyperparams
-│   └── small_lm.yaml             small-LM benchmark hyperparams
+│   ├── personality.yaml               Personality encoder hyperparams
+│   ├── affect.yaml                    Affect encoder hyperparams
+│   ├── dialogue.yaml                  Dialogue LM (TinyLlama) hyperparams
+│   └── dialogue_gemma_unsloth.yaml    Gemma fine-tuning hyperparams
+│
 ├── src/
-│   ├── common/
-│   │   └── config.py             dataclasses for all configs
-│   ├── data/
-│   │   ├── datasets.py           dataset loaders + DataDownloader
-│   │   ├── build_caches.py       personality cache builder
-│   │   ├── prepare_dialogue_data.py   public dataset converter
-│   │   └── convert_generated_data.py  upper-level generated data converter
+│   ├── train/
+│   │   ├── run_personality.py         Personality encoder training loop
+│   │   ├── run_affect.py              Affect encoder training loop
+│   │   ├── run_small_lm.py            Small LM training loop (all 6 archs)
+│   │   ├── run_dialogue.py            TinyLlama LoRA fine-tuning
+│   │   ├── run_gemma_unsloth.py       Gemma Unsloth fine-tuning
+│   │   └── small_lm_architectures.py  GRU/AWD-LSTM/GPT/PrefixGPT/MoE/Mamba-like
 │   ├── models/
-│   │   ├── personality.py        DistilBertRegressor (OCEAN)
-│   │   ├── affect.py             DistilBertRegressor (VAD)
-│   │   └── dialogue.py           ConditionalDialogueModel (LoRA + soft-prefix)
-│   ├── infer/
-│   │   ├── memory_store.py       EpisodicMemoryStore (FAISS + SentenceBERT)
-│   │   ├── service.py            NPCInferenceService
-│   │   └── run_demo.py           interactive demo
-│   └── train/
-│       ├── run_personality.py    personality encoder runner (logging + ablation)
-│       ├── run_affect.py         affect encoder runner
-│       ├── run_dialogue.py       dialogue model runner
-│       ├── run_small_lm.py       small-LM benchmark runner
-│       ├── small_lm_architectures.py  GRU / AWD-LSTM / GPT / PrefixGPT / MoE / Mamba-like
-│       ├── train_personality.py  (original low-level train function)
-│       ├── train_affect.py       (original low-level train function)
-│       └── train_dialogue.py     (original low-level train function + DialogueCollator)
-├── train_all.sh                  mega orchestration script
-├── smoke_test.py                 end-to-end smoke test
-├── smoke_test.sh                 smoke test with venv setup
-└── requirements.txt
+│   │   ├── personality.py             DistilBertRegressor (OCEAN head)
+│   │   ├── affect.py                  DistilBertRegressor (VAD head)
+│   │   └── dialogue.py                ConditionalDialogueModel (LoRA + prefix)
+│   └── data/
+│       ├── datasets.py                Dataset loaders
+│       ├── build_caches.py            Build FAISS personality cache
+│       ├── prepare_dialogue_data.py   Convert public datasets
+│       └── convert_generated_data.py  Convert upper-level generated data
+│
+├── scripts/
+│   ├── optuna_small_lm.py             Per-arch Optuna HPO for Track B
+│   ├── train_final_small_lms.py       Multi-seed final training from Optuna bests
+│   ├── eval_small_lms.py              Evaluate SLMs: PPL, Distinct-1/2, samples
+│   └── hyperparam_search.py           Optuna HPO for Track A encoders
+│
+└── data/
+    ├── dialogue/
+    │   ├── train.txt / val.txt        Plain text for SLM training (Track B)
+    │   └── train.jsonl / val.jsonl    Structured turns for Track C
+    └── affect/
+        └── train.csv / val.csv        VAD labels for affect encoder (Track A)
 ```
 
 ---
@@ -304,5 +332,22 @@ slm/npc_backend_scaffold/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install tiktoken          # optional, for BPE tokenization in small LM benchmark
 ```
+
+For Gemma fine-tuning (Track C), also install Unsloth:
+```bash
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+```
+
+---
+
+## References
+
+- Cho et al. (2014). *Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation.* EMNLP.
+- Merity et al. (2018). *Regularizing and Optimizing LSTM Language Models.* ICLR.
+- Radford et al. (2018). *Improving Language Understanding by Generative Pre-Training.* OpenAI.
+- Shazeer et al. (2017). *Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer.* ICLR.
+- Fedus et al. (2022). *Switch Transformers: Scaling to Trillion Parameter Models.* JMLR.
+- Gu & Dao (2023). *Mamba: Linear-Time Sequence Modeling with Selective State Spaces.* arXiv.
+- Hu et al. (2022). *LoRA: Low-Rank Adaptation of Large Language Models.* ICLR.
+- Zhang et al. (2024). *TinyLlama: An Open-Source Small Language Model.* arXiv.
