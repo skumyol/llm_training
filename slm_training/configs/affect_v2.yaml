@@ -1,0 +1,11 @@
+loss_type: ccc_mse
+ccc_weight: 0.3
+batch_size: 16
+grad_accum: 1
+lr: 2e-5
+encoder_lr: 2e-5
+epochs: 15
+patience: 5
+dropout: 0.1
+multi_sample_dropout: 0
+freeze_encoder_epochs: 0

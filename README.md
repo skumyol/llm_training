@@ -48,27 +48,23 @@ pip install -r requirements.txt
 ### Run a Test (No API Key Required)
 ```bash
 # Generate 20 mock dialogue episodes (uses fake LLM responses)
-python run_data_gen.py --config configs/data_gen.yaml --dry-run --n-episodes 20
+cd llm_finetuning
+PYTHONPATH=. python run_data_gen.py --config configs/data_gen.yaml --dry-run --n-episodes 20
 
-# Run the smaller training scaffold smoke test
-cd slm/npc_backend_scaffold
+# Run the SLM scaffold smoke test
+cd slm_training
 bash smoke_test.sh
 ```
 
 ### Full Pipeline (Requires API Key)
 ```bash
-# 1. Generate training data with a teacher LLM
-export AZURE_API_KEY=your_key_here
-./scripts/run_data_gen.sh configs/data_gen_api.yaml
-
-# 2. Train the latent state predictor
-./scripts/run_train.sh latent
-
-# 3. Train the response generator
-./scripts/run_train.sh response
-
-# 4. Evaluate
-./scripts/run_eval.sh all configs/eval.yaml
+# All operations via unified pipeline script
+./scripts/pipeline.sh data-gen                         # Generate training data
+./scripts/pipeline.sh train latent                     # Train latent state predictor
+./scripts/pipeline.sh train response                   # Train response generator
+./scripts/pipeline.sh train joint                      # Joint fine-tuning
+./scripts/pipeline.sh eval all                         # Full evaluation
+./scripts/pipeline.sh full                             # All of the above
 ```
 
 ---
@@ -79,36 +75,12 @@ export AZURE_API_KEY=your_key_here
 
 This repository contains **two complementary systems**:
 
-1. **`/slm/npc_backend_scaffold/`** — Modular personality + affect encoders with soft-prefix conditioning
-2. **`/src/`** — Full latent state predictor with 29 classification heads and multi-stage training
+1. **`llm_finetuning/`** — Full latent state predictor with 29 classification heads and multi-stage fine-tuning of pre-trained LLMs (Qwen3)
+2. **`slm_training/`** — Small language models trained from scratch with personality + affect encoders and soft-prefix conditioning
 
-### System 1: Scaffold (Lightweight, Modular)
+### System 1: LLM Fine-Tuning (`llm_finetuning/`)
 
-For researchers wanting clean, reusable components — includes a **Small-LM benchmark suite** (GRU, AWD-LSTM, GPT, PrefixGPT, MoE, Mamba-like) for A/B comparison against fine-tuned LLMs:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  NPC Profile → Personality Encoder → OCEAN vector (cached)   │
-│                (DistilBERT regression)                        │
-├─────────────────────────────────────────────────────────────┤
-│  Conversation → Affect Encoder → VAD vector (live)           │
-│                (DistilBERT regression)                        │
-├─────────────────────────────────────────────────────────────┤
-│  OCEAN + VAD → Soft Prefix → Causal LM + LoRA → Response   │
-│                (TinyLlama default)                          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Key Files:**
-- `slm/npc_backend_scaffold/src/models/personality.py` — OCEAN trait encoder
-- `slm/npc_backend_scaffold/src/models/affect.py` — VAD emotion encoder  
-- `slm/npc_backend_scaffold/src/models/dialogue.py` — Conditional dialogue model
-- `slm/npc_backend_scaffold/src/train/small_lm_architectures.py` — 6 from-scratch LM baselines
-- `slm/npc_backend_scaffold/train_all.sh` — Full training orchestration
-
-### System 2: Full Pipeline (Complete, Research-Grade)
-
-For the complete structured latent state approach:
+Complete structured latent state approach:
 
 **Data Generation Pipeline:**
 ```
@@ -123,7 +95,7 @@ CounterfactualAugmenter → Validator → Packager → Splitter
 ```
 Stage 1: Latent State Predictor (Qwen3-0.6B + LoRA)
          ↓
-Stage 2: Response Generator (Qwen3-4B + QLoRA)  
+Stage 2: Response Generator (Qwen3-4B + QLoRA)
          ↓
 Stage 3: Joint Fine-tuning
 ```
@@ -141,120 +113,143 @@ Stage 3: Joint Fine-tuning
 
 **Total: 29 classification targets per turn**
 
+### System 2: SLM Training from Scratch (`slm_training/`)
+
+Modular, lightweight system for researchers wanting clean, reusable components — includes a **Small-LM benchmark suite** (GRU, AWD-LSTM, GPT, PrefixGPT, MoE, Mamba-like):
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  NPC Profile → Personality Encoder → OCEAN vector (cached)   │
+│                (DistilBERT regression)                        │
+├─────────────────────────────────────────────────────────────┤
+│  Conversation → Affect Encoder → VAD vector (live)           │
+│                (DistilBERT regression)                        │
+├─────────────────────────────────────────────────────────────┤
+│  OCEAN + VAD → Soft Prefix → Causal LM + LoRA → Response   │
+│                (TinyLlama default)                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Project Structure
 
 ```
 llm_training/
-├── configs/              # YAML configs for all pipeline stages
-│   ├── data_gen.yaml     # Data generation settings
-│   ├── train_latent.yaml # Stage 1 training config
-│   ├── train_response.yaml
-│   └── eval.yaml         # Evaluation thresholds
+├── data/                   # Training data and scenarios
+│   ├── scenario_bank/      # 7 scenario types × 5 templates
+│   ├── world_contexts/     # Setting descriptions
+│   ├── splits/             # Train/val/test JSONL files
+│   └── ...
 │
-├── data/
-│   ├── scenario_bank/    # 7 scenario types × 5 templates = 35 YAMLs
-│   ├── world_contexts/   # Setting descriptions (medieval siege, etc.)
-│   └── splits/           # Train/val/test JSONL files
+├── llm_finetuning/         # LLM fine-tuning pipeline
+│   ├── configs/            # YAML configs for all stages
+│   ├── prompts/            # Teacher LLM prompt templates
+│   ├── src/
+│   │   ├── data_gen/       # Episode generation (scenario_bank, labeler, etc.)
+│   │   ├── training/       # Models, datasets, training loops
+│   │   ├── eval/           # Evaluation metrics
+│   │   ├── packaging/      # Data packaging and splitting
+│   │   └── inference/      # Interactive chat
+│   ├── scripts/            # Analysis utilities (data quality, cleaning)
+│   ├── tests/              # Unit tests
+│   ├── run_data_gen.py     # Entry: data generation
+│   ├── run_train.py        # Entry: training
+│   └── run_eval.py         # Entry: evaluation
 │
-├── prompts/              # Teacher LLM prompt templates
-│   ├── label_C.txt       # C_t (dialogue act, tone, risk)
-│   ├── label_A_M.txt     # A_t + M_t (affect + player model)
-│   ├── label_R_N_D.txt   # R_t + N_t + D_t (stance + norms + policy)
-│   └── response_generation.txt
+├── slm_training/           # SLM training from scratch
+│   ├── configs/            # Training configs
+│   ├── src/
+│   │   ├── models/         # Personality, affect, dialogue models
+│   │   ├── train/          # Training loops + small LM architectures
+│   │   ├── data/           # Data loading and preparation
+│   │   ├── infer/          # Inference and chat
+│   │   ├── eval/           # Evaluation
+│   │   └── api/            # FastAPI server
+│   ├── scripts/            # HPO, final training, eval scripts
+│   ├── tests/              # Tests
+│   ├── train_all.sh        # Full training orchestrator
+│   └── smoke_test.sh       # Quick verification
 │
-├── src/
-│   ├── data_gen/         # Episode generation pipeline
-│   │   ├── scenario_bank.py
-│   │   ├── episode_planner.py
-│   │   ├── turn_generator.py
-│   │   ├── labeler.py    # Structured label extraction
-│   │   └── validator.py
-│   │
-│   ├── training/         # Model training
-│   │   ├── model.py      # LatentStatePredictor (29 heads)
-│   │   ├── train_latent.py
-│   │   ├── train_response.py
-│   │   └── train_joint.py
-│   │
-│   └── eval/             # Evaluation metrics
-│       ├── eval_latent.py
-│       └── eval_response.py
-│
-├── slm/npc_backend_scaffold/  # Modular scaffold system
-│   ├── src/models/       # personality.py, affect.py, dialogue.py
-│   ├── src/train/        # Training scripts for each component
-│   ├── train_all.sh      # Full training orchestration
-│   └── smoke_test.sh     # Quick verification
-│
-├── run_data_gen.py       # Entry point: data generation
-├── run_train.py          # Entry point: training
-├── run_eval.py           # Entry point: evaluation
-└── scripts/              # Shell wrappers
+├── scripts/                # Shared orchestration scripts
+│   └── pipeline.sh         # Unified pipeline (data-gen, train, eval, slm)
+├── checkpoints/            # Trained model checkpoints
+├── docs/                   # Documentation
+├── logs/                   # Log files
+└── eval_results/           # Evaluation outputs
 ```
 
 ---
 
 ## Usage Examples
 
-### Data Generation
-```bash
-# Dry run with mock LLM (no API key)
-./scripts/run_data_gen.sh configs/data_gen.yaml --dry-run --n-episodes 50
+### LLM Fine-Tuning
 
-# Full generation with Azure OpenAI
+```bash
+# Data generation
+./scripts/pipeline.sh data-gen --dry-run --n-episodes 50
+# With real API:
 export AZURE_API_KEY=xxx
-export AZURE_ENDPOINT=https://...openai.azure.com/
-./scripts/run_data_gen.sh configs/data_gen_api.yaml
+./scripts/pipeline.sh data-gen
+
+# Training stages
+./scripts/pipeline.sh train latent --debug     # Fast debug mode
+./scripts/pipeline.sh train response
+./scripts/pipeline.sh train joint
+./scripts/pipeline.sh train all                # All 3 stages
+
+# Evaluation
+./scripts/pipeline.sh eval all
 ```
 
-### Training
+### SLM Training from Scratch
+
 ```bash
-# Stage 1: Train latent predictor
-./scripts/run_train.sh latent --debug  # Uses small model, fast
-
-# Stage 2: Train response generator  
-./scripts/run_train.sh response
-
-# Stage 3: Joint fine-tuning
-./scripts/run_train.sh joint
-
-# Or all stages
-./scripts/run_train.sh all
-```
-
-### Evaluation
-```bash
-# Run all evaluation stages
-./scripts/run_eval.sh all configs/eval.yaml
-
-# Key metrics and targets:
-# - response_policy_f1 >= 0.75
-# - stance_delta_accuracy >= 0.70
-# - secret_leakage_rate <= 0.05
-```
-
-### Interactive Inference
-```bash
-# Chat with a trained NPC
-python src/inference/interactive.py --checkpoint checkpoints/latent_predictor_best/
-```
-
-### Scaffold Training (Modular System)
-```bash
-cd slm/npc_backend_scaffold
+cd slm_training
 
 # Quick smoke test
 bash smoke_test.sh
 
 # Full training with hardware auto-detection
-./train_all.sh --run-id my_experiment
+bash train_all.sh --run-id my_experiment
 
-# Individual components
+# Train individual components
 python -m src.train.run_personality --config configs/personality.yaml
 python -m src.train.run_affect --config configs/affect.yaml
 python -m src.train.run_dialogue --config configs/dialogue.yaml
+
+# Or via root pipeline
+./scripts/pipeline.sh slm-train all
+```
+
+### Interactive Inference
+```bash
+cd llm_finetuning
+PYTHONPATH=. python src/inference/interactive.py \
+    --checkpoint ../checkpoints/joint_model_best/ \
+    --base_model Qwen/Qwen3-4B \
+    --scenario data/scenario_bank/secret_extraction.yaml \
+    --npc guard_captain
+```
+
+### Utility Scripts
+```bash
+cd llm_finetuning
+
+# Check GPU availability
+python scripts/check_gpu.py
+
+# Analyze data quality
+python scripts/analyze_data_quality.py
+
+# Clean corrupted labels
+python scripts/clean_labels.py --dry-run
+
+# Visualize generated dialogues
+python scripts/visualize_dialogues.py --all --output dialogues.txt
+
+# Run tests
+PYTHONPATH=. python -m pytest tests/ -v
 ```
 
 ---
@@ -263,11 +258,11 @@ python -m src.train.run_dialogue --config configs/dialogue.yaml
 
 | Document | Audience | Content |
 |----------|----------|---------|
-| [`docs/education_intro.md`](docs/education_intro.md) | General public | Non-technical introduction to social state AI |
-| [`project_overview.md`](project_overview.md) | Researchers | System design and rationale |
-| [`SUMMARY.md`](SUMMARY.md) | Developers | Detailed repository map and current status |
-| [`schema.md`](schema.md) | ML Engineers | Full latent state schema specification |
-| [`slm/npc_backend_scaffold/README.md`](slm/npc_backend_scaffold/README.md) | Engineers | Modular system docs |
+| [`docs/education_intro.md`](docs/education_intro.md) | General public | Non-technical introduction |
+| [`docs/project_overview.md`](docs/project_overview.md) | Researchers | System design and rationale |
+| [`docs/SUMMARY.md`](docs/SUMMARY.md) | Developers | Detailed repository map |
+| [`docs/schema.md`](docs/schema.md) | ML Engineers | Latent state schema spec |
+| [`slm_training/README.md`](slm_training/README.md) | Engineers | SLM system docs |
 
 ---
 
@@ -284,46 +279,17 @@ python -m src.train.run_dialogue --config configs/dialogue.yaml
 
 ---
 
-## Development Status
-
-| Component | Status |
-|-----------|--------|
-| Scenario bank (35 templates) | ✅ Complete |
-| Data generation pipeline | ✅ Complete (449 episodes generated) |
-| Stage 1 training | ✅ Implemented |
-| Stage 2 training | ✅ Implemented |
-| Stage 3 joint training | ✅ Implemented |
-| Evaluation pipeline | ✅ Complete |
-| MLflow tracking | ✅ Integrated |
-| Interactive inference | ✅ Available |
-
----
-
 ## Hardware Requirements
 
 | Task | Minimum | Recommended |
 |------|---------|-------------|
 | Data generation | CPU | GPU (for local teacher LLM) |
-| Stage 1 training | 8GB VRAM | 12GB VRAM |
-| Stage 2/3 training | 12GB VRAM | 16GB+ VRAM |
-| Scaffold training | 4GB VRAM | 8GB+ VRAM |
+| LLM Stage 1 training | 8GB VRAM | 12GB VRAM |
+| LLM Stage 2/3 training | 12GB VRAM | 16GB+ VRAM |
+| SLM training | 4GB VRAM | 8GB+ VRAM |
 
 ---
 
 ## License
 
 Research and educational use. See LICENSE file for details.
-
----
-
-## Citation
-
-If you use this work in research, please cite:
-
-```bibtex
-@software{npc_social_state_2024,
-  title = {Structured Latent-State NPC Dialogue System},
-  year = {2024},
-  url = {https://github.com/yourorg/llm_training}
-}
-```

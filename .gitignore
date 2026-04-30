@@ -17,15 +17,16 @@ mlruns/
 logs/
 *.log
 *.pid
+eval_results/
 
 # Data (regeneratable)
-/data/raw_episodes/
-/data/validated_turns/
-/data/counterfactuals/
-/data/packaged/
-/data/merged_validated/
-/data/splits/
-/data/npc_profiles/
+data/raw_episodes/
+data/validated_turns/
+data/counterfactuals/
+data/packaged/
+data/merged_validated/
+data/splits/
+data/npc_profiles/
 *.tmp
 
 # Model weights
@@ -33,25 +34,31 @@ checkpoints/
 outputs/
 *.ckpt
 *.safetensors
-*.bin
 *.pt
 *.pth
 
 # Compiled caches
 unsloth_compiled_cache/
+.pytest_cache/
+*.pyc
 
 # Build
 build/
 dist/
 *.egg-info/
 
-# Scaffold artifacts
-slm/**/artifacts/
-slm/**/data/
-slm/**/models/
-slm/**/configs/
-slm/**/*.cache*
-slm/**/*.faiss
-slm/**/*.csv
-slm/**/eval_results*
-slm/npc_backend_scaffold/IMPROVEMENT_PLAN.md
+# SLM training artifacts
+slm_training/artifacts/
+slm_training/data/
+slm_training/models/
+slm_training/logs/
+slm_training/mlruns/
+slm_training/*.cache*
+slm_training/*.faiss
+slm_training/*.csv
+slm_training/eval_results*
+slm_training/IMPROVEMENT_PLAN.md
+
+# Archive docs
+docs/archive/
+docs/_build/
