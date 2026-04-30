@@ -1,75 +1,62 @@
 #!/usr/bin/env bash
 # =============================================================================
-# slurm_train.sh — SLURM job: LLM fine-tuning or SLM training
+# slurm_train.sh — SLURM job: LLM or SLM training (HKUST HPC4 optimized)
 # =============================================================================
-# Proper HPC cluster job with module loading, scratch workspace,
-# and automatic MLflow logging to remote tracking server.
+# HKUST HPC4 conventions:
+#   --account=xrimlab    (required)
+#   --gpus-per-node=N    (NOT --gres=gpu)
+#   --ntasks-per-node=1  (single task per node)
+#   --cpus-per-task=N    (CPU cores for data loading)
+#   NO --mem on GPU jobs (auto-allocated)
 #
 # Usage:
 #   sbatch scripts/slurm_train.sh llm latent
-#   sbatch scripts/slurm_train.sh llm response
-#   sbatch scripts/slurm_train.sh llm joint
-#   sbatch scripts/slurm_train.sh slm personality
-#   sbatch scripts/slurm_train.sh slm affect
 #   sbatch scripts/slurm_train.sh slm small_lm --arch gpt --seed 42
-#   sbatch scripts/slurm_train.sh slm dialogue
+#   sbatch scripts/slurm_train.sh slm small_lm --arch mamba_like --seed 44
 #
-# Customize GPU/time:
-#   sbatch --gres=gpu:a100:2 --time=72:00:00 scripts/slurm_train.sh slm small_lm --arch gpt
-#
-# Environment (set in mlflow_env.sh or sbatch --export):
-#   MLFLOW_TRACKING_URI    — remote MLflow server
-#   WORK_BASE              — scratch directory (default: /scratch/$USER)
-#   CHECKPOINT_DIR         — NFS path for checkpoints
+#   # Custom GPU/time:
+#   sbatch --partition=gpu-a100 --gpus-per-node=2 --time=72:00:00 \
+#       scripts/slurm_train.sh slm small_lm --arch moe --seed 42
 # =============================================================================
 #SBATCH --job-name=npc-train
 #SBATCH --output=/scratch/%u/logs/slurm_%j_%x.out
 #SBATCH --error=/scratch/%u/logs/slurm_%j_%x.err
-#SBATCH --gres=gpu:1
+#SBATCH --account=xrimlab
+#SBATCH --partition=gpu-l20
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
 #SBATCH --time=24:00:00
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=${USER}@ust.hk
 
 set -euo pipefail
 
 # ── Cluster config ────────────────────────────────────────────────────────────
 WORK_BASE="${WORK_BASE:-/scratch/${USER}}"
-REPO_DIR="${WORK_BASE}/npc"                    # Clone repo here first
-DATA_DIR="${WORK_BASE}/data"                   # Fast scratch I/O
+REPO_DIR="${WORK_BASE}/npc"
+DATA_DIR="${WORK_BASE}/data"
 LOG_DIR="${WORK_BASE}/logs"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${WORK_BASE}/checkpoints}"
 
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}"
 
-# ── Source MLflow config ──────────────────────────────────────────────────────
-if [ -f "${REPO_DIR}/scripts/mlflow_env.sh" ]; then
-    source "${REPO_DIR}/scripts/mlflow_env.sh"
-fi
+# ── Source config ─────────────────────────────────────────────────────────────
+[ -f "${REPO_DIR}/scripts/mlflow_env.sh" ] && source "${REPO_DIR}/scripts/mlflow_env.sh"
 
-# ── Load modules + venv ───────────────────────────────────────────────────────
-SYSTEM="${1:-}"
-shift 2>/dev/null || true
+# ── Parse args ────────────────────────────────────────────────────────────────
+SYSTEM="${1:-}"; STAGE="${2:-}"; shift 2 2>/dev/null || true; EXTRA_ARGS=("$@")
 
 case "${SYSTEM}" in
-    llm)
-        VENV_NAME="${VENV_NAME:-llm_env}"
-        CUDA_MOD="${CUDA_MOD:-cuda/12.4.0}"
-        PY_MOD="${PY_MOD:-python/3.12}"
-        ;;
-    slm)
-        VENV_NAME="${VENV_NAME:-slm_env}"
-        CUDA_MOD="${CUDA_MOD:-cuda/12.4.0}"
-        PY_MOD="${PY_MOD:-python/3.12}"
-        ;;
-    *)
-        echo "Usage: $0 {llm|slm} {stage} [...]" >&2
-        exit 1
-        ;;
+    llm) VENV_NAME="llm_env"; MOD="python/3.12" ;;
+    slm) VENV_NAME="slm_env"; MOD="python/3.12" ;;
+    *)   echo "Usage: $0 {llm|slm} {stage} [...]" >&2; exit 1 ;;
 esac
 
+# ── Load modules ──────────────────────────────────────────────────────────────
 module purge 2>/dev/null || true
-module load "${CUDA_MOD}" 2>/dev/null || true
-module load "${PY_MOD}" 2>/dev/null || true
+module load cuda/12.4.0 2>/dev/null || true
+module load "${MOD}" 2>/dev/null || true
 
 VENV_DIR="${WORK_BASE}/venvs/${VENV_NAME}"
 if [ -f "${VENV_DIR}/bin/activate" ]; then
@@ -80,19 +67,15 @@ else
     exit 1
 fi
 
-STAGE="$1"
-shift 1 2>/dev/null || true
-EXTRA_ARGS=("$@")
-
 RUN_ID="slurm_${SLURM_JOB_ID:-manual}_${SYSTEM}_${STAGE}_$(date +%Y%m%d_%H%M%S)"
 
+# ── Log header ────────────────────────────────────────────────────────────────
 echo "================================================================"
-echo "  SLURM Training Job"
+echo "  HKUST HPC4 — NPC Training Job"
 echo "================================================================"
 echo "  Job ID:      ${SLURM_JOB_ID:-local}"
 echo "  Node:        $(hostname)"
-echo "  System:      ${SYSTEM}"
-echo "  Stage:       ${STAGE}"
+echo "  System:      ${SYSTEM} / ${STAGE}"
 echo "  Run ID:      ${RUN_ID}"
 echo "  GPU:         $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none')"
 echo "  MLflow:      ${MLFLOW_TRACKING_URI:-local}"
@@ -110,47 +93,34 @@ cd "${REPO_DIR}"
 
 case "${SYSTEM}_${STAGE}" in
     llm_latent|llm_response|llm_joint)
-        cd "${REPO_DIR}/llm_finetuning"
         export PYTHONPATH="${REPO_DIR}/llm_finetuning"
-        python run_train.py --stage "${STAGE}" --config "configs/train_${STAGE}.yaml" "${EXTRA_ARGS[@]}" \
+        python llm_finetuning/run_train.py --stage "${STAGE}" \
+            --config "llm_finetuning/configs/train_${STAGE}.yaml" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_personality)
-        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_personality --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_affect)
-        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_affect --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_small_lm)
-        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_small_lm --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_dialogue)
-        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_dialogue --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
-    *)
-        echo "Unknown stage: ${SYSTEM}/${STAGE}" >&2
-        exit 1
-        ;;
+    *) echo "Unknown stage: ${SYSTEM}/${STAGE}" >&2; exit 1 ;;
 esac
 
 EXIT_CODE=$?
-
-echo ""
-echo "================================================================"
-echo "  Done (exit=${EXIT_CODE})  Run: ${RUN_ID}"
-echo "  Log:     ${LOG_DIR}/${RUN_ID}.log"
-echo "  MLflow:  ${MLFLOW_TRACKING_URI:-local}"
-echo "================================================================"
+echo "Done (exit=${EXIT_CODE})  Run: ${RUN_ID}  MLflow: ${MLFLOW_TRACKING_URI:-local}"
 exit ${EXIT_CODE}

@@ -1,54 +1,41 @@
 # =============================================================================
-# MLflow Remote Configuration
+# mlflow_env.sh — HPC Cluster Configuration (HKUST HPC4)
 # =============================================================================
-# Copy this to .env and customize for your SLURM cluster.
+# Source this before submitting jobs, or set in your ~/.bashrc.
 #
-# The SLURM job scripts source this file, so all jobs share the same config.
-#
-# For a self-hosted MLflow server:
-#   MLFLOW_TRACKING_URI=http://mlflow-server.cluster:5000
-#
-# For shared NFS filesystem (simplest):
-#   MLFLOW_TRACKING_URI=file:///shared/projects/npc/mlruns
-#
-# For S3/MinIO artifact store:
-#   MLFLOW_S3_ENDPOINT_URL=http://minio.cluster:9000
-#   AWS_ACCESS_KEY_ID=your_access_key
-#   AWS_SECRET_ACCESS_KEY=your_secret_key
-#   MLFLOW_ARTIFACT_ROOT=s3://npc-models
-# =============================================================================
+# HKUST HPC4 docs: https://itso.hkust.edu.hk/services/academic-teaching-support/high-performance-computing/hpc4/slurm
 
-# ── MLflow tracking server ────────────────────────────────────────────────────
-# Where metrics, params, and tags are stored.
-export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-file://./mlruns}"
+# ── SLURM account (REQUIRED) ──────────────────────────────────────────────────
+export SLURM_ACCOUNT="${SLURM_ACCOUNT:-xrimlab}"
 
-# ── Artifact store (model checkpoints, CSVs, etc.) ────────────────────────────
-# Options:
-#   1. Shared NFS (default if empty — uses tracking URI's artifact root)
-#   2. S3-compatible object storage (MinIO, AWS S3, Ceph)
-#
-# For S3/MinIO, uncomment:
-# export MLFLOW_S3_ENDPOINT_URL=http://minio.cluster:9000
-# export AWS_ACCESS_KEY_ID=minioadmin
-# export AWS_SECRET_ACCESS_KEY=minioadmin
-# export MLFLOW_ARTIFACT_ROOT=s3://npc-models/artifacts
+# ── SLURM partition ───────────────────────────────────────────────────────────
+# HKUST HPC4 partitions:
+#   cpu-share     — CPU nodes, shared
+#   gpu-l20       — L20 GPUs (48GB), max 1 GPU per job typically
+#   gpu-a100      — A100 GPUs, max 1 GPU per job
+#   gpu-2080ti    — RTX 2080 Ti GPUs
+export SLURM_PARTITION="${SLURM_PARTITION:-gpu-l20}"
 
-# ── Checkpoint storage (NFS path for direct file access) ──────────────────────
-# SLURM jobs save checkpoints here so jobs can resume or evaluation can find them.
-export CHECKPOINT_DIR="${CHECKPOINT_DIR:-./checkpoints}"
+# ── GPU spec (HKUST uses --gpus-per-node, NOT --gres=gpu) ─────────────────────
+export SLURM_GPUS="${SLURM_GPUS:-1}"
 
-# ── SLURM defaults ────────────────────────────────────────────────────────────
-# Partition to use (adjust for your cluster)
-export SLURM_PARTITION="${SLURM_PARTITION:-gpu}"
+# ── CPU tasks (HKUST: --ntasks-per-node=1 --cpus-per-task=N) ──────────────────
+export SLURM_CPUS="${SLURM_CPUS:-8}"
 
-# GPU type request
-export SLURM_GPU_TYPE="${SLURM_GPU_TYPE:-a100:1}"  # e.g., a100:1, v100:2, rtx3090:1
-
-# Time limit (HH:MM:SS)
+# ── Time limit ────────────────────────────────────────────────────────────────
 export SLURM_TIME="${SLURM_TIME:-24:00:00}"
 
-# Memory per node
-export SLURM_MEM="${SLURM_MEM:-64G}"
+# ── Working directories ───────────────────────────────────────────────────────
+export WORK_BASE="${WORK_BASE:-/scratch/${USER}}"
+export CHECKPOINT_DIR="${CHECKPOINT_DIR:-${WORK_BASE}/checkpoints}"
 
-# CPUs per task
-export SLURM_CPUS="${SLURM_CPUS:-8}"
+# ── MLflow ────────────────────────────────────────────────────────────────────
+# Set up a shared MLflow server on a login node, or use a shared filesystem.
+# For HKUST: use a shared NFS path or start a tracking server on a port.
+# export MLFLOW_TRACKING_URI=http://mlflow-server:5000
+# Or use file-based on shared scratch:
+export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-file://${WORK_BASE}/mlruns}"
+
+# ── Python venv ───────────────────────────────────────────────────────────────
+export LLM_VENV="${WORK_BASE}/venvs/llm_env"
+export SLM_VENV="${WORK_BASE}/venvs/slm_env"

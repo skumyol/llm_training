@@ -166,12 +166,17 @@ export SLURM_MEM=64G
 
 ## Step 4: Submit training jobs
 
-The SLURM scripts auto-detect which venv to use based on `--system`:
+**HKUST HPC4 conventions:**
+- Account: `--account=xrimlab` (required)
+- GPU: `--gpus-per-node=1` (NOT `--gres=gpu`)
+- CPU: `--ntasks-per-node=1 --cpus-per-task=8`
+- Memory: auto-allocated for GPU jobs (no `--mem` flag)
+- Partitions: `gpu-l20` (default), `gpu-a100`, `cpu-share`
 
-| System flag | Venv | Packages |
-|-------------|------|----------|
-| `llm` | `llm_env` | transformers, peft, bitsandbytes |
-| `slm` | `slm_env` | torch, optuna, tiktoken |
+The SLURM scripts use these defaults. Override with sbatch flags:
+```bash
+sbatch --partition=gpu-a100 --gpus-per-node=2 --time=72:00:00 scripts/slurm_train.sh ...
+```
 
 ### Single job
 
