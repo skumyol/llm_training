@@ -29,6 +29,24 @@ def get_token() -> str:
     raise ValueError("HF_HUB_TOKEN not found in .env")
 
 
+def get_seed(data: dict, run_id: str) -> str:
+    """Extract seed from summary data or directory name."""
+    # Try top-level first
+    seed = data.get("seed")
+    if seed is not None:
+        return str(seed)
+    # Try hyperparams
+    seed = data.get("hyperparams", {}).get("seed")
+    if seed is not None:
+        return str(seed)
+    # Extract from directory name (e.g., final_awdlstm_s44_120506)
+    parts = run_id.split("_")
+    for p in parts:
+        if p.startswith("s") and p[1:].isdigit():
+            return p[1:]
+    return "unknown"
+
+
 def find_completed_models(arch: str = None, seed: int = None):
     """Find all completed (30-epoch) models."""
     models = []
@@ -42,9 +60,11 @@ def find_completed_models(arch: str = None, seed: int = None):
         data = json.load(open(summary))
         epochs = data.get("epochs", [])
         if isinstance(epochs, list) and len(epochs) >= 30:
-            if arch and data.get("arch") != arch:
+            model_arch = data.get("arch", "unknown")
+            model_seed = get_seed(data, d.name)
+            if arch and model_arch != arch:
                 continue
-            if seed is not None and data.get("seed") != seed:
+            if seed is not None and model_seed != str(seed):
                 continue
             models.append(d)
     return models

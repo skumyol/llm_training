@@ -71,8 +71,8 @@ def load_optuna_best(arch: str) -> Optional[Dict]:
 #   - prefix_gpt: n_embd=256, n_head=8, prefix_len=8 → reduced bs to avoid OOM
 #   - moe/mamba: Keep original bs=16, ga=2 (OOM risk with ga=1)
 BATCH_OVERRIDE = {
-    "gpt":        {"batch_size": 64, "grad_accum": 1},   # was 16,4 -> 64,1 (4× speedup)
-    "prefix_gpt": {"batch_size": 32, "grad_accum": 1},  # was 32,2 -> 32,1 (same batch, no accum)
+    "gpt":        {"batch_size": 32, "grad_accum": 2},   # Reduced from 64,1 - OOM risk
+    "prefix_gpt": {"batch_size": 16, "grad_accum": 2},  # Reduced from 32,1 - OOM risk
     # moe and mamba_like: use original configs (bs=16, ga=2) - OOM if ga=1
 }
 
@@ -235,7 +235,10 @@ def main():
             print(f"  {arch:<14} {'0':<10} {'FAILED'}")
             continue
 
-        ppls = [r["best_ppl"] for r in arch_rows]
+        ppls = [r["best_ppl"] for r in arch_rows if r.get("best_ppl") is not None]
+        if not ppls:
+            print(f"  {arch:<14} {'0':<10} {'NO VALID PPL'}")
+            continue
         avg  = mean(ppls)
         std  = stdev(ppls) if len(ppls) > 1 else 0.0
         print(f"  {arch:<14} {len(arch_rows):<10} {avg:<12.2f} {std:<12.2f} {optuna_ppl:<12}")
