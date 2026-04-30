@@ -1,0 +1,92 @@
+# docker-compose.yml — NPC Dialogue API with model serving
+#
+# Usage:
+#   docker compose up -d              # Start LLM backend
+#   docker compose up -d slm          # Start SLM backend
+#   docker compose up -d vllm         # Start vLLM backend (high throughput)
+#   curl http://localhost:8765/v1/models
+#   curl http://localhost:8765/health
+# =============================================================================
+
+
+services:
+  # ── Native PyTorch LLM backend (Qwen3 + LoRA) ──────────────────────────────
+  llm:
+    build: .
+    image: npc-dialogue:latest
+    container_name: npc-llm
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./checkpoints:/app/checkpoints:ro
+      - ./data:/app/data:ro
+      - ./llm_finetuning/configs:/app/llm_finetuning/configs:ro
+    environment:
+      - PYTHONPATH=/app/llm_finetuning:/app/slm_training:/app/slm_training/src/train
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    command:
+      - "--system"
+      - "llm"
+      - "--checkpoint"
+      - "/app/checkpoints/joint_model_best"
+      - "--base-model"
+      - "Qwen/Qwen3-4B"
+      - "--quantization"
+      - "4bit"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── SLM backend (small from-scratch models) ─────────────────────────────────
+  slm:
+    build: .
+    image: npc-dialogue:latest
+    container_name: npc-slm
+    ports:
+      - "8766:8765"
+    volumes:
+      - ./slm_training/artifacts/small_lm:/app/slm_training/artifacts/small_lm:ro
+    environment:
+      - PYTHONPATH=/app/llm_finetuning:/app/slm_training:/app/slm_training/src/train
+    command:
+      - "--system"
+      - "slm"
+      - "--model-dir"
+      - "/app/slm_training/artifacts/small_lm/final_gpt_s42_055057"
+      - "--arch"
+      - "gpt"
+    restart: unless-stopped
+
+  # ── vLLM backend (optional, high throughput) ────────────────────────────────
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: npc-vllm
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./checkpoints/response_generator_best:/app/lora:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface:ro
+    command:
+      - "--model"
+      - "Qwen/Qwen3-4B"
+      - "--enable-lora"
+      - "--lora-modules"
+      - "npc-adapter=/app/lora"
+      - "--dtype"
+      - "bfloat16"
+      - "--max-model-len"
+      - "4096"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles: ["gpu-heavy"]

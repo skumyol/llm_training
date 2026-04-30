@@ -32,6 +32,21 @@ Training pipeline for believable NPC dialogue with structured social state.
 
 .. toctree::
    :maxdepth: 1
+   :caption: Operations
+
+   mlflow
+   serving
+   slurm_guide
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Paper
+
+   technical_appendix
+   model_registry
+
+.. toctree::
+   :maxdepth: 1
    :caption: Reference
 
    schema

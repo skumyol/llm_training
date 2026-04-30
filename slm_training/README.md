@@ -301,6 +301,23 @@ bash train_all.sh --run-id my_experiment
 
 ---
 
+## MLflow Tracking
+
+All SLM training and evaluation logs to the **shared project root `mlruns/`** alongside LLM fine-tuning experiments.
+
+```bash
+mlflow ui --backend-store-uri ../mlruns
+# → http://localhost:5000
+```
+
+**Tracked experiments:** `personality_encoder`, `affect_encoder`, `small_lm`, `dialogue_model`, `slm_eval`
+
+Every run logs: hyperparameters, step-level metrics (loss, lr, grad_norm), epoch-level metrics (PPL, CCC, R², BLEU), and artifacts (run_summary.json, CSVs).
+
+MLflow gracefully degrades if not installed — all scripts work without it.
+
+---
+
 ## Export & Evaluation
 
 ```bash

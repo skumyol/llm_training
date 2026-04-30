@@ -245,6 +245,34 @@ $$L = L_{heads} + \lambda_Y \cdot L_{lm} + \lambda_{consistency} \cdot L_{consis
 
 ---
 
+## MLflow Tracking
+
+Both LLM fine-tuning and SLM training log to a **single shared `mlruns/`** at the project root. All experiments, metrics, parameters, and artifacts are visible in one dashboard.
+
+```bash
+mlflow ui --backend-store-uri mlruns
+# → http://localhost:5000
+```
+
+### Tracked experiments
+
+| Experiment | System | What's logged |
+|-----------|--------|---------------|
+| `social_state_data_generation` | LLM | Data manifest, episode counts, hashes |
+| `latent_state_prediction` | LLM | Train/val loss, per-head F1, accuracy, class weights (Stage 1 + 3) |
+| `response_generation` | LLM | LM loss, ROUGE-L, secret leakage (Stage 2) |
+| `routing_and_policy_eval` | LLM | All eval metrics, confusion matrices, sample generations |
+| `personality_encoder` | SLM | MSE loss, R² per OCEAN trait, params |
+| `affect_encoder` | SLM | CCC, MSE, MAE, R² per VAD dimension |
+| `small_lm` | SLM | PPL, loss, lr, grad_norm per step/epoch |
+| `dialogue_model` | SLM | Train loss, val PPL, LoRA params (TinyLlama + Gemma) |
+| `slm_eval` | SLM | PPL, BLEU-1/2, Distinct-1/2 per architecture |
+
+> **Note:** MLflow 2.20+ deprecated the filesystem backend. To future-proof, add to `.env`:
+> ```
+> MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+> ```
+
 ## Evaluation
 
 ```bash
