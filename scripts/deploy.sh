@@ -5,6 +5,7 @@
 # Usage:
 #   ./scripts/deploy.sh user@host:/path/to/target
 #   ./scripts/deploy.sh user@192.168.1.100:/home/user/llm_training
+#   ./scripts/deploy.sh --with-data user@host:/path/to/target  # Include training data
 #
 # What it does:
 #   1. Rsyncs source + checkpoints + data (skipping venv, logs, caches, huge CSVs)
@@ -12,6 +13,13 @@
 #   3. Runs smoke tests to verify
 # =============================================================================
 set -euo pipefail
+
+# Parse flags
+WITH_DATA=false
+if [[ "${1:-}" == "--with-data" ]]; then
+    WITH_DATA=true
+    shift
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -60,7 +68,20 @@ RSYNC_EXCLUDES=(
     --exclude 'slm_training/logs/'
     --exclude 'slm_training/mlruns/'
     --exclude 'slm_training/models/'            # Re-download from HF
-    --exclude 'slm_training/data/'              # Re-download from sources
+)
+
+# Only exclude data dirs if --with-data not specified
+if [[ "$WITH_DATA" == false ]]; then
+    RSYNC_EXCLUDES+=(
+        --exclude 'slm_training/data/'              # Re-download from sources
+        --exclude 'data/raw_episodes/'
+        --exclude 'data/validated_turns/'
+        --exclude 'data/counterfactuals/'
+        --exclude 'data/merged_validated/'
+    )
+fi
+
+RSYNC_EXCLUDES+=(
     --exclude 'slm_training/artifacts/exported_models/'
     --exclude 'predictions_epoch*.csv'          # ~60GB of eval dumps
     --exclude 'slm_training/artifacts/*/optuna_*'  # HPO trial runs
@@ -70,10 +91,6 @@ RSYNC_EXCLUDES=(
     --exclude 'slm_training/artifacts/*/test_*'
     --exclude 'slm_training/artifacts/*/mamba_only_*'
     --exclude 'eval_results/'
-    --exclude 'data/raw_episodes/'
-    --exclude 'data/validated_turns/'
-    --exclude 'data/counterfactuals/'
-    --exclude 'data/merged_validated/'
     --exclude 'docs/_build/'
     --exclude 'docs/archive/'
 )
@@ -122,18 +139,22 @@ pip install --quiet -r docs/requirements.txt 2>/dev/null || true
 
 ok2 "Python environment ready."
 
-# ── 2b: Download external datasets ──────────────────────────────────────────
+# ── 2b: Download external datasets (skip if data transferred) ─────────────
 cd slm_training
 
-log2 "Downloading external datasets (personachat, crd3, empathetic_dialogues, dailydialog)..."
-PYTHONPATH=. python -m src.data.datasets \
-    --datasets personachat crd3 empathetic_dialogues dailydialog 2>&1 | tail -5 || true
+if [[ "$WITH_DATA" == false ]]; then
+    log2 "Downloading external datasets (personachat, crd3, empathetic_dialogues, dailydialog)..."
+    PYTHONPATH=. python -m src.data.datasets \
+        --datasets personachat crd3 empathetic_dialogues dailydialog 2>&1 | tail -5 || true
 
-log2 "Converting datasets to training format..."
-PYTHONPATH=. python -m src.data.prepare_dialogue_data 2>&1 | tail -5 || true
-PYTHONPATH=. python -m src.data.prepare_encoder_data 2>&1 | tail -5 || true
+    log2 "Converting datasets to training format..."
+    PYTHONPATH=. python -m src.data.prepare_dialogue_data 2>&1 | tail -5 || true
+    PYTHONPATH=. python -m src.data.prepare_encoder_data 2>&1 | tail -5 || true
 
-ok2 "External datasets ready."
+    ok2 "External datasets ready."
+else
+    log2 "--with-data set: skipping dataset download (data transferred from local)."
+fi
 
 # ── 2c: Smoke test ──────────────────────────────────────────────────────────
 log2 "Running SLM smoke test..."
