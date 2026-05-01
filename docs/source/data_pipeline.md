@@ -11,7 +11,7 @@ Pipeline Overview
    ┌────────────────────────────────────────────────────────────────┐
    │                     Data Generation Pipeline                    │
    │                                                                │
-   │  ScenarioBank (35 templates)  → samples scenario types         │
+   │  ScenarioBank (7 families / 35 templates) → samples scenarios  │
    │  StateInit                    → builds NPC profile             │
    │  EpisodePlanner               → generates story arc            │
    │  TurnGenerator                → teacher LLM generates turns    │
@@ -78,8 +78,9 @@ Each turn requires up to 10 API calls to the teacher LLM:
 
 Teacher Models:
 
-- **Azure OpenAI** (GPT-4o, GPT-4o-mini) via `data_gen_api.yaml`
-- **Local Qwen3-8B** via HuggingFace transformers (`data_gen.yaml`)
+- **Azure-compatible API** (`gpt-5.4-mini` in `data_gen_api.yaml`)
+- **Local Gemma** (`google/gemma-4-4b-it` in `data_gen.yaml`)
+- **OpenRouter-compatible providers** (commented examples in `data_gen.yaml`)
 - **Qwen3-0.6B** (lightweight, for testing) (`data_gen_qwen3_small.yaml`)
 
 Counterfactual Augmentation
@@ -120,7 +121,7 @@ Counterfactual episodes are re-labeled by the teacher LLM with the flipped varia
 Data Packaging
 --------------
 
-Each validated turn produces 3 synchronized JSONL files:
+Each validated turn produces 3 synchronized JSONL files when generation has been run:
 
 .. list-table::
    :header-rows: 1
@@ -142,7 +143,7 @@ Each validated turn produces 3 synchronized JSONL files:
      - Prompt + response text
      - **Stage 2: Response SFT**
 
-All three files have exactly the same number of records in the same order (alignment guaranteed by Packager).
+All three files have exactly the same number of records in the same order (alignment guaranteed by Packager). Generated JSONL artifacts are not checked into the current repository snapshot; regenerate them before training.
 
 Train/Val/Test Split
 ---------------------
@@ -152,15 +153,15 @@ Stratified by scenario type, 80/10/10 split at episode level (all turns from one
 .. code-block:: text
 
    data/splits/
-   ├── train_heads.jsonl    # 2,110 records (80%)
-   ├── train_sft.jsonl      # 2,110 records
-   ├── train_trace.jsonl    # 2,110 records
-   ├── val_heads.jsonl      #   263 records (10%)
-   ├── val_sft.jsonl        #   263 records
-   ├── val_trace.jsonl      #   263 records
-   ├── test_heads.jsonl     #   361 records (10%)
-   ├── test_sft.jsonl       #   361 records
-   └── test_trace.jsonl     #   361 records
+   ├── train_heads.jsonl
+   ├── train_sft.jsonl
+   ├── train_trace.jsonl
+   ├── val_heads.jsonl
+   ├── val_sft.jsonl
+   ├── val_trace.jsonl
+   ├── test_heads.jsonl
+   ├── test_sft.jsonl
+   └── test_trace.jsonl
 
 Data Generation Usage
 ----------------------

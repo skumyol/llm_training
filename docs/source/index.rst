@@ -8,15 +8,8 @@ Training pipeline for believable NPC dialogue with structured social state.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Overview
-
-   overview
-
-.. toctree::
-   :maxdepth: 2
    :caption: LLM Fine-Tuning
 
-   llm_finetuning
    llm_architecture
    llm_training
    llm_eval
@@ -34,14 +27,18 @@ Training pipeline for believable NPC dialogue with structured social state.
    :maxdepth: 1
    :caption: Operations
 
+   docker
+   frontend
    mlflow
    serving
    slurm_guide
+   testing
 
 .. toctree::
    :maxdepth: 1
    :caption: Paper
 
+   technical_paper
    technical_appendix
    model_registry
 
@@ -49,6 +46,7 @@ Training pipeline for believable NPC dialogue with structured social state.
    :maxdepth: 1
    :caption: Reference
 
+   config_reference
    schema
    data_pipeline
 

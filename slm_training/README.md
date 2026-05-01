@@ -104,7 +104,7 @@ Embedding(256) → Dropout → GRU(3×512) → Dropout → Linear(V)
 | num_layers | 3 | 3 |
 | dropout | 0.3 | 0.3 |
 | tie_weights | ✅ | ✅ |
-| ~params | ~12M | ~40M |
+| params | 42.9M | 94.5M |
 
 #### 2. AWD-LSTM (`AWDLSTMLM`)
 ```
@@ -120,7 +120,7 @@ Embedding(256) → LockedDrop → LSTM(3×512, DropConnect) → LockedDrop → L
 | dropouti (embedding) | 0.4 | 0.65 |
 | wdrop (DropConnect) | 0.5 | 0.5 |
 | tie_weights | ✅ | ✅ |
-| ~params | ~10M | ~28M |
+| params | 42.3M | 106.2M |
 
 **DropConnect:** Applies dropout to LSTM hidden-to-hidden weight matrices (re-sampled every forward pass).
 
@@ -138,7 +138,7 @@ Embed(256) + PosEmbed → 4× [ LN → CausalAttn(4 heads) → LN → FFN(4×exp
 | dropout | 0.1 | 0.1 |
 | max_seq_len | 256 | 512 |
 | tie_weights | ✅ | ✅ |
-| ~params | ~8M | ~55M |
+| params | 16.1M | 51.2M |
 
 #### 4. Prefix GPT (`PrefixTinyGPTLM`)
 ```
@@ -151,7 +151,7 @@ Token_Emb + Prefix_Emb + PosEmb → GPT Blocks → Linear(V)
 | cond_dim (OCEAN+VAD) | 8 | 8 |
 | Prefix projection | Linear→Tanh→Linear | Linear→Tanh→Linear |
 | Same GPT backbone as above | ✅ | ✅ |
-| ~params | ~9M | ~56M |
+| params | 16.6M | 53.3M |
 
 #### 5. Mixture-of-Experts (`TinyMoELM`)
 ```
@@ -167,7 +167,7 @@ GPT backbone with sparse MoE FFN per layer
 | FFN expansion | 4× | 4× |
 | Activation | GELU | GELU |
 | Aux loss weight | 0.01 | 0.01 |
-| ~params | ~12M | ~58M |
+| params | 22.4M | 168.8M |
 
 #### 6. Mamba-like SSM (`MambaLikeLM`)
 ```

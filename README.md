@@ -93,7 +93,7 @@ CounterfactualAugmenter → Validator → Packager → Splitter
 
 **Training Pipeline:**
 ```
-Stage 1: Latent State Predictor (Qwen3-0.6B + LoRA)
+Stage 1: Latent State Predictor (Qwen3-4B + QLoRA; Qwen3-0.6B CPU/debug config available)
          ↓
 Stage 2: Response Generator (Qwen3-4B + QLoRA)
          ↓

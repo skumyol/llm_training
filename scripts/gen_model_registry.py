@@ -183,10 +183,28 @@ def get_data_stats() -> Dict[str, Any]:
                 cf_count += 1
         stats["counterfactual_turns"] = cf_count
 
-    # Scenario bank
+    # Scenario bank. Each YAML file represents one scenario family and contains
+    # five concrete templates in the current data bank.
     bank = ROOT / "data" / "scenario_bank"
     if bank.exists():
-        stats["scenario_templates"] = len(list(bank.glob("*.yaml")))
+        template_count = 0
+        family_count = 0
+        for path in bank.glob("*.yaml"):
+            family_count += 1
+            try:
+                payload = yaml.safe_load(path.read_text()) or {}
+            except Exception:
+                payload = {}
+            if isinstance(payload, list):
+                template_count += len(payload)
+                continue
+            templates = payload.get("templates") if isinstance(payload, dict) else None
+            if isinstance(templates, list):
+                template_count += len(templates)
+            else:
+                template_count += 1
+        stats["scenario_families"] = family_count
+        stats["scenario_templates"] = template_count
 
     # SLM data
     for fname, key in [
@@ -235,6 +253,14 @@ def _kv_table(data: Dict[str, Any], key_width: int = 30) -> str:
     for k, v in data.items():
         out.append(f"| **{k}** | {v} |")
     return "\n".join(out) + "\n"
+
+
+def _fmt_stat(value: Any, suffix: str = "") -> str:
+    if value is None:
+        return "not present in checkout"
+    if isinstance(value, int):
+        return f"{value:,}{suffix}"
+    return f"{value}{suffix}"
 
 
 def generate_markdown(
@@ -310,12 +336,13 @@ def generate_markdown(
 
     # ── LLM Data ──────────────────────────────────────────────────────────────
     out.append(_h(3, "1.4 Data"))
-    out.append(f"- Packaged turns: {data_stats.get('packaged_head_supervision', '?')}")
-    out.append(f"- Train: {data_stats.get('train_heads', '?')} turns")
-    out.append(f"- Val: {data_stats.get('val_heads', '?')} turns")
-    out.append(f"- Test: {data_stats.get('test_heads', '?')} turns")
-    out.append(f"- Counterfactual variants: {data_stats.get('counterfactual_turns', '?')}")
-    out.append(f"- Scenario templates: {data_stats.get('scenario_templates', '?')}")
+    out.append(f"- Packaged turns: {_fmt_stat(data_stats.get('packaged_head_supervision'))}")
+    out.append(f"- Train: {_fmt_stat(data_stats.get('train_heads'), ' turns')}")
+    out.append(f"- Val: {_fmt_stat(data_stats.get('val_heads'), ' turns')}")
+    out.append(f"- Test: {_fmt_stat(data_stats.get('test_heads'), ' turns')}")
+    out.append(f"- Counterfactual variants: {_fmt_stat(data_stats.get('counterfactual_turns'))}")
+    out.append(f"- Scenario families: {_fmt_stat(data_stats.get('scenario_families'))}")
+    out.append(f"- Scenario templates: {_fmt_stat(data_stats.get('scenario_templates'))}")
     out.append("")
 
     # ── SLM Architectures ─────────────────────────────────────────────────────
@@ -434,11 +461,18 @@ def main():
             # Strip variable parts (timestamps)
             existing_clean = "\n".join(
                 l for l in existing.split("\n")
-                if not l.startswith("> Auto-generated") and not l.startswith("*Regenerated")
+                if not l.startswith("<!-- AUTO-GENERATED")
+                and not l.startswith("<!-- Run:")
+                and not l.startswith("> Auto-generated")
+                and not l.startswith("*Regenerated")
             )
+            new_content = header + md
             new_clean = "\n".join(
-                l for l in md.split("\n")
-                if not l.startswith("> Auto-generated") and not l.startswith("*Regenerated")
+                l for l in new_content.split("\n")
+                if not l.startswith("<!-- AUTO-GENERATED")
+                and not l.startswith("<!-- Run:")
+                and not l.startswith("> Auto-generated")
+                and not l.startswith("*Regenerated")
             )
             if existing_clean.strip() == new_clean.strip():
                 print("✅ Registry is up to date.")

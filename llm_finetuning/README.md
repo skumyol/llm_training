@@ -322,12 +322,40 @@ PYTHONPATH=. python src/inference/interactive.py \
     --npc guard_captain
 ```
 
+### Interactive Inference
+
+```bash
+python src/inference/interactive.py \
+    --checkpoint checkpoints/joint_model_best \
+    --base_model Qwen/Qwen3-4B \
+    --scenario data/world_contexts/oakhaven_siege.yaml \
+    --npc commander_vance \
+    --quantization 4bit
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `--checkpoint` | Path to trained joint model (contains `backbone/` and `heads.pt`) |
+| `--base_model` | HuggingFace model used during training (default: `Qwen/Qwen3-4B`) |
+| `--scenario` | Path to scenario YAML defining world and NPCs |
+| `--npc` | NPC ID to converse with (must exist in scenario) |
+| `--quantization` | `4bit`, `8bit`, or `none` (default: `4bit`) |
+
+**How it works:**
+
+1. **Context Construction** — Builds prompt from scenario, NPC profile, and conversation history.
+2. **Latent Prediction** — Classification heads predict the NPC's internal state from current context.
+3. **Response Generation** — Predicted latent state is appended to context; fine-tuned backbone generates the response.
+4. **State Update** — Conversation history and NPC stance are updated for the next turn.
+
 ### Hardware Requirements
 
 | Task | VRAM | RAM | Notes |
 |------|------|-----|-------|
 | Data generation (API) | — | 4 GB | Uses remote LLM API |
-| Data generation (local) | 16 GB | 8 GB | Qwen3-8B teacher |
+| Data generation (local) | 16 GB | 8 GB | Gemma 4B teacher by default; Qwen3-0.6B test config available |
 | Stage 1 training | 8 GB | 16 GB | 0.6B model + LoRA |
 | Stage 2/3 training | 12 GB | 24 GB | 4B model + QLoRA |
 | Inference | 8 GB | 8 GB | 4bit quantized |

@@ -27,9 +27,9 @@ Detailed architecture specifications for all 6 small language models.
    * - ``tie_weights``
      - True
      - True
-   * - ~Parameters
-     - ~12M
-     - ~40M
+   * - Parameters
+     - 42.9M
+     - 94.5M
 
 .. code-block:: python
 
@@ -72,9 +72,9 @@ Detailed architecture specifications for all 6 small language models.
    * - ``wdrop`` (DropConnect)
      - 0.5
      - 0.5
-   * - ~Parameters
-     - ~10M
-     - ~28M
+   * - Parameters
+     - 42.3M
+     - 106.2M
 
 Key components:
 
@@ -116,9 +116,9 @@ Key components:
    * - ``tie_weights``
      - True
      - True
-   * - ~Parameters
-     - ~8M
-     - ~55M
+   * - Parameters
+     - 16.1M
+     - 51.2M
 
 Standard decoder-only transformer with causal self-attention and 4× FFN expansion.
 
@@ -146,9 +146,9 @@ Standard decoder-only transformer with causal self-attention and 4× FFN expansi
    * - ``cond_dim``
      - 8
      - 8
-   * - ~Parameters
-     - ~9M
-     - ~56M
+   * - Parameters
+     - 16.6M
+     - 53.3M
 
 .. code-block:: python
 
@@ -191,9 +191,9 @@ Conditioning: ``cond_vec(8) = [OCEAN(5) | VAD(3)]`` projected through:
    * - ``top_k``
      - 2
      - 2
-   * - ~Parameters
-     - ~12M
-     - ~58M
+   * - Parameters
+     - 22.4M
+     - 168.8M
 
 Sparse MoE FFN per transformer block:
 
@@ -228,9 +228,9 @@ Sparse MoE FFN per transformer block:
    * - ``dropout``
      - 0.1
      - 0.1
-   * - ~Parameters
-     - ~8M
-     - ~50M
+   * - Parameters
+     - 15.4M
+     - 45.4M
 
 Pure PyTorch implementation, no external dependencies.
 

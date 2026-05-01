@@ -3,7 +3,7 @@
 
 # Complete Model Registry: Architectures, Data & Hyperparameters
 
-> Auto-generated 2026-04-30 15:37 from configs + code.
+> Auto-generated 2026-05-01 12:41 from configs + code.
 
 
 ## Part 1: LLM Fine-Tuning
@@ -99,12 +99,13 @@
 
 ### 1.4 Data
 
-- Packaged turns: 7742
-- Train: 6175 turns
-- Val: 683 turns
-- Test: 884 turns
-- Counterfactual variants: 4596
-- Scenario templates: 7
+- Packaged turns: not present in checkout
+- Train: not present in checkout
+- Val: not present in checkout
+- Test: not present in checkout
+- Counterfactual variants: not present in checkout
+- Scenario families: 7
+- Scenario templates: 35
 
 
 ## Part 2: SLM Training from Scratch
@@ -205,14 +206,6 @@
 
 ### 2.3 Data
 
-- **Dialogue (train):** 2,183 jsonl examples
-- **Dialogue (val):** 115 jsonl examples
-- **Dialogue text (train):** 567,744 tokens (~BPE)
-- **Dialogue text (val):** 28,944 tokens (~BPE)
-- **Personality (train):** 2,221 CSV rows
-- **Personality (val):** 248 CSV rows
-- **Affect (train):** 9,056 CSV rows
-- **Affect (val):** 1,008 CSV rows
 
 
 ## Part 3: Evaluation
@@ -232,5 +225,5 @@
 
 ---
 
-*Regenerated 2026-04-30T15:37:42.859625 by `scripts/gen_model_registry.py`*
+*Regenerated 2026-05-01T12:41:31.338128 by `scripts/gen_model_registry.py`*
 *Do not edit manually — run the script to update.*
