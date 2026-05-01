@@ -1,0 +1,38 @@
+# =============================================================================
+# Spack environment: LLM fine-tuning (Qwen3 + LoRA/QLoRA)
+# =============================================================================
+# Usage:
+#   spack env create llm_env spack_envs/llm_env/spack.yaml
+#   spack env activate llm_env
+#   spack concretize
+#   spack install
+#
+# Then create pip venv on top:
+#   python3 -m venv /scratch/$USER/venvs/llm_env --system-site-packages
+#   source /scratch/$USER/venvs/llm_env/bin/activate
+#   bash scripts/setup_llm_env.sh --pip-only
+# =============================================================================
+spack:
+  specs:
+    # Base: Python 3.12 with GCC 13.2 for best performance on Rocky 9
+    - python@3.12.5%gcc@13.2.0 +bz2 +crypt +ctypes +dbm +libxml2 +lzma +pic +pyexpat +pythoncmd +readline +shared +sqlite3 +ssl +uuid +zlib
+    # CUDA toolchain
+    - cuda@12.4.0%gcc@13.2.0
+    # System tools
+    - cmake@3.27%gcc@13.2.0
+    - git@2.42%gcc@13.2.0
+    # Python package manager
+    - py-pip%gcc@13.2.0
+    # Core numeric
+    - py-numpy@1.26%gcc@13.2.0
+    - py-scipy@1.12%gcc@13.2.0
+    - py-pyyaml@6.0%gcc@13.2.0
+    - py-tqdm@4.66%gcc@13.2.0
+    - py-pandas@2.2%gcc@13.2.0
+    # Networking / API
+    - py-requests@2.31%gcc@13.2.0
+    - py-urllib3@2.0%gcc@13.2.0
+
+  view: true
+  concretizer:
+    unify: true

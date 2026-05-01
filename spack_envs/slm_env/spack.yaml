@@ -1,0 +1,33 @@
+# =============================================================================
+# Spack environment: SLM training from scratch (lightweight PyTorch)
+# =============================================================================
+# Usage:
+#   spack env create slm_env spack_envs/slm_env/spack.yaml
+#   spack env activate slm_env
+#   spack concretize
+#   spack install
+#
+# Then create pip venv on top:
+#   python3 -m venv /scratch/$USER/venvs/slm_env --system-site-packages
+#   source /scratch/$USER/venvs/slm_env/bin/activate
+#   bash scripts/setup_slm_env.sh --pip-only
+# =============================================================================
+spack:
+  specs:
+    # Base: Python 3.12 with GCC 13.2
+    - python@3.12.5%gcc@13.2.0 +bz2 +crypt +ctypes +dbm +libxml2 +lzma +pic +pyexpat +pythoncmd +readline +shared +sqlite3 +ssl +uuid +zlib
+    # CUDA toolchain
+    - cuda@12.4.0%gcc@13.2.0
+    # System tools
+    - cmake@3.27%gcc@13.2.0
+    - git@2.42%gcc@13.2.0
+    # Python packages Spack can build (lighter set)
+    - py-pip%gcc@13.2.0
+    - py-numpy@1.26%gcc@13.2.0
+    - py-pyyaml@6.0%gcc@13.2.0
+    - py-tqdm@4.66%gcc@13.2.0
+    - py-pandas@2.2%gcc@13.2.0
+
+  view: true
+  concretizer:
+    unify: true

@@ -11,8 +11,8 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 
-ROOT = Path("/home/serkan/llm_training/slm_training")
-PYTHON = str(ROOT / ".venv/bin/python")
+ROOT = Path(__file__).resolve().parent.parent
+PYTHON = os.environ.get("PYTHON_BIN", "python3")
 
 # Remaining runs after current progress
 REMAINING = [
