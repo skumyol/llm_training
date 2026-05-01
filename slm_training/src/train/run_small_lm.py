@@ -30,6 +30,7 @@ Artifacts under output_dir/run_id/:
   step_metrics.csv       per-step train_loss, lr, grad_norm
   epoch_metrics.csv      per-epoch val_loss, val_ppl
   run_summary.json       hyperparams + results (ablation row)
+  run_summary.md         human-readable summary report
 """
 from __future__ import annotations
 
@@ -61,6 +62,7 @@ from small_lm_architectures import (
     build_model,
     select_device,
 )
+from metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 try:
     import tiktoken
@@ -547,15 +549,17 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     with open(out_dir / "run_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
+    write_metrics_bundle(out_dir, "run_summary", summary, title="Small LM Run Summary")
 
     # ── MLflow: log final metrics and artifacts ──────────────────────────────────
-    tracker.log_metrics({
+    log_metrics_to_mlflow(tracker, {
         "best_val_loss": best_val,
         "best_val_ppl":  best_ep["val_ppl"],
         "best_epoch":    best_ep["epoch"],
         "num_params":    total,
     })
     tracker.log_artifact(out_dir / "run_summary.json")
+    tracker.log_artifact(out_dir / "run_summary.md")
     tracker.log_artifact(out_dir / "epoch_metrics.csv")
     if best_path.exists():
         tracker.log_artifact(best_path)

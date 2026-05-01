@@ -16,6 +16,10 @@ Requirements:
   - peft (for LoRA)
   - bitsandbytes (for 4-bit quantization)
   - trl (for SFTTrainer)
+
+Artifacts:
+  run_summary.json       all hyperparams + results
+  run_summary.md         human-readable summary report
 """
 from __future__ import annotations
 
@@ -40,6 +44,9 @@ os.environ['ACCELERATE_FP8'] = '0'
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src" / "train"))
+
+from metrics_report import write_metrics_bundle
 
 
 DEFAULTS: Dict[str, Any] = {
@@ -401,8 +408,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         },
     }
 
-    with open(out_dir / "run_summary.json", "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
+    write_metrics_bundle(out_dir, "run_summary", summary, title="Gemma 4 Run Summary")
 
     log.info("=" * 60)
     log.info(

@@ -47,6 +47,7 @@ Training pipeline for believable NPC dialogue with structured social state.
    :caption: Reference
 
    config_reference
+   eval_plan
    schema
    data_pipeline
 

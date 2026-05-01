@@ -5,7 +5,6 @@ from typing import Optional
 
 import torch
 import yaml
-from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
@@ -13,6 +12,7 @@ from transformers import get_cosine_schedule_with_warmup
 from src.training.dataset import HeadSupervisionDataset, collate_head_batch, LABEL_MAPS, LABEL_TO_IDX
 from src.training.loss import MultiHeadLoss, compute_class_weights
 from src.training.model import build_latent_predictor, save_predictor
+from src.metrics_report import compute_latent_metrics, log_metrics_to_mlflow, write_metrics_bundle
 
 
 def _batch_to_device(batch: dict, device) -> dict:
@@ -164,6 +164,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         # Determine if higher is better (True for acc/f1, False for loss)
         higher_is_better = "loss" not in best_metric_name
         global_step = 0
+        last_val_metrics: dict = {}
 
         print(f"Best model selection: {best_metric_name} (higher_is_better={higher_is_better})")
 
@@ -196,18 +197,31 @@ def train_latent(config_path: str, debug: bool = False) -> None:
                         mlflow.log_metric("train/loss", epoch_loss / (step + 1), step=global_step)
 
             val_loss, val_metrics = _evaluate(predictor, val_loader, loss_fn)
-            mlflow.log_metric("val/loss", val_loss, step=epoch)
-            for k, v in val_metrics.items():
-                mlflow.log_metric(f"val/{k}", v, step=epoch)
+            log_metrics_to_mlflow({"loss": val_loss}, prefix="val", step=epoch)
+            log_metrics_to_mlflow(val_metrics.get("summary", {}), prefix="val", step=epoch)
+            if val_metrics.get("groups"):
+                log_metrics_to_mlflow(val_metrics["groups"], prefix="val/groups", step=epoch)
+            if val_metrics.get("fields"):
+                log_metrics_to_mlflow(val_metrics["fields"], prefix="val/fields", step=epoch)
+            last_val_metrics = val_metrics
+
+            metrics_dir = output_dir / "metrics"
+            write_metrics_bundle(
+                metrics_dir,
+                f"epoch_{epoch:03d}_latent",
+                {"train_loss": epoch_loss / max(1, len(train_loader)), "val_loss": val_loss, **val_metrics},
+                title=f"Latent Training Metrics - Epoch {epoch}",
+            )
 
             # Resolve the metric used for best-model selection
             metric_key = best_metric_name.replace("val/", "")
-            current_metric = val_metrics.get(metric_key, val_loss)
+            current_metric = val_metrics.get("summary", {}).get(metric_key, val_loss)
 
-            summary_parts = [f"train_loss={epoch_loss/len(train_loader):.4f}", f"val_loss={val_loss:.4f}"]
+            summary_parts = [f"train_loss={epoch_loss/max(1, len(train_loader)):.4f}", f"val_loss={val_loss:.4f}"]
             for key in ["response_policy_f1", "mean_accuracy", "trust_delta_f1"]:
-                if key in val_metrics:
-                    summary_parts.append(f"{key}={val_metrics[key]:.4f}")
+                value = val_metrics.get("summary", {}).get(key)
+                if value is not None:
+                    summary_parts.append(f"{key}={value:.4f}")
             print(f"Epoch {epoch}: {' | '.join(summary_parts)}")
 
             is_better = (
@@ -222,6 +236,20 @@ def train_latent(config_path: str, debug: bool = False) -> None:
                 print(f"  → New best model ({best_metric_name}={best_metric_value:.4f}) saved to {best_dir}")
 
         save_predictor(predictor, str(output_dir / "final"))
+        final_summary = {
+            "model_name": model_name,
+            "stage": "latent",
+            "best_metric_name": best_metric_name,
+            "best_metric_value": best_metric_value,
+            "epochs": epochs,
+            "final_val_summary": last_val_metrics.get("summary", {}),
+        }
+        write_metrics_bundle(
+            output_dir / "metrics",
+            "latent_training_summary",
+            final_summary,
+            title="Latent Training Summary",
+        )
         mlflow.log_artifact(str(best_dir))
         print("Training complete.")
 
@@ -251,7 +279,17 @@ def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
             if not isinstance(gold, torch.Tensor):
                 continue
             if field == "dialogue_act":
+                valid = gold.sum(dim=1) > 0
+                if not valid.any():
+                    continue
+                pred = (logit_tensor.sigmoid() >= 0.5).to(torch.long)
+                if field not in all_preds:
+                    all_preds[field] = []
+                    all_golds[field] = []
+                all_preds[field].extend(pred[valid].cpu().tolist())
+                all_golds[field].extend(gold[valid].cpu().long().tolist())
                 continue
+
             valid = gold != -1
             if not valid.any():
                 continue
@@ -262,28 +300,7 @@ def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
             all_preds[field].extend(pred[valid].cpu().tolist())
             all_golds[field].extend(gold[valid].cpu().tolist())
 
-    metrics = {}
-    if all_golds:
-        accs = {}
-        f1s = {}
-        for field in all_golds:
-            preds = all_preds[field]
-            golds = all_golds[field]
-            acc = sum(p == g for p, g in zip(preds, golds)) / len(golds)
-            accs[field] = acc
-            n_classes = len(LABEL_MAPS.get(field, []))
-            labels = list(range(n_classes)) if n_classes > 0 else None
-            f1 = f1_score(golds, preds, labels=labels, average="macro", zero_division=0)
-            f1s[field] = f1
-
-        metrics["mean_accuracy"] = sum(accs.values()) / len(accs) if accs else 0.0
-        metrics["mean_f1"] = sum(f1s.values()) / len(f1s) if f1s else 0.0
-        metrics["response_policy_acc"] = accs.get("response_policy", 0.0)
-        metrics["response_policy_f1"] = f1s.get("response_policy", 0.0)
-        metrics["trust_delta_acc"] = accs.get("trust_delta", 0.0)
-        metrics["trust_delta_f1"] = f1s.get("trust_delta", 0.0)
-        metrics["reveal_decision_acc"] = accs.get("reveal_decision", 0.0)
-        metrics["reveal_decision_f1"] = f1s.get("reveal_decision", 0.0)
+    metrics = compute_latent_metrics(all_preds, all_golds)
 
     avg_loss = total_loss / max(1, len(val_loader))
     return avg_loss, metrics

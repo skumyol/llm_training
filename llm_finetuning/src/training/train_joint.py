@@ -9,6 +9,7 @@ from tqdm import tqdm
 from src.training.dataset import JointDataset, collate_joint_batch
 from src.training.loss import JointLoss
 from src.training.model import load_predictor, save_predictor, LatentStatePredictor
+from src.metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 
 def _batch_to_device(batch: dict, device) -> dict:
@@ -144,6 +145,7 @@ def train_joint(config_path: str, debug: bool = False) -> None:
 
         best_val_loss = float("inf")
         global_step = 0
+        last_val_loss = float("nan")
 
         for epoch in range(1, epochs + 1):
             predictor.train()
@@ -195,7 +197,9 @@ def train_joint(config_path: str, debug: bool = False) -> None:
                         mlflow.log_metric("train/lm_loss", detail["lm_loss"].item(), step=global_step)
 
             val_loss = _eval_joint(predictor, val_loader, loss_fn)
+            last_val_loss = val_loss
             mlflow.log_metric("val/joint_loss", val_loss, step=epoch)
+            log_metrics_to_mlflow({"train_joint_loss": epoch_loss / max(1, len(train_loader)), "val_joint_loss": val_loss}, prefix="joint", step=epoch)
             print(f"Epoch {epoch}: train={epoch_loss/len(train_loader):.4f}  val={val_loss:.4f}")
 
             if val_loss < best_val_loss:
@@ -205,6 +209,21 @@ def train_joint(config_path: str, debug: bool = False) -> None:
 
         save_predictor(predictor, str(output_dir / "final"))
         mlflow.log_artifact(str(best_dir))
+        write_metrics_bundle(
+            output_dir / "metrics",
+            "joint_training_summary",
+            {
+                "summary": {
+                    "model_name": model_name,
+                    "epochs": epochs,
+                    "best_val_joint_loss": best_val_loss,
+                    "final_val_joint_loss": last_val_loss,
+                    "n_train": len(train_ds),
+                    "n_val": len(val_ds),
+                }
+            },
+            title="Joint Training Summary",
+        )
         print("Joint training complete.")
 
 

@@ -9,6 +9,7 @@ Metrics:
   Affect encoder      : MSE / MAE / R² per VAD dimension, CCC
   Dialogue model      : Perplexity, BLEU-1/2, Distinct-1/2, avg response length
   Full pipeline       : Side-by-side sample conversations
+  Summary bundle      : `evaluation/evaluation_summary.json` and `.md`
 
 Usage:
   python -m src.eval.run_eval                               # auto-discover artifacts/
@@ -28,6 +29,8 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from src.train.metrics_report import write_metrics_bundle
 
 # ── ANSI colour helpers (no extra deps) ────────────────────────────────────────
 BOLD  = "\033[1m"
@@ -251,6 +254,12 @@ def main() -> None:
     args = p.parse_args()
 
     all_rows: List[Dict] = []
+    summary_bundle: Dict[str, Any] = {
+        "summary": {},
+        "encoders": {},
+        "dialogue": {},
+        "generation": {},
+    }
 
     _h1("NPC Pipeline — Evaluation Report")
 
@@ -282,6 +291,7 @@ def main() -> None:
             res = _eval_encoder(pers_summaries[-1], ocean)
             rows = _print_encoder_report("Personality (OCEAN)", res)
             all_rows.extend(rows)
+            summary_bundle["encoders"]["personality"] = res
         else:
             _warn("No personality encoder found — run: python -m src.train.run_personality")
 
@@ -293,6 +303,7 @@ def main() -> None:
             res = _eval_encoder(aff_summaries[-1], vad)
             rows = _print_encoder_report("Affect (VAD)", res)
             all_rows.extend(rows)
+            summary_bundle["encoders"]["affect"] = res
         else:
             _warn("No affect encoder found — run: python -m src.train.run_affect")
 
@@ -327,6 +338,7 @@ def main() -> None:
                     print(f"  val_ppl   : {ppl_color}{m.get('val_ppl', 0):.2f}{RESET}")
                     print(f"  best_epoch: {m.get('best_epoch', '?')}")
                     all_rows.append({"component": "dialogue", "run_id": run_id, **m})
+                    summary_bundle["dialogue"][run_id] = m
 
                 # Generation metrics (requires loaded model)
                 if args.samples > 0 and args.val_dialogue.exists():
@@ -357,6 +369,7 @@ def main() -> None:
                                 print(f"  Distinct-2: {gen_m['distinct2']:.3f}")
                                 print(f"  Avg length: {gen_m['avg_len']:.1f} tokens")
                                 all_rows.append({"component": "dialogue_gen", **gen_m})
+                                summary_bundle["generation"][run_id] = gen_m
                             else:
                                 _warn(gen_m["error"])
                     except Exception as e:
@@ -380,6 +393,17 @@ def main() -> None:
             for r in all_rows:
                 w.writerow({k: r.get(k, "") for k in all_keys})
         _ok(f"Results saved → {args.out_csv}")
+
+    if all_rows:
+        summary_bundle["summary"] = {
+            "num_rows": len(all_rows),
+            "num_dialogue_runs": len(summary_bundle["dialogue"]),
+            "num_generation_runs": len(summary_bundle["generation"]),
+            "num_encoder_groups": len(summary_bundle["encoders"]),
+        }
+        bundle_dir = args.artifacts / "evaluation"
+        write_metrics_bundle(bundle_dir, "evaluation_summary", summary_bundle, title="SLM Evaluation Summary")
+        _ok(f"Summary bundle saved → {bundle_dir / 'evaluation_summary.json'}")
 
     _h1("Done")
 

@@ -155,7 +155,7 @@ uv run python scripts/gen_model_registry.py
 uv run python scripts/gen_model_registry.py --check
 ```
 
-The registry is generated from configs, code, and local data files. If packaged JSONL or SLM training data are absent from the checkout, the data sections intentionally show unknown or empty counts rather than preserving stale numbers.
+The registry is generated from configs, code, and local data files. Training and evaluation runs also emit structured JSON and Markdown metric bundles automatically, so paper tables can be derived from run artifacts instead of hand-maintained notes. If packaged JSONL or SLM training data are absent from the checkout, the data sections intentionally show unknown or empty counts rather than preserving stale numbers.
 
 ## 10. Research Contribution
 

@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.training.dataset import SFTDataset, collate_sft_batch
+from src.metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 
 SECRECY_KEYWORDS = [
@@ -63,6 +64,8 @@ def eval_response(config_path: str) -> dict:
     contradiction_flags = 0
 
     rouge_l_scores: list[float] = []
+    generated_texts: list[str] = []
+    generated_lengths: list[int] = []
 
     with torch.no_grad():
         for i, batch in enumerate(tqdm(test_loader, desc="Generating responses")):
@@ -99,6 +102,8 @@ def eval_response(config_path: str) -> dict:
 
             rouge_l = _rouge_l(gold_text, generated)
             rouge_l_scores.append(rouge_l)
+            generated_texts.append(generated)
+            generated_lengths.append(len(generated.split()))
 
             leaks = _check_secret_leakage(input_text, generated)
             if "reveal_decision=none" in input_text and leaks:
@@ -122,23 +127,28 @@ def eval_response(config_path: str) -> dict:
         "rouge_l": sum(rouge_l_scores) / max(1, len(rouge_l_scores)),
         "secret_leakage_rate": secret_leakage / max(1, total_secret_turns),
         "contradiction_rate": contradiction_flags / max(1, len(rouge_l_scores)),
+        "distinct_1": _distinct_n(generated_texts, 1),
+        "distinct_2": _distinct_n(generated_texts, 2),
+        "avg_len": sum(generated_lengths) / max(1, len(generated_lengths)),
         "n_evaluated": len(rouge_l_scores),
     }
 
+    bundle = {"summary": metrics}
+
     with open(results_dir / "response_eval_metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
+        json.dump(bundle, f, indent=2)
+    write_metrics_bundle(results_dir, "response_eval_report", bundle, title="Response Evaluation Report")
 
     if cfg["output"].get("save_sample_generations", True):
         with open(results_dir / "sample_generations.json", "w") as f:
             json.dump(generations, f, indent=2)
 
     with mlflow.start_run(run_name="response_eval"):
-        for k, v in metrics.items():
-            if isinstance(v, (int, float)):
-                mlflow.log_metric(f"eval/{k}", v)
+        log_metrics_to_mlflow(bundle["summary"], prefix="eval")
         mlflow.log_artifact(str(results_dir / "response_eval_metrics.json"))
         if (results_dir / "sample_generations.json").exists():
             mlflow.log_artifact(str(results_dir / "sample_generations.json"))
+        mlflow.log_artifact(str(results_dir / "response_eval_report.md"))
 
     _print_summary(metrics, cfg["thresholds"])
     return metrics
@@ -203,3 +213,15 @@ def _print_summary(metrics: dict, thresholds: dict) -> None:
     print(f"  Secret Leakage:      {metrics.get('secret_leakage_rate', 0):.4f}  (threshold ≤ {thresholds.get('secret_leakage_rate', 0.05)})")
     print(f"  Contradiction Rate:  {metrics.get('contradiction_rate', 0):.4f}  (threshold ≤ {thresholds.get('contradiction_rate', 0.08)})")
     print()
+
+
+def _distinct_n(texts: list[str], n: int) -> float:
+    ngrams = []
+    for text in texts:
+        tokens = text.lower().split()
+        if len(tokens) < n:
+            continue
+        ngrams.extend(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+    if not ngrams:
+        return 0.0
+    return len(set(ngrams)) / len(ngrams)

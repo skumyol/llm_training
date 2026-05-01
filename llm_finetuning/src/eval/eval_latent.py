@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from src.training.dataset import HeadSupervisionDataset, collate_head_batch, LABEL_MAPS
 from src.training.model import load_predictor
+from src.metrics_report import compute_latent_metrics, log_metrics_to_mlflow, write_metrics_bundle
 
 
 STANCE_DIMS = ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
@@ -56,15 +57,24 @@ def eval_latent(config_path: str) -> dict:
 
             for field in out["logits"]:
                 label_key = f"label_{field}"
-                if label_key not in batch or field == "dialogue_act":
+                if label_key not in batch:
                     continue
                 gold = batch[label_key]
                 if not isinstance(gold, torch.Tensor):
                     continue
-                
-                # Move gold to device for valid mask and comparison
                 gold = gold.to(predictor.backbone.device)
-                
+                if field == "dialogue_act":
+                    valid = gold.sum(dim=1) > 0
+                    if not valid.any():
+                        continue
+                    pred = (out["logits"][field].sigmoid() >= 0.5).to(torch.long)
+                    if field not in all_preds:
+                        all_preds[field] = []
+                        all_golds[field] = []
+                    all_preds[field].extend(pred[valid].cpu().tolist())
+                    all_golds[field].extend(gold[valid].cpu().long().tolist())
+                    continue
+
                 valid = gold != -1
                 if not valid.any():
                     continue
@@ -91,46 +101,37 @@ def eval_latent(config_path: str) -> dict:
     results_dir.mkdir(parents=True, exist_ok=True)
 
     metrics: dict = {}
-    per_field_reports: dict = {}
-
     for field, golds in all_golds.items():
-        preds = all_preds[field]
         label_names = LABEL_MAPS.get(field, None)
-        correct = sum(p == g for p, g in zip(preds, golds))
-        acc = correct / len(golds) if golds else 0.0
-        metrics[f"{field}_accuracy"] = acc
-        if label_names:
-            n_classes = len(label_names)
-            all_labels = list(range(n_classes))
-            target_names = [str(l) for l in label_names]
+        if not label_names:
+            continue
+        if field == "dialogue_act":
+            continue
+        if cfg["output"].get("save_confusion_matrices", True):
             try:
-                report = classification_report(
-                    golds, preds,
-                    labels=all_labels,
-                    target_names=target_names,
-                    output_dict=True, zero_division=0,
-                )
-                per_field_reports[field] = report
+                cm = confusion_matrix(golds, all_preds[field], labels=list(range(len(label_names))))
+                _save_confusion_matrix(cm, field, results_dir, label_names)
             except Exception as e:
-                print(f"  [WARN] classification_report failed for {field}: {e}")
-            if cfg["output"].get("save_confusion_matrices", True):
-                try:
-                    cm = confusion_matrix(golds, preds, labels=all_labels)
-                    _save_confusion_matrix(cm, field, results_dir, label_names)
-                except Exception as e:
-                    print(f"  [WARN] confusion_matrix failed for {field}: {e}")
+                print(f"  [WARN] confusion_matrix failed for {field}: {e}")
 
-    metrics["secret_leakage_rate"] = secret_leakage / max(1, total_turns)
-    metrics["response_policy_f1"] = per_field_reports.get("response_policy", {}).get("macro avg", {}).get("f1-score", 0.0)
-    metrics["trust_delta_accuracy"] = metrics.get("trust_delta_accuracy", 0.0)
+    metrics = compute_latent_metrics(
+        all_preds,
+        all_golds,
+        secret_leakage_rate=secret_leakage / max(1, total_turns),
+    )
 
     with open(results_dir / "latent_eval_metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
+    write_metrics_bundle(results_dir, "latent_eval_report", metrics, title="Latent Evaluation Report")
 
     with mlflow.start_run(run_name="latent_eval"):
-        for k, v in metrics.items():
-            mlflow.log_metric(f"eval/{k}", v)
+        log_metrics_to_mlflow(metrics.get("summary", {}), prefix="eval")
+        if metrics.get("groups"):
+            log_metrics_to_mlflow(metrics["groups"], prefix="eval/groups")
+        if metrics.get("fields"):
+            log_metrics_to_mlflow(metrics["fields"], prefix="eval/fields")
         mlflow.log_artifact(str(results_dir / "latent_eval_metrics.json"))
+        mlflow.log_artifact(str(results_dir / "latent_eval_report.md"))
 
     _print_summary(metrics, cfg["thresholds"])
     return metrics
@@ -170,7 +171,7 @@ def _print_summary(metrics: dict, thresholds: dict) -> None:
         ("secret_leakage_rate",  thresholds.get("secret_leakage_rate", 0.05),   "≤"),
     ]
     for key, threshold, op in checks:
-        val = metrics.get(key, 0.0)
+        val = metrics.get("summary", {}).get(key, 0.0)
         passed = (val >= threshold) if op == "≥" else (val <= threshold)
         status = "PASS" if passed else "FAIL"
         print(f"  [{status}] {key}: {val:.4f} (threshold {op} {threshold})")

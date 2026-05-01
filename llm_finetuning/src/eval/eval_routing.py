@@ -5,6 +5,8 @@ import torch
 import yaml
 from tqdm import tqdm
 
+from src.metrics_report import log_metrics_to_mlflow, write_metrics_bundle
+
 
 SLOW_PATH_TRIGGERS = {
     "value_conflict": {"strong"},
@@ -83,11 +85,12 @@ def eval_routing(config_path: str) -> dict:
     }
 
     with open(results_dir / "routing_eval_metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
+        json.dump({"summary": metrics}, f, indent=2)
+    write_metrics_bundle(results_dir, "routing_eval_report", {"summary": metrics}, title="Routing Evaluation Report")
 
     with mlflow.start_run(run_name="routing_eval"):
-        for k, v in metrics.items():
-            mlflow.log_metric(f"eval/{k}", v)
+        log_metrics_to_mlflow(metrics, prefix="eval")
+        mlflow.log_artifact(str(results_dir / "routing_eval_report.md"))
 
     _print_summary(metrics, cfg["thresholds"])
     return metrics

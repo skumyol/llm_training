@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from src.training.dataset import SFTDataset, collate_sft_batch
 from src.training.model import load_backbone
+from src.metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 
 def train_response(config_path: str, debug: bool = False) -> None:
@@ -87,6 +88,7 @@ def train_response(config_path: str, debug: bool = False) -> None:
 
         best_val_loss = float("inf")
         global_step = 0
+        last_val_loss = float("nan")
 
         for epoch in range(1, epochs + 1):
             model.train()
@@ -114,7 +116,9 @@ def train_response(config_path: str, debug: bool = False) -> None:
                         mlflow.log_metric("train/lm_loss", epoch_loss / (step + 1), step=global_step)
 
             val_loss = _evaluate_sft(model, val_loader)
+            last_val_loss = val_loss
             mlflow.log_metric("val/lm_loss", val_loss, step=epoch)
+            log_metrics_to_mlflow({"train_lm_loss": epoch_loss / max(1, len(train_loader)), "val_lm_loss": val_loss}, prefix="response", step=epoch)
             print(f"Epoch {epoch}: train_loss={epoch_loss/len(train_loader):.4f}  val_loss={val_loss:.4f}")
 
             if val_loss < best_val_loss:
@@ -127,6 +131,22 @@ def train_response(config_path: str, debug: bool = False) -> None:
         model.save_pretrained(str(output_dir / "final"))
         tokenizer.save_pretrained(str(output_dir / "final"))
         mlflow.log_artifact(str(best_dir))
+        write_metrics_bundle(
+            output_dir / "metrics",
+            "response_training_summary",
+            {
+                "summary": {
+                    "model_name": model_name,
+                    "conditioning_mode": conditioning_mode,
+                    "epochs": epochs,
+                    "best_val_lm_loss": best_val_loss,
+                    "final_val_lm_loss": last_val_loss,
+                    "n_train": len(train_ds),
+                    "n_val": len(val_ds),
+                }
+            },
+            title="Response Training Summary",
+        )
         print("Response SFT training complete.")
 
 

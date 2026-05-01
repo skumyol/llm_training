@@ -21,6 +21,7 @@ Artifacts produced under output_dir/run_id/:
   step_metrics.csv      per-step train loss, lr, grad_norm
   epoch_metrics.csv     per-epoch val loss + perplexity
   run_summary.json      hyperparams + results (ablation table row)
+  run_summary.md        human-readable summary report
 """
 from __future__ import annotations
 
@@ -44,12 +45,14 @@ from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src" / "train"))
 
 from src.common.config import DialogueTrainConfig
 from src.data.datasets import DialogueJsonlDataset
 from src.infer.memory_store import EpisodicMemoryStore
 from src.models.dialogue import ConditionalDialogueModel
 from src.train.train_dialogue import DialogueBatch, DialogueCollator
+from metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -369,9 +372,11 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     with open(out_dir / "run_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
+    write_metrics_bundle(out_dir, "run_summary", summary, title="Dialogue Run Summary")
 
-    tracker.log_metrics({"best_val_loss": best_val_loss, "best_val_ppl": best_epoch["val_ppl"]})
+    log_metrics_to_mlflow(tracker, {"best_val_loss": best_val_loss, "best_val_ppl": best_epoch["val_ppl"]})
     tracker.log_artifact(out_dir / "run_summary.json")
+    tracker.log_artifact(out_dir / "run_summary.md")
     tracker.log_artifact(out_dir / "epoch_metrics.csv")
     tracker.end_run()
 

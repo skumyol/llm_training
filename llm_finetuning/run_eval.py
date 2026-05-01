@@ -8,6 +8,8 @@ Usage:
     python run_eval.py --stage all      --config configs/eval.yaml
 """
 import argparse
+import json
+from pathlib import Path
 
 
 def parse_args():
@@ -19,18 +21,30 @@ def parse_args():
 
 def main():
     args = parse_args()
+    results: dict[str, dict] = {}
 
     if args.stage in ("latent", "all"):
         from src.eval.eval_latent import eval_latent
-        eval_latent(args.config)
+        results["latent"] = eval_latent(args.config)
 
     if args.stage in ("response", "all"):
         from src.eval.eval_response import eval_response
-        eval_response(args.config)
+        results["response"] = eval_response(args.config)
 
     if args.stage in ("routing", "all"):
         from src.eval.eval_routing import eval_routing
-        eval_routing(args.config)
+        results["routing"] = eval_routing(args.config)
+
+    if results:
+        with open(args.config) as f:
+            import yaml
+
+            cfg = yaml.safe_load(f)
+        results_dir = Path(cfg["output"]["results_dir"])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = results_dir / "evaluation_summary.json"
+        summary_path.write_text(json.dumps(results, indent=2, sort_keys=True))
+        print(f"Saved aggregated evaluation summary to {summary_path}")
 
 
 if __name__ == "__main__":

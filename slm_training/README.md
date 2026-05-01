@@ -312,7 +312,7 @@ mlflow ui --backend-store-uri ../mlruns
 
 **Tracked experiments:** `personality_encoder`, `affect_encoder`, `small_lm`, `dialogue_model`, `slm_eval`
 
-Every run logs: hyperparameters, step-level metrics (loss, lr, grad_norm), epoch-level metrics (PPL, CCC, R², BLEU), and artifacts (run_summary.json, CSVs).
+Every run logs: hyperparameters, step-level metrics (loss, lr, grad_norm), epoch-level metrics (PPL, CCC, R², BLEU), and artifacts (`run_summary.json`, `run_summary.md`, CSVs).
 
 MLflow gracefully degrades if not installed — all scripts work without it.
 
@@ -328,6 +328,9 @@ python scripts/export_small_lm_models.py --arch awdlstm --seed 42
 
 # Evaluate all seeds
 python scripts/eval_small_lms.py --arch all --seeds 42 43 44
+
+# Aggregate SLM evaluation artifacts
+python -m src.eval.run_eval --artifacts artifacts/
 
 # Generate comprehensive training report
 python scripts/comprehensive_training_report.py --phase all --n-seeds 3
@@ -345,6 +348,7 @@ python scripts/upload_to_hf.py
 | Distinct-1/2 | Token type diversity ratio |
 | CCC (Affect) | Concordance correlation coefficient |
 | R² (Personality) | Coefficient of determination |
+| Summary bundle | `evaluation/evaluation_summary.json` + `.md` |
 
 ---
 

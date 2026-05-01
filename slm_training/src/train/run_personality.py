@@ -18,6 +18,7 @@ Artifacts produced under output_dir/run_id/:
   epoch_metrics.csv        per-epoch val MSE / MAE / R² (total + per-dimension)
   predictions_epoch{N}.csv sample predictions vs ground truth for error analysis
   run_summary.json         all hyperparams + results (one row in your ablation table)
+  run_summary.md           human-readable summary report
 """
 from __future__ import annotations
 
@@ -46,9 +47,11 @@ from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src" / "train"))
 
 from src.data.datasets import RegressionTextDataset
 from src.models.personality import DistilBertRegressor
+from metrics_report import write_metrics_bundle
 
 
 # ── Defaults (override via YAML or CLI) ──────────────────────────────────────
@@ -492,8 +495,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     summary["best"] = {"epoch": best_epoch["epoch"], "val_mse": best_val_mse, "val_f1": best_val_f1,
                        "val_acc": best_epoch.get("val_acc", 0)}
 
-    with open(out_dir / "run_summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
+    write_metrics_bundle(out_dir, "run_summary", summary, title="Personality Encoder Run Summary")
 
     # ── MLflow: log final metrics and artifacts ──────────────────────────────────
     tracker.log_metrics({
@@ -503,6 +505,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "best_epoch":   best_epoch["epoch"],
     })
     tracker.log_artifact(out_dir / "run_summary.json")
+    tracker.log_artifact(out_dir / "run_summary.md")
     tracker.log_artifact(out_dir / "epoch_metrics.csv")
     tracker.end_run()
 
