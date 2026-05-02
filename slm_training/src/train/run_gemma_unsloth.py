@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-Gemma 4 Training Runner (E2B / E4B)
-=================================
-Fine-tunes Gemma 4 MoE models on the scaffold's dialogue JSONL format.
+Gemma 3 Training Runner (4B IT)
+================================
+Fine-tunes Gemma 3 4B instruction-tuned model on dialogue JSONL.
 
-Supported Models:
-  - google/gemma-4-E2B: 2 active experts (~2B active params, 16B total)
-  - google/gemma-4-E4B: 4 active experts (~4B active params, 16B total)
+Model: google/gemma-3-4b-it (4B params, instruction-tuned)
 
-Gemma 4 uses sparse mixture-of-experts (MoE) with 16B total parameters but
-only activates 2B (E2B) or 4B (E4B) per token for efficiency.
+Uses transformers + peft (LoRA) + bitsandbytes (4-bit QLoRA) + trl (SFTTrainer).
 
 Requirements:
   - transformers >= 4.50
@@ -38,7 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import torch
 import yaml
 
-# Gemma 4 uses native transformers + peft + trl (no Unsloth needed)
+# Gemma 3 uses native transformers + peft + trl (no Unsloth needed)
 # Ensure compatible accelerate version
 os.environ['ACCELERATE_FP8'] = '0'
 
@@ -51,7 +48,7 @@ from metrics_report import write_metrics_bundle
 
 DEFAULTS: Dict[str, Any] = {
     # Gemma 4 models: E2B (~2B active), E4B (~4B active)
-    "base_model_name": "google/gemma-4-E2B",  # Default: E2B (faster, less VRAM)
+    "base_model_name": "google/gemma-2-2b-it",  # 2B instruction-tuned baseline
     "download_if_missing": True,
     "local_model_root": "models",
     "train_path": "data/dialogue/from_gen_train.jsonl",
@@ -72,7 +69,7 @@ DEFAULTS: Dict[str, Any] = {
     "eval_steps": 100,
     "save_steps": 100,
     "seed": 42,
-    "output_dir": "artifacts/gemma4",
+    "output_dir": "artifacts/gemma3_4b",
     "system_prompt_template": (
         "You are roleplaying an NPC in a dialogue simulation. Stay in character, "
         "reply naturally, and use the NPC profile below as a hard constraint.\n"
@@ -143,18 +140,23 @@ def _load_records(path: str, limit: Optional[int] = None) -> List[Dict[str, Any]
 
 
 def _to_messages(record: Dict[str, Any], system_prompt_template: str) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = [{
-        "role": "system",
-        "content": system_prompt_template.format(npc_profile=record["npc_profile"]),
-    }]
+    # Gemma 2 does not support system role — prepend profile to first user turn
+    profile_text = system_prompt_template.format(npc_profile=record["npc_profile"])
+    messages: List[Dict[str, str]] = []
+    first_user = True
     for turn in record.get("dialogue_context", []):
         speaker = turn.get("speaker")
         if speaker not in {"player", "npc"}:
             continue
-        messages.append({
-            "role": "user" if speaker == "player" else "assistant",
-            "content": str(turn.get("text", "")).strip(),
-        })
+        role = "user" if speaker == "player" else "assistant"
+        content = str(turn.get("text", "")).strip()
+        if first_user and role == "user":
+            content = profile_text + "\n\n" + content
+            first_user = False
+        messages.append({"role": role, "content": content})
+    # If no user turn exists, add profile as standalone user message
+    if first_user:
+        messages.append({"role": "user", "content": profile_text})
     messages.append({
         "role": "assistant",
         "content": str(record.get("target_response", "")).strip(),
@@ -200,23 +202,22 @@ def _resolve_model_path(cfg: Dict[str, Any], log: logging.Logger) -> str:
     return str(local_dir)
 
 
-def _load_gemma4_components(cfg: Dict[str, Any], model_path: str, log: logging.Logger):
-    """Load Gemma 4 model with native transformers + PEFT LoRA."""
+def _load_gemma_components(cfg: Dict[str, Any], model_path: str, log: logging.Logger):
+    """Load Gemma model with native transformers + PEFT LoRA."""
     base_model = cfg["base_model_name"]
     
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "CUDA is required for Gemma 4 training. "
+            "CUDA is required for Gemma training. "
             "Run this stage on a CUDA machine."
         )
     
-    log.info(f"Loading Gemma 4 model from {model_path}")
-    log.info(f"Model type: {'E2B (2 active experts)' if 'E2B' in base_model else 'E4B (4 active experts)'}")
+    log.info(f"Loading Gemma model from {model_path}")
     
-    from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
+    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     
-    # 4-bit quantization config for Gemma 4
+    # 4-bit quantization config
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -224,19 +225,21 @@ def _load_gemma4_components(cfg: Dict[str, Any], model_path: str, log: logging.L
         bnb_4bit_use_double_quant=True,
     )
     
-    model = AutoModelForImageTextToText.from_pretrained(
+    # Use CausalLM for text-only models (Gemma 2, etc.)
+    model = AutoModelForCausalLM.from_pretrained(
         model_path,
         quantization_config=bnb_config,
         device_map="auto",
         torch_dtype=torch.bfloat16,
     )
-    processor = AutoProcessor.from_pretrained(model_path)
-    tokenizer = processor.tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
     # Prepare for LoRA
     model = prepare_model_for_kbit_training(model)
     
-    # LoRA config for Gemma 4 (text-only, no vision layers)
+    # LoRA config for Gemma 3 (text-only, no vision layers)
     lora_config = LoraConfig(
         r=cfg["lora_r"],
         lora_alpha=cfg["lora_alpha"],
@@ -250,7 +253,7 @@ def _load_gemma4_components(cfg: Dict[str, Any], model_path: str, log: logging.L
     model.print_trainable_parameters()
     
     total_params = sum(p.numel() for p in model.parameters())
-    log.info(f"Gemma 4 loaded: {total_params/1e9:.1f}B total params")
+    log.info(f"Gemma 3 loaded: {total_params/1e9:.1f}B total params")
     log.info(f"Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.1f}M")
     
     return model, tokenizer
@@ -301,16 +304,12 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if not Path(cfg[key]).exists():
             raise FileNotFoundError(f"Missing dataset file: {cfg[key]}")
 
-    # Validate Gemma 4 only
-    if not _is_gemma4(cfg["base_model_name"]):
-        raise ValueError(
-            f"This script only supports Gemma 4 models (E2B/E4B). "
-            f"Got: {cfg['base_model_name']}. "
-            f"Use 'google/gemma-4-E2B' or 'google/gemma-4-E4B'"
-        )
+    # Validate model name
+    if "gemma" not in cfg["base_model_name"].lower():
+        log.warning(f"Expected a Gemma model. Got: {cfg['base_model_name']}")
     
     model_path = _resolve_model_path(cfg, log)
-    model, tokenizer = _load_gemma4_components(cfg, model_path, log)
+    model, tokenizer = _load_gemma_components(cfg, model_path, log)
 
     train_records = _load_records(cfg["train_path"], cfg.get("max_train_samples"))
     val_records = _load_records(cfg["val_path"], cfg.get("max_eval_samples"))

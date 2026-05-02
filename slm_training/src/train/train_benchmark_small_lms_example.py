@@ -332,7 +332,7 @@ def train_one_model(
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and device.type == "cuda"))
+    scaler = torch.amp.GradScaler(device.type, enabled=(use_amp and device.type == "cuda"))
 
     global_step = 0
     best_val = float("inf")

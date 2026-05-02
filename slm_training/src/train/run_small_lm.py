@@ -420,7 +420,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     lr = float(cfg["lr"])
     weight_decay = float(cfg["weight_decay"])
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler    = torch.cuda.amp.GradScaler(enabled=(cfg["use_amp"] and device.type == "cuda"))
+    scaler    = torch.amp.GradScaler(device.type, enabled=(cfg["use_amp"] and device.type == "cuda"))
 
     # ── LR Scheduler (cosine warm restarts to escape local minima) ─────────
     scheduler = None

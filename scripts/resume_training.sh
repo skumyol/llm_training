@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# resume_training.sh — One-shot: sync, cancel stale jobs, submit optimized training
+# resume_training.sh — Bulletproof training submission with pre-flight checks
 # =============================================================================
-# Run after SSH-ing into the cluster:
+# Run after SSH:
 #   ssh skumyol@hpc4.ust.hk
 #   cd ~/llm_training
 #   bash scripts/resume_training.sh
 #
-# This will:
-#   1. Cancel any lingering Slurm jobs
-#   2. Sync code from home to scratch
-#   3. Verify data and venvs
-#   4. Submit training (6 architectures × 1 seed, 20 epochs)
-#   5. Submit eval to run after training
+# Pipeline:
+#   1. Cancel stale jobs + verify environment
+#   2. Pre-flight: 1-epoch test on GPT (quick failure detection)
+#   3. If pre-flight passes → submit full training (4 archs × 20 epochs)
+#   4. Auto-eval after training
+#   5. Auto-export artifacts to home
 # =============================================================================
 set -euo pipefail
 
@@ -20,63 +20,142 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_BASE="/scratch/${USER}"
 REPO_LINK="${WORK_BASE}/npc"
 ACCOUNT="xrimlab"
-PARTITION="gpu-a30"
+PARTITION="${1:-gpu-a30}"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+pass() { echo -e "  ${GREEN}✅${NC} $*"; }
+fail() { echo -e "  ${RED}❌${NC} $*"; exit 1; }
+warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Resume Training on HKUST HPC                               ║"
+echo "║  Bulletproof Training Submission                           ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
-# 1. Cancel stale jobs
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 0 — Cancel stale jobs
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "── 1. Cancelling old jobs ──"
-scancel -u "${USER}" 2>/dev/null && echo "  Cancelled." || echo "  No jobs to cancel."
-
-# 2. Sync code to scratch
-echo ""
-echo "── 2. Syncing code ──"
-if [ ! -L "${REPO_LINK}" ]; then
-    mkdir -p "${WORK_BASE}"
-    ln -sfn "${ROOT}" "${REPO_LINK}"
-    echo "  Symlinked: ${REPO_LINK} → ${ROOT}"
+echo "── Phase 0: Cleanup ──"
+CANCELLED=$(scancel -u "${USER}" 2>/dev/null && echo "yes" || echo "no")
+if [ "$CANCELLED" = "yes" ]; then
+    pass "Cancelled old jobs"
 else
-    echo "  Symlink exists: ${REPO_LINK}"
+    pass "No stale jobs"
 fi
 
-# 3. Verify venvs
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1 — Verify environment
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "── 3. Verifying environment ──"
-for venv in llm_env slm_env; do
-    if [ -f "${WORK_BASE}/venvs/${venv}/bin/activate" ]; then
-        echo "  ✅ ${venv}"
-    else
-        echo "  ❌ ${venv} missing — run: bash scripts/env_setup_spack.sh"
-    fi
-done
+echo "── Phase 1: Environment Checks ───────────────────────────────"
 
-# 4. Verify data
-echo ""
-echo "── 4. Verifying data ──"
-if [ -f "${REPO_LINK}/slm_training/data/dialogue/train.txt" ]; then
-    LINES=$(wc -l < "${REPO_LINK}/slm_training/data/dialogue/train.txt")
-    echo "  ✅ train.txt: ${LINES} lines"
+# 1a. Scratch venv
+VENV="${WORK_BASE}/venvs/slm_env/bin/activate"
+if [ -f "${VENV}" ]; then
+    pass "SLM venv found"
 else
-    echo "  ❌ Missing dialogue data — generating mock data..."
-    source "${WORK_BASE}/venvs/slm_env/bin/activate" 2>/dev/null || true
+    fail "SLM venv missing: ${VENV}"
+fi
+
+# 1b. CUDA module
+module load cuda/12.4.0 2>/dev/null && pass "CUDA 12.4 loaded" || warn "CUDA module not on login node (expected)"
+
+# 1c. Repo symlink
+if [ -L "${REPO_LINK}" ]; then
+    pass "Repo symlink: ${REPO_LINK}"
+else
+    mkdir -p "${WORK_BASE}"
+    ln -sfn "${ROOT}" "${REPO_LINK}"
+    pass "Created symlink: ${REPO_LINK} → ${ROOT}"
+fi
+
+# 1d. Training data
+DATA_DIR="${REPO_LINK}/slm_training/data/dialogue"
+TRAIN_TXT="${DATA_DIR}/train.txt"
+VAL_TXT="${DATA_DIR}/val.txt"
+mkdir -p "${DATA_DIR}" "${DATA_DIR}/../personality" "${DATA_DIR}/../affect"
+
+if [ -f "${TRAIN_TXT}" ] && [ "$(wc -l < "${TRAIN_TXT}")" -ge 100 ]; then
+    LINES=$(wc -l < "${TRAIN_TXT}")
+    pass "Training data: ${LINES} lines"
+else
+    warn "No training data — generating mock data"
+    source "${VENV}"
     python3 -c "
 import json, random
 from pathlib import Path
-d = Path('${REPO_LINK}/slm_training/data/dialogue')
+d = Path('${DATA_DIR}')
 d.mkdir(parents=True, exist_ok=True)
-lines = [f'Player: hello NPC: hi there' for _ in range(2000)]
+random.seed(42)
+lines = [f'Player asks about {random.choice([\"siege\",\"spy\",\"artifact\"])}. NPC replies cautiously.' for _ in range(2000)]
 with open(d/'train.txt','w') as f: f.write('\n'.join(lines[:1600])+'\n')
 with open(d/'val.txt','w') as f: f.write('\n'.join(lines[1600:])+'\n')
-print('  Generated mock data')
+print(f'  Generated {len(lines)} lines')
 "
+    pass "Mock data generated"
 fi
 
-# 5. Submit training
+# 1e. Log/checkpoint dirs
+for d in "${WORK_BASE}/logs" "${WORK_BASE}/checkpoints" "${WORK_BASE}/mlruns" "${WORK_BASE}/artifacts"; do
+    mkdir -p "$d"
+done
+pass "Scratch directories ready"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Pre-flight test (1 epoch GPT, must pass before full training)
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "── 5. Submitting training (6 archs × 20 epochs) ──"
+echo "── Phase 2: Pre-flight Test (1 epoch GPT) ────────────────────"
+
+PF_JOB=$(sbatch --parsable \
+    --job-name="preflight" \
+    --partition="${PARTITION}" \
+    --account="${ACCOUNT}" \
+    --gpus-per-node=1 \
+    --ntasks-per-node=1 \
+    --cpus-per-task=8 \
+    --time=00:15:00 \
+    --output="${WORK_BASE}/logs/preflight_%j.out" \
+    --error="${WORK_BASE}/logs/preflight_%j.err" \
+    "${REPO_LINK}/scripts/slurm_train.sh" slm small_lm --arch gpt --epochs 1 --log-every 10)
+
+echo "  preflight job: ${PF_JOB}"
+echo "  Waiting for it to complete (max 15 min)..."
+
+# Poll until job finishes
+TIMEOUT=900  # 15 min
+ELAPSED=0
+while [ $ELAPSED -lt $TIMEOUT ]; do
+    STATE=$(sacct -j "${PF_JOB}" --format=State --noheader -P 2>/dev/null | head -1)
+    if [ "$STATE" = "COMPLETED" ] || [ "$STATE" = "FAILED" ] || [ "$STATE" = "TIMEOUT" ] || [ "$STATE" = "CANCELLED" ]; then
+        break
+    fi
+    sleep 10
+    ELAPSED=$((ELAPSED + 10))
+    echo -ne "  ${STATE:-PENDING} ... ${ELAPSED}s elapsed\r"
+done
+echo ""
+
+# Check result
+FINAL_STATE=$(sacct -j "${PF_JOB}" --format=State --noheader -P 2>/dev/null | head -1)
+EXIT_CODE=$(sacct -j "${PF_JOB}" --format=ExitCode --noheader -P 2>/dev/null | head -1 | cut -d: -f1)
+
+if [ "$FINAL_STATE" = "COMPLETED" ] && [ "$EXIT_CODE" = "0" ]; then
+    pass "Pre-flight PASSED (exit=${EXIT_CODE})"
+else
+    echo ""
+    echo "  Pre-flight FAILED (state=${FINAL_STATE}, exit=${EXIT_CODE})"
+    echo "  Last 20 lines of log:"
+    tail -20 "${WORK_BASE}/logs/preflight_${PF_JOB}.out" 2>/dev/null || true
+    fail "Pre-flight failed — fix issues before full training"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — Full training
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "── Phase 3: Full Training (4 archs × 20 epochs) ──────────────"
+
 ARCHS=(gpt mamba_like prefix_gpt moe)
 JOB_IDS=()
 
@@ -97,10 +176,13 @@ for arch in "${ARCHS[@]}"; do
     sleep 1
 done
 
-# 6. Submit eval after all training completes
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4 — Evaluation (depends on all training)
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "── 6. Submitting final evaluation (after training) ──"
+echo "── Phase 4: Final Evaluation ─────────────────────────────────"
 DEP_STR=$(IFS=:; echo "${JOB_IDS[*]}")
+
 EVAL_JID=$(sbatch --parsable \
     --job-name="eval-final" \
     --partition="${PARTITION}" \
@@ -115,9 +197,11 @@ EVAL_JID=$(sbatch --parsable \
     "${REPO_LINK}/scripts/slurm_eval.sh" slm --out-csv "${WORK_BASE}/artifacts/eval_results.csv")
 echo "  eval-final: ${EVAL_JID}"
 
-# 7. Submit artifacts export (copy results to home for easy SCP)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5 — Auto-export artifacts to home
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "── 7. Submitting export job (after eval) ──"
+echo "── Phase 5: Export Artifacts ─────────────────────────────────"
 sbatch --parsable \
     --job-name="export-art" \
     --partition="${PARTITION}" \
@@ -128,18 +212,20 @@ sbatch --parsable \
     --output="${WORK_BASE}/logs/export_%j.out" \
     --dependency="afterok:${EVAL_JID}" \
     --wrap="
-mkdir -p ${ROOT}/eval_results ${ROOT}/slurm_logs
-cp -r ${WORK_BASE}/npc/slm_training/artifacts/* ${ROOT}/artifacts/ 2>/dev/null || true
-cp -r ${WORK_BASE}/logs/*.out ${ROOT}/slurm_logs/ 2>/dev/null || true
-cp -r ${WORK_BASE}/artifacts/eval_results.csv ${ROOT}/eval_results/ 2>/dev/null || true
-echo 'Artifacts exported to home dir'
+mkdir -p ${ROOT}/artifacts ${ROOT}/slurm_logs ${ROOT}/eval_results
+cp -rn ${REPO_LINK}/slm_training/artifacts/* ${ROOT}/artifacts/ 2>/dev/null || true
+cp -rn ${WORK_BASE}/logs/*.out ${ROOT}/slurm_logs/ 2>/dev/null || true
+cp -rn ${WORK_BASE}/logs/*.err ${ROOT}/slurm_logs/ 2>/dev/null || true
+cp ${WORK_BASE}/artifacts/eval_results.csv ${ROOT}/eval_results/ 2>/dev/null || true
+echo '✅ Artifacts exported to ~/llm_training/{artifacts,slurm_logs,eval_results}'
 "
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Training submitted!                                        ║"
+echo "║  Pipeline submitted:                                        ║"
+echo "║    preflight ✅ → 4× train → eval → auto-export             ║"
 echo "║                                                             ║"
 echo "║  Monitor:  squeue -u \$USER                                 ║"
-echo "║  Logs:     tail -f ${WORK_BASE}/logs/t_gpt_*.out            ║"
-echo "║  Export:   auto-exported to ~/llm_training/ after eval      ║"
+echo "║  Live log: tail -f ${WORK_BASE}/logs/t_gpt_*.out            ║"
+echo "║  Cancel:   scancel -u \$USER                                ║"
 echo "╚══════════════════════════════════════════════════════════════╝"

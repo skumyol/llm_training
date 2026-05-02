@@ -134,7 +134,7 @@ def encode_profiles(
                 max_length=512,
                 padding="max_length",
             )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            inputs = {k: v.to(device) for k, v in inputs.items() if k != "token_type_ids"}
             
             # Encode
             outputs = model(**inputs)

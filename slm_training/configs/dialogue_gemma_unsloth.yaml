@@ -1,5 +1,5 @@
 # ── Base model ──────────────────────────────────────────────────────────────
-base_model_name: unsloth/gemma-3-4b-it
+base_model_name: google/gemma-2-2b-it
 download_if_missing: true
 local_model_root: models
 
@@ -30,4 +30,4 @@ save_steps: 100
 max_eval_samples: 512
 
 # ── Output ──────────────────────────────────────────────────────────────────
-output_dir: artifacts/gemma_unsloth
+output_dir: artifacts/gemma2_2b

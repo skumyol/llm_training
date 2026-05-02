@@ -19,7 +19,10 @@ class EpisodicMemoryStore:
         self.embedder = SentenceTransformer(model_name)
         self.indices: Dict[str, faiss.IndexFlatIP] = {}
         self.items: Dict[str, List[MemoryItem]] = {}
-        self.dim = self.embedder.get_sentence_embedding_dimension()
+        try:
+            self.dim = self.embedder.get_embedding_dimension()
+        except AttributeError:
+            self.dim = self.embedder.get_sentence_embedding_dimension()
 
     def _ensure(self, npc_id: str) -> None:
         if npc_id not in self.indices:

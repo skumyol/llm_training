@@ -78,8 +78,11 @@ class ConditionalDialogueModel(nn.Module):
         labels: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         input_embeds = self.model.get_input_embeddings()(input_ids)
+        target_dtype = input_embeds.dtype
         prefix = self.prefix(cond_vec)
-        full_embeds = torch.cat([prefix.prefix_embeds, input_embeds], dim=1)
+        # Cast prefix embeddings to match model dtype (handles bfloat16/float16 models)
+        prefix_embeds = prefix.prefix_embeds.to(dtype=target_dtype)
+        full_embeds = torch.cat([prefix_embeds, input_embeds], dim=1)
         full_mask = torch.cat([prefix.prefix_mask, attention_mask], dim=1)
         out: Dict[str, torch.Tensor] = {
             "inputs_embeds": full_embeds,
@@ -87,7 +90,7 @@ class ConditionalDialogueModel(nn.Module):
         }
         if labels is not None:
             prefix_ignore = torch.full(
-                (labels.size(0), prefix.prefix_embeds.size(1)),
+                (labels.size(0), prefix_embeds.size(1)),
                 -100,
                 device=labels.device,
                 dtype=labels.dtype,
