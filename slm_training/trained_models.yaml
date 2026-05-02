@@ -1,0 +1,21 @@
+models:
+  gpt_baseline:
+    path: slm/npc_backend_scaffold/runs/gpt/gpt_best.pt
+    architecture: gpt
+    conditioning: none
+    status: existing_baseline
+    source: npc_backend_scaffold
+
+  prefix_gpt_ocean_vad:
+    path: slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt
+    architecture: prefix_gpt
+    conditioning: ocean_vad_8d
+    status: existing_baseline
+    source: npc_backend_scaffold
+
+  gru_baseline:
+    path: slm/npc_backend_scaffold/runs/gru/gru_best.pt
+    architecture: gru
+    conditioning: none
+    status: existing_baseline
+    source: npc_backend_scaffold

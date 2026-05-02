@@ -146,6 +146,9 @@ Standard decoder-only transformer with causal self-attention and 4× FFN expansi
    * - ``cond_dim``
      - 8
      - 8
+   * - ``condition_mode``
+     - ``ocean_vad``
+     - ``ocean_vad``
    * - Parameters
      - 16.6M
      - 53.3M
@@ -164,8 +167,14 @@ Standard decoder-only transformer with causal self-attention and 4× FFN expansi
            # Drop prefix positions from output
            logits = self.head(self.ln_f(h[:, P:, :]))
 
-Conditioning: ``cond_vec(8) = [OCEAN(5) | VAD(3)]`` projected through:
-``Linear(8→E) → Tanh → Linear(E→P·E) → reshape(B, P, E)``
+Conditioning modes:
+
+- ``ocean_vad``: current baseline, using the 8D OCEAN+VAD vector.
+- ``social_state``: text-derived proxy features in the scratch SLM runner, with the same prefix interface.
+- ``zero``: no conditioning signal.
+
+``cond_vec`` is projected through:
+``Linear(cond_dim→E) → Tanh → Linear(E→P·E) → reshape(B, P, E)``
 
 5. Mixture-of-Experts — TinyMoELM
 ------------------------------------

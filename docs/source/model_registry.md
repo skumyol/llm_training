@@ -207,6 +207,24 @@
 ### 2.3 Data
 
 
+### 2.4 Baseline Checkpoint Registry
+
+These are the repo-local baseline checkpoints referenced by the registry-backed evaluator.
+
+| Name | Architecture | Conditioning | Path |
+|------|--------------|--------------|------|
+| `gpt_baseline` | `gpt` | none | `slm/npc_backend_scaffold/runs/gpt/gpt_best.pt` |
+| `prefix_gpt_ocean_vad` | `prefix_gpt` | `ocean_vad_8d` | `slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt` |
+| `gru_baseline` | `gru` | none | `slm/npc_backend_scaffold/runs/gru/gru_best.pt` |
+
+Related tooling:
+
+- Registry file: `slm_training/trained_models.yaml`
+- Registry eval: `slm_training/scripts/eval_registered_small_lms.py`
+- Social-state probe: `slm_training/scripts/probe_social_state.py`
+
+The registry evaluator currently targets the GPT-like checkpoints (`gpt` and `prefix_gpt`); the GRU entry is kept in the registry for completeness.
+
 
 ## Part 3: Evaluation
 

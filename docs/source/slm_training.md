@@ -3,6 +3,8 @@ SLM Training from Scratch
 
 Trains small language models (5–50M parameters) for NPC dialogue without pre-trained LLMs.
 
+The repo also keeps a checkpoint registry for the existing baseline runs under `slm/npc_backend_scaffold/runs/`, plus registry-based evaluation and social-state probe scripts for the PrefixGPT baseline.
+
 Architecture Overview
 ---------------------
 
@@ -23,6 +25,7 @@ Architecture Overview
    │  ┌─────────────────────────────────────────────────────┐   │
    │  │  6 architectures × 2 hardware profiles × Optuna HPO   │   │
    │  │  cond_vec(8) → prefix injection / token embedding     │   │
+   │  │  condition_mode: ocean_vad | social_state | zero      │   │
    │  └─────────────────────────────────────────────────────┘   │
    │                                                              │
    │  Track C: Fine-Tuned LLMs (optional)                         │
@@ -242,6 +245,23 @@ TinyLlama + LoRA + Prefix
      - 192
    * - Effective batch
      - 16
+
+``social_state`` is wired as a text-derived proxy mode in the scratch runner, so the conditioning interface is already in place for richer labels later.
+
+Existing baselines and tooling
+------------------------------
+
+- Baseline checkpoints:
+  - `slm/npc_backend_scaffold/runs/gpt/gpt_best.pt`
+  - `slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt`
+- Registry file:
+  - `slm_training/trained_models.yaml`
+- Registry-based evaluation:
+  - `slm_training/scripts/eval_registered_small_lms.py`
+- Social-state probe:
+  - `slm_training/scripts/probe_social_state.py`
+
+The probe expects the labeled `train_heads.jsonl` / `val_heads.jsonl` splits produced by the latent-state pipeline, not the plain-text SLM corpus.
 
 Running Training
 -----------------

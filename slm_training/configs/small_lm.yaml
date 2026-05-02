@@ -24,6 +24,8 @@ eval_every_steps: 200   # mid-epoch eval frequency
 
 # ── Conditioning (prefix_gpt only) ───────────────────────────────────────────
 cond_dim: 8     # OCEAN(5) + VAD(3); zero-vector used during standalone training
+condition_mode: ocean_vad   # ocean_vad | social_state | zero
+init_from: null             # optional checkpoint path for partial warm-starts
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
 seed:       42

@@ -283,6 +283,7 @@ class PrefixGPTConfig:
     max_seq_len:   int   = 256
     prefix_length: int   = 8
     cond_dim:      int   = 8    # OCEAN(5) + VAD(3)
+    condition_mode: str   = "ocean_vad"
     tie_weights:   bool  = True
 
 
@@ -596,7 +597,7 @@ RECOMMENDED_CONFIGS = {
         "gru":        dict(vocab_size=50257, embed_dim=256,  hidden_size=512,  num_layers=3, dropout=0.3),
         "awdlstm":    dict(vocab_size=50257, embed_dim=256,  hidden_size=512,  num_layers=2, wdrop=0.5, dropout=0.4, dropouth=0.25, dropouti=0.4),
         "gpt":        dict(vocab_size=50257, n_embd=256, n_head=4, n_layer=4,  dropout=0.1, max_seq_len=256),
-        "prefix_gpt": dict(vocab_size=50257, n_embd=256, n_head=4, n_layer=4,  dropout=0.1, max_seq_len=256, prefix_length=8, cond_dim=8),
+        "prefix_gpt": dict(vocab_size=50257, n_embd=256, n_head=4, n_layer=4,  dropout=0.1, max_seq_len=256, prefix_length=8, cond_dim=8, condition_mode="ocean_vad"),
         "moe":        dict(vocab_size=50257, n_embd=256, n_head=4, n_layer=4,  num_experts=4, top_k=2, dropout=0.1, max_seq_len=256),
         "mamba_like": dict(vocab_size=50257, n_embd=256, n_layer=6, d_state=16, d_conv=4, expand=2, dropout=0.1, max_seq_len=256),
     },
@@ -605,7 +606,7 @@ RECOMMENDED_CONFIGS = {
         "gru":        dict(vocab_size=50257, embed_dim=512,  hidden_size=1024, num_layers=3, dropout=0.3),
         "awdlstm":    dict(vocab_size=50257, embed_dim=400,  hidden_size=1150, num_layers=3, wdrop=0.5, dropout=0.4, dropouth=0.25, dropouti=0.65),
         "gpt":        dict(vocab_size=50257, n_embd=512, n_head=8, n_layer=8,  dropout=0.1, max_seq_len=512),
-        "prefix_gpt": dict(vocab_size=50257, n_embd=512, n_head=8, n_layer=8,  dropout=0.1, max_seq_len=512, prefix_length=8, cond_dim=8),
+        "prefix_gpt": dict(vocab_size=50257, n_embd=512, n_head=8, n_layer=8,  dropout=0.1, max_seq_len=512, prefix_length=8, cond_dim=8, condition_mode="ocean_vad"),
         "moe":        dict(vocab_size=50257, n_embd=512, n_head=8, n_layer=8,  num_experts=8, top_k=2, dropout=0.1, max_seq_len=512),
         "mamba_like": dict(vocab_size=50257, n_embd=512, n_layer=12, d_state=16, d_conv=4, expand=2, dropout=0.1, max_seq_len=512),
     },

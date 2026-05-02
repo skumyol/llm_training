@@ -62,6 +62,7 @@ from small_lm_architectures import (
     build_model,
     select_device,
 )
+from conditioning import build_condition_vector, load_partial_state_dict
 from metrics_report import log_metrics_to_mlflow, write_metrics_bundle
 
 try:
@@ -95,6 +96,8 @@ DEFAULTS: Dict[str, Any] = {
     "seed":              42,
     "output_dir":        "artifacts/small_lm",
     "cond_dim":          8,    # OCEAN(5)+VAD(3); used by prefix_gpt only
+    "condition_mode":    "ocean_vad",  # ocean_vad | social_state | zero
+    "init_from":         None,
     "use_amp":           True,
     # Embedding model for semantic conditioning (A/B testing)
     "embedding_model":   None,  # e.g., "Qwen/Qwen3-Embedding-4B" or "sentence-transformers/all-MiniLM-L6-v2"
@@ -159,6 +162,7 @@ class EmbeddingExtractor:
         self.device = device
         self.cache_dir = cache_dir
         self.cache: Dict[str, torch.Tensor] = {}
+        self._disk_cache: Dict[str, torch.Tensor] = {}
 
         # Load model
         self.tokenizer = _AutoTok.from_pretrained(model_name, trust_remote_code=True)
@@ -283,8 +287,9 @@ def amp_ctx(device: torch.device, enabled: bool):
 def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
     cond_dim: int, use_amp: bool, max_batches: int = 200,
+    condition_mode: str = "ocean_vad",
     extractor: Optional[EmbeddingExtractor] = None,
-    text_samples: Optional[List[str]] = None,
+    tokenizer: Optional[Any] = None,
 ) -> Dict[str, float]:
     model.eval()
     losses = []
@@ -294,14 +299,15 @@ def evaluate(
         x, y = x.to(device), y.to(device)
         with amp_ctx(device, use_amp):
             if isinstance(model, PrefixTinyGPTLM):
-                if extractor is not None and text_samples is not None:
-                    # Semantic conditioning from embedding model
-                    batch_texts = text_samples[bi * x.size(0) : (bi + 1) * x.size(0)]
-                    embs = extractor.encode(batch_texts)
-                    cond = extractor.project_to_dim(embs, cond_dim)
-                else:
-                    # Baseline: zero conditioning
-                    cond = torch.zeros(x.size(0), cond_dim, device=device)
+                batch_texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))] if tokenizer is not None else [""] * x.size(0)
+                cond = build_condition_vector(
+                    batch_texts,
+                    condition_mode,
+                    cond_dim,
+                    extractor=extractor,
+                    tokenizer=tokenizer,
+                    device=device,
+                )
                 out  = model(x, cond, y)
             else:
                 out  = model(x, y)
@@ -325,6 +331,10 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     log.info(f"RUN      : {run_id}")
     log.info(f"ARCH     : {arch}")
     log.info(f"PROFILE  : {cfg['hardware_profile']}")
+    if arch == "prefix_gpt":
+        log.info(f"COND     : {cfg.get('condition_mode', 'ocean_vad')}")
+        if cfg.get("init_from"):
+            log.info(f"INIT     : {cfg.get('init_from')}")
     log.info("=" * 60)
     log.debug(f"Config:\n{json.dumps(cfg, indent=2)}")
 
@@ -376,16 +386,6 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             log.warning(f"Failed to load embedding model: {e}. Using zero conditioning.")
 
-    # Helper to get conditioning vectors from token windows
-    def get_cond(x: torch.Tensor, is_training: bool = True) -> torch.Tensor:
-        """Get conditioning vector: semantic if extractor available, else zeros."""
-        if extractor is None or not isinstance(model, PrefixTinyGPTLM):
-            return torch.zeros(x.size(0), cfg["cond_dim"], device=device)
-        # Decode tokens to text and extract embeddings
-        texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))]
-        embs = extractor.encode(texts)
-        return extractor.project_to_dim(embs, cfg["cond_dim"])
-
     # ── Model ─────────────────────────────────────────────────────────────────
     device  = select_device()
     profile = RECOMMENDED_CONFIGS.get(cfg["hardware_profile"], {})
@@ -395,6 +395,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         params["max_seq_len"] = cfg["seq_len"]
     if arch == "prefix_gpt":
         params["cond_dim"] = cfg["cond_dim"]
+        params["condition_mode"] = cfg.get("condition_mode", "ocean_vad")
     # Allow YAML (e.g. Optuna trials) to override any arch-specific param
     for k, v in cfg.get("arch_params", {}).items():
         params[k] = v
@@ -402,6 +403,18 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     model   = build_model(arch, params).to(device)
     total   = sum(p.numel() for p in model.parameters())
     log.info(f"Device: {device}  |  Parameters: {total:,} ({total/1e6:.1f} M)")
+
+    init_from = cfg.get("init_from")
+    if init_from and Path(str(init_from)).exists():
+        loaded, skipped = load_partial_state_dict(model, init_from, map_location=device)
+        log.info(
+            "Warm-start loaded from %s: %d tensors loaded, %d skipped",
+            init_from,
+            len(loaded),
+            len(skipped),
+        )
+        if skipped:
+            log.info("Skipped tensors include: %s", ", ".join(skipped[:8]))
 
     # Ensure numeric types (YAML may load as strings)
     lr = float(cfg["lr"])
@@ -458,8 +471,10 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "model": cfg.get("embedding_model"),
             "dim":   extractor.dim if extractor else None,
             "cond_dim": cfg["cond_dim"],
+            "condition_mode": cfg.get("condition_mode", "ocean_vad"),
             "enabled": extractor is not None,
         },
+        "init_from": cfg.get("init_from"),
         "epochs":      [],
         "best":        {},
     }
@@ -478,7 +493,15 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
             with amp_ctx(device, cfg["use_amp"]):
                 if isinstance(model, PrefixTinyGPTLM):
-                    cond = get_cond(x, is_training=True)
+                    texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))]
+                    cond = build_condition_vector(
+                        texts,
+                        cfg.get("condition_mode", "ocean_vad"),
+                        cfg["cond_dim"],
+                        extractor=extractor,
+                        tokenizer=tokenizer,
+                        device=device,
+                    )
                     out  = model(x, cond, y)
                 else:
                     out  = model(x, y)
@@ -515,14 +538,30 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     running_loss = 0.0; running_n = 0
 
                 if global_step % cfg["eval_every_steps"] == 0:
-                    vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"],
-                                  extractor=extractor)
+                    vm = evaluate(
+                        model,
+                        val_loader,
+                        device,
+                        cfg["cond_dim"],
+                        cfg["use_amp"],
+                        condition_mode=cfg.get("condition_mode", "ocean_vad"),
+                        extractor=extractor,
+                        tokenizer=tokenizer,
+                    )
                     log.info(f"  [eval] val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
                     model.train()
 
         # ── End-of-epoch validation ───────────────────────────────────────────
-        vm = evaluate(model, val_loader, device, cfg["cond_dim"], cfg["use_amp"],
-                      extractor=extractor)
+        vm = evaluate(
+            model,
+            val_loader,
+            device,
+            cfg["cond_dim"],
+            cfg["use_amp"],
+            condition_mode=cfg.get("condition_mode", "ocean_vad"),
+            extractor=extractor,
+            tokenizer=tokenizer,
+        )
         log.info(f"  epoch {epoch} end → val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
         epoch_writer.write({"epoch": epoch, **vm})
         summary["epochs"].append({"epoch": epoch, **vm})
@@ -593,6 +632,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--amp",              action="store_true", dest="use_amp")
     p.add_argument("--embedding-model",  type=str,   dest="embedding_model",
                    help="Pre-trained model for semantic conditioning (e.g., Qwen/Qwen3-Embedding-4B)")
+    p.add_argument("--condition-mode",   type=str,   dest="condition_mode",
+                   choices=["ocean_vad", "social_state", "zero"])
+    p.add_argument("--init-from",        type=str,   dest="init_from",
+                   help="Checkpoint path to warm-start from; compatible tensors are loaded.")
     return p.parse_args()
 
 

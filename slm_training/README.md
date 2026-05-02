@@ -2,6 +2,8 @@
 
 Trains small language models (5–50M parameters) from scratch for NPC dialogue — no pre-trained LLM required. Includes personality/affect encoders, a conditional dialogue model, and a benchmark suite of 6 architectures.
 
+The repo also keeps a small checkpoint registry for the existing baseline runs under `slm/npc_backend_scaffold/runs/`, plus a registry-based evaluator and a social-state probe script for the PrefixGPT baseline.
+
 ---
 
 ## Architecture Overview
@@ -23,6 +25,7 @@ Trains small language models (5–50M parameters) from scratch for NPC dialogue 
 │  ┌───────────────────────────────────────────────────┐         │
 │  │  6 architectures, 2 hardware profiles, Optuna HPO  │         │
 │  │  OCEAN(5) + VAD(3) = cond_vec(8)                  │         │
+│  │  condition_mode: ocean_vad | social_state | zero  │         │
 │  │  → Prefix injection / token embedding              │         │
 │  └───────────────────────────────────────────────────┘         │
 │                                                                  │
@@ -149,9 +152,12 @@ Token_Emb + Prefix_Emb + PosEmb → GPT Blocks → Linear(V)
 |-----------|-----------|-----------------|
 | prefix_length | 8 | 8 |
 | cond_dim (OCEAN+VAD) | 8 | 8 |
+| condition_mode | ocean_vad | ocean_vad |
 | Prefix projection | Linear→Tanh→Linear | Linear→Tanh→Linear |
 | Same GPT backbone as above | ✅ | ✅ |
 | params | 16.6M | 53.3M |
+
+`social_state` is available as a text-derived proxy mode in the scratch runner, so the conditioning path is already plumbed for richer signals later.
 
 #### 5. Mixture-of-Experts (`TinyMoELM`)
 ```
@@ -256,6 +262,25 @@ Conditional dialogue model with personality-driven soft-prefix.
 | Max source length | 768 |
 | Max target length | 192 |
 | Batch size (effective) | 16 (2 × 8 grad_accum) |
+
+---
+
+## Existing Checkpoints
+
+The current baseline checkpoints live under:
+
+- `slm/npc_backend_scaffold/runs/gpt/gpt_best.pt`
+- `slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt`
+- `slm/npc_backend_scaffold/runs/gru/gru_best.pt`
+
+The repo-local registry is `slm_training/trained_models.yaml`.
+
+Useful scripts:
+
+- `slm_training/scripts/eval_registered_small_lms.py`
+- `slm_training/scripts/probe_social_state.py`
+
+The probe expects the labeled `train_heads.jsonl` / `val_heads.jsonl` splits produced by the latent-state pipeline, not the plain-text SLM corpus.
 
 ---
 
