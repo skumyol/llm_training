@@ -47,7 +47,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
-PYTHON = sys.executable
+
+# Prefer virtual environment Python if available
+VENV_PYTHON = ROOT.parent / ".venv" / "bin" / "python3"
+if VENV_PYTHON.exists():
+    PYTHON = str(VENV_PYTHON)
+else:
+    PYTHON = sys.executable
 LOG = logging.getLogger("parallel_pipeline")
 
 ARCHS = ["gru", "awdlstm", "gpt", "prefix_gpt", "moe", "mamba_like"]
