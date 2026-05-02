@@ -42,8 +42,14 @@ os.environ['ACCELERATE_FP8'] = '0'
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src" / "train"))
+sys.path.insert(0, str(ROOT / "src" / "data"))
 
 from metrics_report import write_metrics_bundle
+from social_state_formatter import (
+    SocialStateFormatter,
+    SYSTEM_PROMPT_TEMPLATES,
+    format_chat_messages,
+)
 
 
 DEFAULTS: Dict[str, Any] = {
@@ -69,12 +75,11 @@ DEFAULTS: Dict[str, Any] = {
     "eval_steps": 100,
     "save_steps": 100,
     "seed": 42,
-    "output_dir": "artifacts/gemma3_4b",
-    "system_prompt_template": (
-        "You are roleplaying an NPC in a dialogue simulation. Stay in character, "
-        "reply naturally, and use the NPC profile below as a hard constraint.\n"
-        "NPC profile: {npc_profile}"
-    ),
+    "output_dir": "artifacts/gemma4",
+    # Conditioning mode: "none" (SFT only), "social_state_xml", "social_state_text", "social_state_json"
+    "conditioning_mode": "none",
+    "social_state_format": "xml",  # Format for social state serialization
+    "system_prompt_template": None,  # Will be set based on conditioning_mode
 }
 
 
@@ -139,11 +144,42 @@ def _load_records(path: str, limit: Optional[int] = None) -> List[Dict[str, Any]
     return rows
 
 
-def _to_messages(record: Dict[str, Any], system_prompt_template: str) -> List[Dict[str, str]]:
-    # Gemma 2 does not support system role — prepend profile to first user turn
-    profile_text = system_prompt_template.format(npc_profile=record["npc_profile"])
-    messages: List[Dict[str, str]] = []
-    first_user = True
+def _to_messages(
+    record: Dict[str, Any],
+    cfg: Dict[str, Any],
+    formatter: Optional[SocialStateFormatter] = None,
+) -> List[Dict[str, str]]:
+    """Convert record to chat messages with optional social state conditioning."""
+    mode = cfg.get("conditioning_mode", "none")
+    
+    # Use social state formatter if conditioning is enabled
+    if mode != "none" and formatter is not None:
+        # Determine format from mode (e.g., "social_state_xml" -> "xml")
+        fmt = mode.replace("social_state_", "") if "social_state_" in mode else "xml"
+        if fmt not in ["xml", "json", "text", "yaml"]:
+            fmt = "xml"
+        formatter = SocialStateFormatter(format=fmt)
+        
+        messages = format_chat_messages(
+            npc_profile=record["npc_profile"],
+            dialogue_context=record.get("dialogue_context", []),
+            metadata=record.get("metadata", {}),
+            system_template=mode,
+            formatter=formatter,
+        )
+        # Append target response as the final assistant message
+        messages.append({
+            "role": "assistant",
+            "content": str(record.get("target_response", "")).strip(),
+        })
+        return messages
+    
+    # Default SFT-only mode (no social state)
+    template = cfg.get("system_prompt_template") or SYSTEM_PROMPT_TEMPLATES["none"]
+    messages: List[Dict[str, str]] = [{
+        "role": "system",
+        "content": template.format(npc_profile=record["npc_profile"]),
+    }]
     for turn in record.get("dialogue_context", []):
         speaker = turn.get("speaker")
         if speaker not in {"player", "npc"}:
@@ -265,10 +301,16 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
     except ImportError as exc:
         raise RuntimeError("datasets is required for Gemma 4 training") from exc
 
+    # Initialize formatter if social state conditioning is enabled
+    formatter = None
+    if cfg.get("conditioning_mode", "none") != "none":
+        fmt = cfg.get("social_state_format", "xml")
+        formatter = SocialStateFormatter(format=fmt)
+
     rows: List[Dict[str, str]] = []
     for record in records:
         text = tokenizer.apply_chat_template(
-            _to_messages(record, cfg["system_prompt_template"]),
+            _to_messages(record, cfg, formatter),
             tokenize=False,
             add_generation_prompt=False,
         ).removeprefix("<bos>")
