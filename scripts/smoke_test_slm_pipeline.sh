@@ -1,0 +1,1 @@
+/home/serkan/llm_training/slm_training/smoke_test_full_pipeline.sh
