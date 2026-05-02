@@ -63,3 +63,7 @@ slm_training/IMPROVEMENT_PLAN.md
 docs/archive/
 docs/_build/
 sshpass
+slurm_logs
+artifacts/
+slm_training/smoke_artifacts/
+.gitignore

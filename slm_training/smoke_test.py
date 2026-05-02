@@ -218,7 +218,7 @@ def train_affect() -> None:
 # =============================================================================
 
 def build_personality_cache() -> None:
-    from src.data.build_caches import build_personality_cache as _build
+    from src.data.build_caches import encode_profiles as _build
 
     _build(
         profiles_path=str(DATA_DIR / "npc_profiles.csv"),
@@ -280,7 +280,7 @@ def smoke_inference() -> None:
     state_path = ARTS_DIR / "affect_encoder" / "pytorch_model.bin"
     affect_enc.load_state_dict(torch.load(state_path, map_location=device), strict=False)
     affect_enc.eval()
-    affect_tok = AutoTokenizer.from_pretrained(str(ARTS_DIR / "affect_encoder"))
+    affect_tok = AutoTokenizer.from_pretrained("distilbert-base-uncased")
 
     # ── Personality cache ─────────────────────────────────────────────────────
     p_cache = PersonalityCache(str(ARTS_DIR / "personality_cache.jsonl"))

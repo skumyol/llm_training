@@ -123,23 +123,27 @@ case "${SYSTEM}_${STAGE}" in
             --config "llm_finetuning/configs/train_${STAGE}.yaml" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
-    # --- SLM stages ---
+    # --- SLM stages (cd into slm_training for relative data paths) ---
     slm_personality)
+        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_personality --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_affect)
+        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_affect --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_small_lm)
+        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_small_lm --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
     slm_dialogue)
+        cd "${REPO_DIR}/slm_training"
         export PYTHONPATH="${REPO_DIR}/slm_training"
         python -m src.train.run_dialogue --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
