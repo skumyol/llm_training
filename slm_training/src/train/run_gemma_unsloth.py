@@ -54,7 +54,7 @@ from social_state_formatter import (
 
 DEFAULTS: Dict[str, Any] = {
     # Gemma 4 models: E2B (~2B active), E4B (~4B active)
-    "base_model_name": "google/gemma-2-2b-it",  # 2B instruction-tuned baseline
+    "base_model_name": "google/gemma-4-E2B",  # 2B instruction-tuned baseline
     "download_if_missing": True,
     "local_model_root": "models",
     "train_path": "data/dialogue/from_gen_train.jsonl",
@@ -174,22 +174,28 @@ def _to_messages(
         })
         return messages
     
-    # Default SFT-only mode (no social state) — no system role (Gemma 2 compatible)
-    profile_text = record.get("npc_profile", "").replace("{", "{{").replace("}", "}}")
-    messages: List[Dict[str, str]] = []
-    first_user = True
+    # Default SFT-only mode (no social state)
+    template = cfg.get("system_prompt_template") or SYSTEM_PROMPT_TEMPLATES["none"]
+    # The "none" template uses {npc_profile}, social_state templates use {context}
+    if "{npc_profile}" in template:
+        system_content = template.format(npc_profile=record["npc_profile"])
+    elif "{context}" in template:
+        # Fallback: treat npc_profile as the full context
+        system_content = template.format(context=record["npc_profile"])
+    else:
+        system_content = template
+    messages: List[Dict[str, str]] = [{
+        "role": "system",
+        "content": system_content,
+    }]
     for turn in record.get("dialogue_context", []):
         speaker = turn.get("speaker")
         if speaker not in {"player", "npc"}:
             continue
-        role = "user" if speaker == "player" else "assistant"
-        content = str(turn.get("text", "")).strip()
-        if first_user and role == "user":
-            content = profile_text + "\n\n" + content
-            first_user = False
-        messages.append({"role": role, "content": content})
-    if first_user:
-        messages.append({"role": "user", "content": profile_text})
+        messages.append({
+            "role": "user" if speaker == "player" else "assistant",
+            "content": str(turn.get("text", "")).strip(),
+        })
     messages.append({
         "role": "assistant",
         "content": str(record.get("target_response", "")).strip(),
@@ -268,6 +274,9 @@ def _load_gemma_components(cfg: Dict[str, Any], model_path: str, log: logging.Lo
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Set default chat template for Gemma 4 (tokenizer doesn't ship with one)
+    if not tokenizer.chat_template:
+        tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ '<start_of_turn>user\n' + message['content'] + '<end_of_turn>\n' }}{% elif message['role'] == 'assistant' %}{{ '<start_of_turn>model\n' + message['content'] + '<end_of_turn>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<start_of_turn>model\n' }}{% endif %}"
     
     # Prepare for LoRA
     model = prepare_model_for_kbit_training(model)
@@ -276,8 +285,7 @@ def _load_gemma_components(cfg: Dict[str, Any], model_path: str, log: logging.Lo
     lora_config = LoraConfig(
         r=cfg["lora_r"],
         lora_alpha=cfg["lora_alpha"],
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
-                      "gate_proj", "up_proj", "down_proj"],
+        target_modules="all-linear", 
         lora_dropout=cfg["lora_dropout"],
         bias="none",
         task_type="CAUSAL_LM",
@@ -312,7 +320,7 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
             add_generation_prompt=False,
         ).removeprefix("<bos>")
         rows.append({"text": text})
-    return rows  # Return plain list; SFTTrainer accepts list of dicts
+    return Dataset.from_list(rows)
 
 
 def _safe_ppl(loss_value: Optional[float]) -> Optional[float]:
@@ -372,7 +380,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         processing_class=tokenizer,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        dataset_text_field="text",
+        formatting_func=lambda example: example["text"],
         args=SFTConfig(
             output_dir=str(out_dir / "checkpoints"),
             per_device_train_batch_size=cfg["per_device_train_batch_size"],
@@ -392,7 +400,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
             fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
             optim="adamw_8bit",
-            max_length=cfg["max_seq_length"],
+            max_seq_length=cfg["max_seq_length"],
         ),
     )
 

@@ -1,5 +1,5 @@
 # ── Base model ──────────────────────────────────────────────────────────────
-base_model_name: google/gemma-2-2b-it
+base_model_name: google/gemma-4-E2B
 download_if_missing: true
 local_model_root: models
 
