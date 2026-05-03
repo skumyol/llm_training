@@ -1,0 +1,43 @@
+# =============================================================================
+# Gemma 4 E2B - SFT Only Baseline (No Social State)
+# =============================================================================
+# Standard supervised fine-tuning without explicit social state conditioning.
+# This is the baseline for comparing against social state conditioned models.
+
+# ── Base model ──────────────────────────────────────────────────────────────
+base_model_name: google/gemma-4-E2B  # ~2B active params, 16B total MoE
+download_if_missing: true
+local_model_root: models
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+train_path: data/dialogue/from_gen_train.jsonl
+val_path: data/dialogue/from_gen_val.jsonl
+
+# ── Conditioning ──────────────────────────────────────────────────────────────
+conditioning_mode: none  # SFT only, no social state injection
+social_state_format: xml  # Not used when mode is "none"
+
+# ── Sequence / batch ──────────────────────────────────────────────────────────
+max_seq_length: 2048
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8  # Effective batch = 8
+
+# ── Optimisation ──────────────────────────────────────────────────────────────
+learning_rate: 2.0e-4
+weight_decay: 0.01
+warmup_steps: 20
+epochs: 3
+
+# ── LoRA ──────────────────────────────────────────────────────────────────────
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0.0
+
+# ── Logging / eval ───────────────────────────────────────────────────────────
+logging_steps: 10
+eval_steps: 100
+save_steps: 100
+max_eval_samples: 512
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output_dir: artifacts/gemma4_sft

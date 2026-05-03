@@ -13,8 +13,8 @@ Supports multiple serialization formats for social state conditioning:
 Usage:
     from social_state_formatter import SocialStateFormatter
     
-    formatter = SocialStateFormatter(format="xml")
-    state_text = formatter.format({
+    formatter = SocialStateFormatter(format_type="xml")
+    state_text = formatter.format_state({
         "scenario_type": "secret_extraction",
         "response_policy": "deflect",
         "reveal_decision": "none",
@@ -84,13 +84,13 @@ class SocialState:
 class SocialStateFormatter:
     """Format social state for prompt injection."""
     
-    def __init__(self, format: str = "xml", include_descriptions: bool = True):
+    def __init__(self, format_type: str = "xml", include_descriptions: bool = True):
         """
         Args:
-            format: Output format - "xml", "json", "text", or "yaml"
+            format_type: Output format - "xml", "json", "text", or "yaml"
             include_descriptions: Include human-readable descriptions
         """
-        self.format = format.lower()
+        self.format_type = format_type.lower()
         self.include_descriptions = include_descriptions
         
         # Policy descriptions for human readability
@@ -111,20 +111,20 @@ class SocialStateFormatter:
             "full": "Reveal complete information",
         }
     
-    def format(self, metadata: Dict[str, Any]) -> str:
+    def format_state(self, metadata: Dict[str, Any]) -> str:
         """Format social state from metadata dict."""
         state = SocialState.from_metadata(metadata)
         
-        if self.format == "xml":
+        if self.format_type == "xml":
             return self._format_xml(state)
-        elif self.format == "json":
+        elif self.format_type == "json":
             return self._format_json(state)
-        elif self.format == "text":
+        elif self.format_type == "text":
             return self._format_text(state)
-        elif self.format == "yaml":
+        elif self.format_type == "yaml":
             return self._format_yaml(state)
         else:
-            raise ValueError(f"Unknown format: {self.format}")
+            raise ValueError(f"Unknown format: {self.format_type}")
     
     def _format_xml(self, state: SocialState) -> str:
         """Format as XML tags."""
@@ -225,7 +225,7 @@ def build_conditioned_prompt(
     # Social State section (conditional)
     if include_social_state:
         parts.append("")
-        parts.append(formatter.format(metadata))
+        parts.append(formatter.format_state(metadata))
     
     # Dialogue History section
     parts.append("")
@@ -240,11 +240,13 @@ def build_conditioned_prompt(
 
 
 # Template prompts for different conditioning modes
+# Templates with {npc_profile} are for SFT-only mode
+# Templates with {context} are for social state modes (context includes profile + social state)
 SYSTEM_PROMPT_TEMPLATES = {
     "none": (
         "You are roleplaying an NPC in a dialogue simulation. Stay in character, "
         "reply naturally, and use the NPC profile below as a hard constraint.\n\n"
-        "{context}"
+        "NPC Profile: {npc_profile}"
     ),
     
     "social_state_xml": (
@@ -263,6 +265,12 @@ SYSTEM_PROMPT_TEMPLATES = {
     "social_state_json": (
         "You are roleplaying an NPC in a dialogue simulation. "
         "Use the JSON social state to guide your response.\n\n"
+        "{context}"
+    ),
+    
+    "social_state_yaml": (
+        "You are roleplaying an NPC in a dialogue simulation. "
+        "Use the YAML social state to guide your response.\n\n"
         "{context}"
     ),
 }

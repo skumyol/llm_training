@@ -158,7 +158,7 @@ def _to_messages(
         fmt = mode.replace("social_state_", "") if "social_state_" in mode else "xml"
         if fmt not in ["xml", "json", "text", "yaml"]:
             fmt = "xml"
-        formatter = SocialStateFormatter(format=fmt)
+        formatter = SocialStateFormatter(format_type=fmt)
         
         messages = format_chat_messages(
             npc_profile=record["npc_profile"],
@@ -176,23 +176,26 @@ def _to_messages(
     
     # Default SFT-only mode (no social state)
     template = cfg.get("system_prompt_template") or SYSTEM_PROMPT_TEMPLATES["none"]
+    # The "none" template uses {npc_profile}, social_state templates use {context}
+    if "{npc_profile}" in template:
+        system_content = template.format(npc_profile=record["npc_profile"])
+    elif "{context}" in template:
+        # Fallback: treat npc_profile as the full context
+        system_content = template.format(context=record["npc_profile"])
+    else:
+        system_content = template
     messages: List[Dict[str, str]] = [{
         "role": "system",
-        "content": template.format(npc_profile=record["npc_profile"]),
+        "content": system_content,
     }]
     for turn in record.get("dialogue_context", []):
         speaker = turn.get("speaker")
         if speaker not in {"player", "npc"}:
             continue
-        role = "user" if speaker == "player" else "assistant"
-        content = str(turn.get("text", "")).strip()
-        if first_user and role == "user":
-            content = profile_text + "\n\n" + content
-            first_user = False
-        messages.append({"role": role, "content": content})
-    # If no user turn exists, add profile as standalone user message
-    if first_user:
-        messages.append({"role": "user", "content": profile_text})
+        messages.append({
+            "role": "user" if speaker == "player" else "assistant",
+            "content": str(turn.get("text", "")).strip(),
+        })
     messages.append({
         "role": "assistant",
         "content": str(record.get("target_response", "")).strip(),
@@ -305,7 +308,7 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
     formatter = None
     if cfg.get("conditioning_mode", "none") != "none":
         fmt = cfg.get("social_state_format", "xml")
-        formatter = SocialStateFormatter(format=fmt)
+        formatter = SocialStateFormatter(format_type=fmt)
 
     rows: List[Dict[str, str]] = []
     for record in records:
@@ -489,6 +492,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-steps", type=int, dest="eval_steps")
     p.add_argument("--save-steps", type=int, dest="save_steps")
     p.add_argument("--seed", type=int)
+    # Social state conditioning arguments
+    p.add_argument(
+        "--conditioning-mode",
+        type=str,
+        dest="conditioning_mode",
+        choices=["none", "social_state_xml", "social_state_text", "social_state_json", "social_state_yaml"],
+        help="Conditioning mode: none (SFT only), or social_state_* for social state injection",
+    )
+    p.add_argument(
+        "--social-state-format",
+        type=str,
+        dest="social_state_format",
+        choices=["xml", "json", "text", "yaml"],
+        help="Format for social state serialization (default: xml)",
+    )
     return p.parse_args()
 
 

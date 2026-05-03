@@ -1,0 +1,63 @@
+# =============================================================================
+# Gemma 4 E2B - Social State Conditioning (Gold Z_t)
+# =============================================================================
+# Fine-tunes Gemma 4 with explicit social state metadata injected into prompts.
+# This is the main baseline for testing whether social state conditioning
+# improves response quality, policy adherence, and information leakage control.
+#
+# Social state includes:
+#   - scenario_type: secret_extraction, trust_building, etc.
+#   - response_policy: deflect, clarify, soothe, threaten, test, evade, reveal, negotiate
+#   - reveal_decision: none, partial, full
+#   - valence: negative, neutral, positive
+#   - arousal: low, medium, high
+#
+# Compare against:
+#   - configs/dialogue_gemma4_sft.yaml (SFT-only, no social state)
+#   - Qwen3-4B 29-head predictor (full structured state)
+#   - SocialPrefixGPT (compact deployable model)
+
+# ── Base model ──────────────────────────────────────────────────────────────
+base_model_name: google/gemma-4-E2B  # ~2B active params, 16B total MoE
+download_if_missing: true
+local_model_root: models
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+train_path: data/dialogue/from_gen_train.jsonl
+val_path: data/dialogue/from_gen_val.jsonl
+
+# ── Conditioning ────────────────────────────────────────────────────────────
+# Mode options: none, social_state_xml, social_state_text, social_state_json, social_state_yaml
+conditioning_mode: social_state_xml
+
+# Format for social state serialization within the prompt
+# xml:  Structured XML tags (best for instruction-tuned models)
+# text: Plain text descriptions
+# json: JSON object
+# yaml: YAML frontmatter
+social_state_format: xml
+
+# ── Sequence / batch ──────────────────────────────────────────────────────────
+max_seq_length: 2048
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8  # Effective batch = 8
+
+# ── Optimisation ──────────────────────────────────────────────────────────────
+learning_rate: 2.0e-4
+weight_decay: 0.01
+warmup_steps: 20
+epochs: 3
+
+# ── LoRA ──────────────────────────────────────────────────────────────────────
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0.0
+
+# ── Logging / eval ───────────────────────────────────────────────────────────
+logging_steps: 10
+eval_steps: 100
+save_steps: 100
+max_eval_samples: 512
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output_dir: artifacts/gemma4_social_state
