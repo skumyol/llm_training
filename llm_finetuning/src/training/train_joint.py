@@ -135,6 +135,7 @@ def train_joint(config_path: str, debug: bool = False) -> None:
     output_dir = Path(cfg["output"]["checkpoint_dir"])
     best_dir   = Path(cfg["output"]["best_model_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    best_dir.mkdir(parents=True, exist_ok=True)
 
     run_name = cfg["mlflow"].get("run_name", "joint_train")
 

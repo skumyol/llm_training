@@ -174,28 +174,22 @@ def _to_messages(
         })
         return messages
     
-    # Default SFT-only mode (no social state)
-    template = cfg.get("system_prompt_template") or SYSTEM_PROMPT_TEMPLATES["none"]
-    # The "none" template uses {npc_profile}, social_state templates use {context}
-    if "{npc_profile}" in template:
-        system_content = template.format(npc_profile=record["npc_profile"])
-    elif "{context}" in template:
-        # Fallback: treat npc_profile as the full context
-        system_content = template.format(context=record["npc_profile"])
-    else:
-        system_content = template
-    messages: List[Dict[str, str]] = [{
-        "role": "system",
-        "content": system_content,
-    }]
+    # Default SFT-only mode (no social state) — no system role (Gemma 2 compatible)
+    profile_text = record.get("npc_profile", "").replace("{", "{{").replace("}", "}}")
+    messages: List[Dict[str, str]] = []
+    first_user = True
     for turn in record.get("dialogue_context", []):
         speaker = turn.get("speaker")
         if speaker not in {"player", "npc"}:
             continue
-        messages.append({
-            "role": "user" if speaker == "player" else "assistant",
-            "content": str(turn.get("text", "")).strip(),
-        })
+        role = "user" if speaker == "player" else "assistant"
+        content = str(turn.get("text", "")).strip()
+        if first_user and role == "user":
+            content = profile_text + "\n\n" + content
+            first_user = False
+        messages.append({"role": role, "content": content})
+    if first_user:
+        messages.append({"role": "user", "content": profile_text})
     messages.append({
         "role": "assistant",
         "content": str(record.get("target_response", "")).strip(),
@@ -398,7 +392,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
             fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
             optim="adamw_8bit",
-            max_seq_length=cfg["max_seq_length"],
+            max_length=cfg["max_seq_length"],
         ),
     )
 
