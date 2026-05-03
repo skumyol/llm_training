@@ -312,7 +312,7 @@ def _build_dataset(records: Iterable[Dict[str, Any]], tokenizer, cfg: Dict[str, 
             add_generation_prompt=False,
         ).removeprefix("<bos>")
         rows.append({"text": text})
-    return Dataset.from_list(rows)
+    return rows  # Return plain list; SFTTrainer accepts list of dicts
 
 
 def _safe_ppl(loss_value: Optional[float]) -> Optional[float]:
@@ -369,7 +369,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         dataset_text_field="text",

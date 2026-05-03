@@ -48,7 +48,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src" / "train"))
 
 from src.common.config import DialogueTrainConfig
-from src.data.datasets import DialogueJsonlDataset
+from src.data.dialogue_data import DialogueJsonlDataset
 from src.infer.memory_store import EpisodicMemoryStore
 from src.models.dialogue import ConditionalDialogueModel
 from src.train.train_dialogue import DialogueBatch, DialogueCollator

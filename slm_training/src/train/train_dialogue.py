@@ -10,7 +10,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from src.common.config import DialogueTrainConfig, ensure_dir
-from src.data.datasets import DialogueExample, DialogueJsonlDataset, PersonalityCache
+from src.data.dialogue_data import DialogueExample, DialogueJsonlDataset, PersonalityCache
 from src.infer.memory_store import EpisodicMemoryStore
 from src.models.affect import DistilBertRegressor
 from src.models.dialogue import ConditionalDialogueModel

@@ -9,7 +9,7 @@ import torch
 from transformers import AutoTokenizer
 
 from src.common.config import InferenceConfig
-from src.data.datasets import PersonalityCache
+from src.data.dialogue_data import PersonalityCache
 from src.infer.memory_store import EpisodicMemoryStore
 from src.models.affect import DistilBertRegressor
 from src.models.dialogue import ConditionalDialogueModel

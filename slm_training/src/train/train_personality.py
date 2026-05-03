@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.common.config import PersonalityTrainConfig, ensure_dir
-from src.data.datasets import RegressionTextDataset
+from src.data.dialogue_data import RegressionTextDataset
 from src.models.personality import DistilBertRegressor
 
 

@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src" / "train"))
 
-from src.data.datasets import RegressionTextDataset
+from src.data.dialogue_data import RegressionTextDataset
 from src.models.personality import DistilBertRegressor
 from metrics_report import write_metrics_bundle
 
