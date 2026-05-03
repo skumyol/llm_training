@@ -379,7 +379,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         model=model,
         processing_class=tokenizer,
         train_dataset=train_ds,
-        eval_dataset=val_ds,
+        eval_dataset=val_ds.select(range(min(20, len(val_ds)))),
         formatting_func=lambda example: example["text"],
         args=SFTConfig(
             output_dir=str(out_dir / "checkpoints"),
@@ -400,7 +400,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
             fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
             optim="adamw_8bit",
-            max_seq_length=cfg["max_seq_length"],
+            max_length=cfg["max_seq_length"],
         ),
     )
 
