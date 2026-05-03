@@ -19,7 +19,7 @@ training:
   lr_scheduler: cosine
   warmup_ratio: 0.05
   epochs: 3
-  max_seq_len: 1024
+  max_seq_len: 2048
   batch_size: 1
   grad_accum: 32
   gradient_checkpointing: true
