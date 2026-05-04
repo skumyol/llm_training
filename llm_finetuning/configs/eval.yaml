@@ -11,7 +11,7 @@ data:
   test_sft_file: data/splits/val_sft.jsonl
   test_trace_file: data/splits/val_trace.jsonl
 
-base_model: Qwen/Qwen3-0.6B
+base_model: Qwen/Qwen3-1.7B
 quantization: null
 torch_dtype: float32
 latent_predictor_checkpoint: checkpoints/latent_predictor_best

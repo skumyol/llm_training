@@ -1,0 +1,211 @@
+# Model Registry — All 12 trained models with checkpoints and metrics
+# Updated: 2026-05-03 — Full pipeline complete
+
+models:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Track A: From-Scratch SLMs (15-16M params)
+  # ═══════════════════════════════════════════════════════════════════════
+  - name: GPT
+    track: A
+    type: from-scratch SLM
+    params: 16.1M
+    best_metric: val_ppl=45.32
+    best_epoch: 20
+    checkpoint: artifacts/small_lm/slurm_816183_slm_small_lm_20260502_170210
+    status: complete
+    exit_code: 0
+
+  - name: PrefixGPT
+    track: A
+    type: from-scratch SLM
+    params: 16.6M
+    conditioning: OCEAN + VAD prefix
+    best_metric: val_ppl=44.54
+    best_epoch: 20
+    checkpoint: artifacts/small_lm/slurm_816185_slm_small_lm_20260502_170217
+    status: complete
+    exit_code: 0
+
+  - name: MoE
+    track: A
+    type: from-scratch SLM
+    params: 22.4M
+    architecture: Mixture-of-Experts (4 experts, top-2 routing)
+    best_metric: val_ppl=42.07
+    best_epoch: 20
+    checkpoint: artifacts/small_lm/slurm_816186_slm_small_lm_20260502_170219
+    status: complete
+    exit_code: 0
+    notes: Best from-scratch architecture (7.2% over GPT)
+
+  - name: Mamba-like
+    track: A
+    type: from-scratch SLM
+    params: 15.4M
+    architecture: State-space model (selective scan)
+    best_metric: val_ppl=53.25
+    best_epoch: 10
+    checkpoint: artifacts/small_lm/slurm_816184_slm_small_lm_20260502_170213
+    status: complete
+    exit_code: 0
+    notes: Converges fastest but plateaus higher
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Track B: Conditioning Encoders (66M DistilBERT)
+  # ═══════════════════════════════════════════════════════════════════════
+  - name: Personality Encoder
+    track: B
+    type: encoder
+    backbone: distilbert-base-uncased
+    params: 66M
+    task: OCEAN regression (5 dimensions)
+    best_metric: val_f1=0.678
+    best_epoch: 4
+    secondary_metrics:
+      val_acc: 0.523
+      val_mse: 0.248
+    checkpoint: artifacts/personality_encoder/slurm_816218_slm_personality_20260502_171023/best_model
+    status: complete
+    exit_code: 0
+
+  - name: Affect Encoder
+    track: B
+    type: encoder
+    backbone: distilbert-base-uncased
+    params: 66M
+    task: VAD regression (3 dimensions)
+    best_metric: val_ccc=0.559
+    best_epoch: 13
+    secondary_metrics:
+      val_mse: 0.005
+    checkpoint: artifacts/affect_encoder/slurm_816219_slm_affect_20260502_171023/best_model
+    status: complete
+    exit_code: 0
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Track C: Response Generation (1.1B-5.1B params)
+  # ═══════════════════════════════════════════════════════════════════════
+  - name: ConditionalDialogue
+    track: C
+    type: conditioned response generator
+    backbone: TinyLlama-1.1B
+    conditioning: OCEAN + VAD soft-prefix
+    lora: r=8, alpha=16
+    best_metric: val_ppl=2.90
+    best_epoch: 2
+    best_val_loss: 1.064
+    checkpoint: artifacts/dialogue_model/slurm_816490_slm_dialogue_20260502_192607/best_model
+    requires:
+      - personality_cache.jsonl
+      - affect_encoder/best_model
+    status: complete
+    exit_code: 0
+    notes: 12.3% perplexity reduction over TinyLlama SFT
+
+  - name: TinyLlama 1.1B + LoRA
+    track: C
+    type: pretrained LLM SFT baseline
+    backbone: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    params: 1.1B (20.7M trainable via LoRA)
+    best_metric: val_ppl=3.30
+    best_epoch: 1
+    best_val_loss: 1.195
+    checkpoint: artifacts/tinyllama_lora
+    status: complete
+    exit_code: 0
+    notes: Standard SFT baseline (no social state)
+
+  - name: Gemma-2-2B-it + QLoRA
+    track: C
+    type: pretrained LLM baseline
+    backbone: google/gemma-2-2b-it
+    params: 1.6B total (20.8M trainable via LoRA)
+    quantization: 4-bit nf4 QLoRA
+    best_metric: val_ppl=6.38
+    best_epoch: 2
+    best_val_loss: 1.854
+    checkpoint: artifacts/gemma2_2b/gemma4_20260503_102545
+    status: complete
+    exit_code: 0
+    notes: |
+      Fixed Gemma baseline, 2 epochs on 500 train / 115 validation samples.
+      Requires: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      Requires: HF_TOKEN for gated model access
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Track D: Structured LLM Pipeline (Qwen3-1.7B debug)
+  # ═══════════════════════════════════════════════════════════════════════
+  - name: Qwen3 Latent Predictor
+    track: D
+    stage: 1
+    backbone: Qwen3-1.7B (debug mode)
+    heads: 29 classification targets
+    lora: 4-bit QLoRA
+    best_metric: response_policy_f1=0.448
+    best_epoch: 2
+    secondary_metrics:
+      mean_accuracy: 0.703
+      response_policy_f1_independent_eval: 0.512
+      trust_delta_f1: 0.448
+    checkpoint: checkpoints/latent_predictor_best
+    status: complete
+    exit_code: 0
+    epochs_trained: 5 (best response-policy F1 at epoch 2; mean accuracy peaks at epoch 4)
+
+  - name: Qwen3 Response Generator
+    track: D
+    stage: 2
+    backbone: Qwen3-1.7B (debug mode)
+    task: SFT response generation
+    lora: 4-bit QLoRA
+    best_metric: val_loss=0.037
+    best_epoch: 3
+    best_val_loss: 0.044
+    checkpoint: checkpoints/response_generator_best
+    status: complete
+    exit_code: 0
+    notes: |
+      Fixed max_seq_len 1024→2048 to prevent NaN from truncated labels
+      Uses data/splits/train_sft.jsonl and val_sft.jsonl
+
+  - name: Qwen3 Joint Model
+    track: D
+    stage: 3
+    backbone: Qwen3-1.7B (debug mode)
+    task: Joint latent prediction + response generation
+    lora: 4-bit QLoRA
+    epochs: 3
+    best_metric: val_joint_loss=6.468
+    checkpoint: checkpoints/joint_model_best
+    status: complete
+    exit_code: 0
+    notes: |
+      Combines latent predictor and response generator
+      Trains both objectives simultaneously
+      All 3 checkpoints saved: latent_predictor_best, response_generator_best, joint_model_best
+      Trained, but not yet independently evaluated for generation or per-head metrics.
+
+# ═══════════════════════════════════════════════════════════════════════
+# Summary
+# ═══════════════════════════════════════════════════════════════════════
+summary:
+  total_models: 12
+  complete: 12
+  failed: 0
+  tracks:
+    A:
+      models: 4
+      best: MoE (val_ppl=42.07)
+    B:
+      models: 2
+      personality_cache: 414 NPCs
+    C:
+      models: 3
+      best: ConditionalDialogue (val_ppl=2.90)
+    D:
+      models: 3
+      pipeline: latent → response → joint
+      checkpoints:
+        - checkpoints/latent_predictor_best
+        - checkpoints/response_generator_best
+        - checkpoints/joint_model_best
