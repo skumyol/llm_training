@@ -57,6 +57,7 @@ class DialogueTrainConfig:
     epochs: int = 1
     output_dir: str = "artifacts/dialogue_model"
     memory_top_k: int = 3
+    randomize_vad: bool = False
 
 
 @dataclass

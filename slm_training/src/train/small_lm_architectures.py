@@ -34,6 +34,7 @@ import torch.nn.functional as F
 class LMOutput:
     loss:   Optional[torch.Tensor]
     logits: torch.Tensor
+    hidden_states: Optional[torch.Tensor] = None  # last-layer hidden, before head
 
 
 def select_device() -> torch.device:
@@ -256,17 +257,18 @@ class TinyGPTLM(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None) -> LMOutput:
+    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None, return_hidden: bool = False) -> LMOutput:
         B, T = x.shape
         pos    = torch.arange(T, device=x.device)
         h      = self.drop(self.tok_emb(x) + self.pos_emb(pos))
         for block in self.blocks:
             h  = block(h)
-        logits = self.head(self.ln_f(h))
+        hidden = self.ln_f(h)
+        logits = self.head(hidden)
         loss   = None
         if targets is not None:
             loss = F.cross_entropy(logits.reshape(-1, self.cfg.vocab_size), targets.reshape(-1), ignore_index=-100)
-        return LMOutput(loss=loss, logits=logits)
+        return LMOutput(loss=loss, logits=logits, hidden_states=hidden if return_hidden else None)
 
 
 # =============================================================================
@@ -443,7 +445,7 @@ class TinyMoELM(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None) -> LMOutput:
+    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None, return_hidden: bool = False) -> LMOutput:
         B, T = x.shape
         pos    = torch.arange(T, device=x.device)
         h      = self.drop(self.tok_emb(x) + self.pos_emb(pos))
@@ -452,12 +454,13 @@ class TinyMoELM(nn.Module):
             h  = block(h)
             if isinstance(block, MoEBlock) and block.moe.aux_loss is not None:
                 aux = aux + block.moe.aux_loss
-        logits = self.head(self.ln_f(h))
+        hidden = self.ln_f(h)
+        logits = self.head(hidden)
         loss   = None
         if targets is not None:
             ce   = F.cross_entropy(logits.reshape(-1, self.cfg.vocab_size), targets.reshape(-1), ignore_index=-100)
             loss = ce + 0.01 * aux / self.cfg.n_layer
-        return LMOutput(loss=loss, logits=logits)
+        return LMOutput(loss=loss, logits=logits, hidden_states=hidden if return_hidden else None)
 
 
 # =============================================================================
@@ -576,15 +579,16 @@ class MambaLikeLM(nn.Module):
         if isinstance(m, (nn.Linear, nn.Embedding)):
             nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None) -> LMOutput:
+    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None, return_hidden: bool = False) -> LMOutput:
         h      = self.embed(x)
         for block in self.blocks:
             h  = block(h)
-        logits = self.head(self.ln_f(h))
+        hidden = self.ln_f(h)
+        logits = self.head(hidden)
         loss   = None
         if targets is not None:
             loss = F.cross_entropy(logits.reshape(-1, self.cfg.vocab_size), targets.reshape(-1), ignore_index=-100)
-        return LMOutput(loss=loss, logits=logits)
+        return LMOutput(loss=loss, logits=logits, hidden_states=hidden if return_hidden else None)
 
 
 # =============================================================================

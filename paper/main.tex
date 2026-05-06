@@ -38,9 +38,9 @@
 What information about an NPC's social state can be recovered from dialogue alone---and does knowing that state actually help generate better responses?
 We decompose NPC interaction into a 29-dimensional structured latent state $Z_t$ spanning conversational intent, affect, relational dynamics, normative pressures, and decision policy.
 Training a multi-head predictor on Qwen3-1.7B, we find that some social dimensions are highly recoverable (risk\_type $\kappa{=}0.865$, face\_pressure $\kappa{=}0.802$) while per-turn deltas are near chance (familiarity\_delta $\kappa{=}0.374$), revealing a systematic pattern: \textit{static attributes are predictable from context; dynamic changes are not}.
-Conditioning a 1.1B response model on just 8 numbers---a compressed OCEAN+VAD personality vector---reduces perplexity by 12.3\% over an unconditioned baseline that sees identical training data.
+Soft-prefix conditioning reduces perplexity by 12.3\% over an unconditioned 1.1B baseline, but placebo ablations show that this gain is not attributable to the semantic content of the current OCEAN+VAD values.
 A comparison of four from-scratch architectures (GPT, PrefixGPT, MoE, Mamba-like) at the 15--22M parameter scale shows that Mixture-of-Experts edges out standard GPT by 7.2\%, but requires 39\% more parameters to do so.
-Automatic checks detect zero secret leakage in sampled generations.
+Keyword-based automatic checks detect no secret leakage in sampled generations.
 All 12 trained models, checkpoints, and evaluation artifacts are released.
 \end{abstract}
 
@@ -74,7 +74,7 @@ Our research questions are:
 
 \paragraph{Contributions.}
 (1)~A 29-dimensional social-state schema with formal cross-dimensional consistency constraints;
-(2)~empirical evidence that a compact 8-dimensional personality+affect vector ($<$0.1\% of the model's parameter budget) yields a 12.3\% perplexity reduction over an unconditioned baseline;
+(2)~a placebo-controlled analysis showing that soft-prefix conditioning improves perplexity independently of the semantic content of the current OCEAN+VAD values, motivating more structured social-state conditioning;
 (3)~a systematic decomposition of which social dimensions are predictable from dialogue context ($\kappa{=}0.865$ for risk type, $\kappa{=}0.374$ for relational deltas) and which are not.
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -99,6 +99,11 @@ These systems demonstrate that LLMs \textit{can} adopt consistent personas, but 
 These 2025 systems confirm that LLM-based NPC dialogue is an active and accelerating research area, but---critically for our contribution---none use a structured, verifiable social-state representation.
 All condition on free-text prompts or persona strings, leaving consistency to the model's implicit understanding rather than an explicit, auditable bottleneck.
 
+Concurrently, structured state-tracking for dialogue has advanced: SAGE~\cite{sage2025steering} introduced explicit future-aware state-action augmentation for controllable generation, and EmoDynamiX~\cite{emodynamix2025naacl} demonstrated that decoupling strategy prediction from generation improves both modularity and downstream controllability.
+These validate our staged training design (predict $\rightarrow$ generate), but they operate on narrow task-specific state ontologies (emotional support strategies, single-task state) rather than a general social-state schema.
+
+On the evaluation side, RAIDEN~\cite{raiden2025coling} and CharacterEval~\cite{charactereval2024acl} have established multi-dimensional role-play benchmarks with measurement-driven metrics, supporting our per-head F1 reporting and trajectory-level evaluation design.
+
 \textbf{Our contribution beyond this literature:}
 Existing NPC and character-role-playing systems either lack explicit social state entirely, or represent it as unstructured persona strings that cannot be systematically verified or constrained.
 Our 29-dimension $Z_t$ schema is a \textit{different category of representation}: it is machine-readable, supports formal consistency constraints (an NPC with high secrecy pressure cannot simultaneously produce a full reveal), and is auditable at the level of individual dimensions.
@@ -122,8 +127,8 @@ LoRA~\cite{hu2021lora} and QLoRA~\cite{dettmers2023qlora} have made parameter-ef
 These methods have been applied to sentiment~\cite{dathathri2020plug}, formality~\cite{keskar2019ctrl}, and topic control~\cite{li2021prefix}, but rarely to multi-dimensional social state.
 
 \textbf{Our contribution beyond this literature:}
-We demonstrate that soft-prefix conditioning with an 8-dimensional OCEAN+VAD vector produces a reliable 12.3\% perplexity reduction for NPC dialogue (Table~\ref{tab:response_ppl}).
-This is not a marginal gain on a narrow task---it is a systematic improvement on a challenging multi-character, multi-scenario generation problem.
+We demonstrate that soft-prefix conditioning produces a reliable 12.3\% perplexity reduction for NPC dialogue (Table~\ref{tab:response_ppl}), but placebo controls show that this improvement is not caused by the semantic content of the current OCEAN+VAD values.
+This motivates treating OCEAN/VAD as a weak baseline and moving toward structured social-state conditioning and predictive social-state representation objectives.
 Moreover, our conditional model (Track C) is a deployed component in a larger pipeline (Track D), not a standalone demonstration.
 
 \subsection{Multi-Task and Multi-Head Classification on Pretrained LLMs}
@@ -135,6 +140,12 @@ Multi-head architectures for dialogue have been used for emotion recognition~\ci
 \textbf{Our contribution beyond this literature:}
 To our knowledge, the 29-head latent predictor is the first application of a multi-head LLM classifier to structured social-state prediction for interactive NPC dialogue.
 It differs from prior multi-head work in three ways: (1) the 29 heads span six qualitatively distinct social dimensions rather than a single task family; (2) the predicted state feeds back into generation (Stage~2) and joint training (Stage~3), making it a \textit{generative} rather than purely discriminative use of the multi-head architecture; and (3) the per-group loss weighting ($\lambda_R = \lambda_D = 2.0$) reflects the asymmetric importance of relational and decision heads for downstream behaviour---a design choice motivated by the application rather than by standard multi-task optimisation.
+
+\subsection{Self-Supervised Representation Learning for Dialogue}
+
+Joint-embedding predictive architectures (JEPA)~\cite{lecun2022path,assran2023self} and VICReg~\cite{bardes2022vicreg} learn representations by predicting future states in embedding space.
+LIFELONG-SOTOPIA~\cite{lifelong2025sotopia} demonstrates that multi-episode trajectory evaluation reveals persona drift missed by turn-local metrics, motivating our trajectory-consistency metrics.
+We evaluate a Social-State JEPA auxiliary objective as an exploratory experiment (\textsection~\ref{sec:ablation_jepa}) and report it as a null result across three backbones.
 
 \subsection{Positioning Summary}
 
@@ -159,7 +170,7 @@ Social simulation~\cite{oatley1987towards,russell1980circumplex,digman1990person
 \midrule
 Conditioned generation~\cite{li2021prefix,keskar2019ctrl,dathathri2020plug}
     & Control single attributes (sentiment, formality, topic)
-    & Multi-dimensional social-state conditioning (OCEAN+VAD); integrated into a 3-stage pipeline with joint training \\
+    & Placebo-controlled multi-dimensional conditioning analysis; structured $Z_t$ state integrated into a 3-stage pipeline with joint training \\
 \midrule
 Multi-head classification~\cite{liu2019multi,li2021past,raheja2019dialogue}
     & Classify single-turn attributes (emotion, dialogue acts)
@@ -252,7 +263,7 @@ Three models generate NPC responses:
 \begin{enumerate}
     \item \textbf{ConditionalDialogue}: From-scratch GPT + personality/affect soft-prefix embeddings ($c_t \to$ prefix via learned projection).
     \item \textbf{TinyLlama + LoRA}: 1.1B pretrained chat model, fine-tuned with LoRA ($r=16$, $\alpha=32$) on SFT data without social-state conditioning.
-    \item \textbf{Gemma-2-2B-it + QLoRA}: 2B pretrained instruction model with QLoRA fine-tuning.
+
     \item \textbf{Gemma-4-E2B + QLoRA}: exploratory larger active-parameter baseline.
 \end{enumerate}
 
@@ -351,7 +362,7 @@ Tracks\,A and~B train on any GPU with 4\,GB or more VRAM, or on CPU alone with l
 \textit{Track A}: validation perplexity (PPL).
 \textit{Track B}: F1 (personality), CCC (affect), MSE.
 \textit{Track C}: PPL, ROUGE-L, BLEU-1/2/4, Distinct-1/2/3, secret leakage rate, contradiction rate.
-\textit{Track D}: per-head accuracy, macro-F1, estimated Cohen's $\kappa$~\cite{landis1977measurement}, per-group means, response policy F1.
+\textit{Track D}: per-head accuracy, macro-F1, normalized above-chance agreement reported as estimated $\kappa$ for historical comparison, per-group means, response policy F1.
 \textit{Routing}: precision, recall, F1, false positive rate.
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -418,7 +429,7 @@ A cache of 414 NPC personality embeddings was built from training data for effic
 
 \begin{table}[t]
 \centering
-\caption{Response generation comparison. \textbf{Bold}: best PPL. The conditioning gain is $12.3\%$.}
+\caption{Response generation comparison. \textbf{Bold}: best PPL. The soft-prefix gain is $12.3\%$, but placebo ablations show this gain is not attributable to the semantic content of the current OCEAN+VAD values.}
 \label{tab:response_ppl}
 \small
 \begin{tabular}{@{}llrrr@{}}
@@ -427,28 +438,28 @@ A cache of 414 NPC personality embeddings was built from training data for effic
 \midrule
 \textbf{ConditionalDialogue} & OCEAN+VAD soft-prefix & 1.064 & \textbf{2.90} & 5 \\
 TinyLlama 1.1B + LoRA       & none (SFT)            & 1.195 & 3.30          & 3 \\
-Gemma-2-2B-it + QLoRA        & NPC profile (SFT)     & 1.854 & 6.38          & 2 \\
+Gemma-4-E2B + QLoRA        & NPC profile (SFT)     & 1.854 & 6.38          & 2 \\
 Gemma-4-E2B + QLoRA          & NPC profile (SFT)     & 2.787 & 16.24         & 1 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Finding (RQ3):} Just 8 numbers---a compressed OCEAN+VAD vector representing the NPC's personality and emotional state---reduce response perplexity by \textbf{12.3\%} (3.30$\to$2.90; Table~\ref{tab:response_ppl}).
-This is surprising because both the conditioned and unconditioned models are fine-tuned on identical training data; the only difference is that the ConditionalDialogue model receives an 8-dimensional prefix vector projected from the encoder outputs.
-The conditioning vector constitutes less than 0.1\% of the model's parameter budget (8 values versus 1.1B parameters), yet provides a reliable and reproducible improvement.
-The corrected Gemma-2-2B-it run (PPL 6.38) and the exploratory Gemma-4-E2B run (PPL 16.24, 1 epoch) provide pretrained-model baselines but remain behind the task-specific conditional model on this validation split.
+\textbf{Finding (RQ3):} Soft-prefix conditioning reduces response perplexity by \textbf{12.3\%} (3.30$\to$2.90; Table~\ref{tab:response_ppl}).
+However, placebo controls with shuffled OCEAN values, random VAD values, and shuffled+random conditioning all converge to the same PPL range (2.88--2.91), indicating that the gain comes from the presence of prefix-conditioning capacity rather than from the semantic content of the current OCEAN/VAD vectors.
+This is still a useful architectural result, but it rules out the stronger claim that the learned OCEAN/VAD values causally improve generation.
+The corrected Gemma-4-E2B run (PPL 6.38) and the exploratory Gemma-4-E2B run (PPL 16.24, 1 epoch) provide pretrained-model baselines but remain behind the task-specific conditional model on this validation split.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.86\linewidth]{figures/response_ppl_comparison.pdf}
-\caption{Track C response-model validation perplexity. The fixed Gemma-2-2B-it run should be treated as the primary Gemma baseline; the Gemma-4-E2B run is retained as an exploratory engineering result.}
+\caption{Track C response-model validation perplexity. The fixed Gemma-4-E2B run should be treated as the primary Gemma baseline; the Gemma-4-E2B run is retained as an exploratory engineering result.}
 \label{fig:response_ppl}
 \end{figure}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/best_model_diagram.pdf}
-\caption{Best response model. OCEAN and VAD signals are compressed into an 8D social vector and projected into soft-prefix tokens before LoRA response generation.}
+\caption{Best response model. The current response model projects an 8D OCEAN+VAD vector into soft-prefix tokens before LoRA response generation; placebo ablations show the prefix mechanism helps, while the semantic content of the current OCEAN/VAD values does not.}
 \label{fig:best_model}
 \end{figure}
 
@@ -527,9 +538,9 @@ The overfitting gap (train loss 1.68 vs.\ val loss 7.39 at epoch 3) indicates th
 
 \subsection{Routing}
 
-The rule-based fast/slow router achieves perfect precision and recall ($\text{F1}=1.0$) on the validation set, with a slow-path rate of 53.7\%.
-This is expected since the router applies deterministic rules to the same latent state used for ground truth construction.
-In deployment, the router would operate on \textit{predicted} $Z_t$, where routing errors would be bounded by the latent predictor's accuracy.
+The rule-based fast/slow router achieves perfect precision and recall ($\text{F1}=1.0$) when evaluated on gold validation states, with a slow-path rate of 53.7\%.
+This is a sanity check rather than a deployment result, since the router applies deterministic rules to the same latent state used for ground truth construction.
+In deployment, the router would operate on \textit{predicted} $Z_t$; evaluating that setting is required before claiming routing performance.
 
 \begin{figure}[t]
 \centering
@@ -551,25 +562,25 @@ This suggests that expert specialisation does capture the multi-register nature 
 The gap between from-scratch models (best PPL 42.07) and pretrained models (best PPL 2.90, ConditionalDialogue) confirms that architecture choice matters less than pretraining data at small scales.
 
 \paragraph{Conditioning effectiveness.}
-The 12.3\% perplexity reduction from an 8-dimensional conditioning vector is notable for what it costs: essentially nothing.
-The OCEAN+VAD vector is precomputed from lightweight DistilBERT encoders (CPU inference, {$<$}10\,ms) and constitutes 0.007\% of the 1.1B model's input dimensionality.
-This suggests that even a crude compressed summary of who the NPC is and how they feel provides the model with a useful prior that reduces uncertainty about response style.
-The fact that both models see identical training data rules out the possibility that the gain comes from data rather than representation.
+The 12.3\% perplexity reduction from soft-prefix conditioning is notable for what it costs: essentially nothing.
+However, placebo ablations show that shuffled OCEAN values and random VAD values achieve the same PPL range as real OCEAN+VAD conditioning.
+Thus the improvement should be interpreted as a prefix-capacity or optimization effect, not as evidence that the current OCEAN/VAD values provide semantically useful control.
+This negative result motivates structured $Z_t$ conditioning and Social-State JEPA as more targeted mechanisms for learning future-relevant social dynamics.
 
 \paragraph{Latent state as an interpretable bottleneck.}
 The 29-head predictor demonstrates that structured social state is learnable from dialogue context.
-Mean estimated $\kappa=0.611$ indicates substantial lift over a uniform chance baseline, suggesting the latent state captures genuine social dynamics rather than noise.
+Mean normalized above-chance agreement, reported as estimated $\kappa=0.611$, indicates substantial lift over a uniform chance baseline, suggesting the latent state captures genuine social dynamics rather than noise.
 The interpretability of individual heads (e.g., ``\texttt{secrecy\_pressure=high}'' or ``\texttt{response\_policy=withhold}'') enables human auditing of NPC behaviour.
 
 \paragraph{Secret-keeping.}
-Zero keyword-detected secret leakage across sampled generations supports the design of our reveal\_decision head and consistency constraints, but does not constitute a formal leakage guarantee.
+No keyword-detected secret leakage was found in the sampled generations, which is encouraging for the reveal\_decision head and consistency constraints, but this does not constitute a formal leakage guarantee.
 In a deployed system, the latent predictor's $D_t$ output would gate information disclosure, providing a verifiable safety mechanism.
 
 \paragraph{Limitations.}
 \begin{enumerate}
     \item \textbf{Data scale}: 7,742 turns is small by NLP standards; results may shift with $10\times$ data.
-    \item \textbf{Single seed}: Track A results are for seed=42 only; multi-seed experiments would strengthen claims.
-    \item \textbf{Joint-model evaluation}: The three-stage Qwen3 joint model has been trained, but it has not yet been independently evaluated for generation quality or per-head latent accuracy.
+    \item \textbf{Single seed}: Most headline experiments use seed 42 only; multi-seed confidence intervals are required before interpreting small differences such as 0.02 PPL.
+    \item \textbf{Joint-model evaluation}: The three-stage Qwen3 joint model has been trained, but equivalence claims require paired confidence intervals and per-head trade-off analysis.
     \item \textbf{Synthetic labels}: Social-state annotations are LLM-generated (not human-annotated), introducing label noise.
     \item \textbf{Evaluation coverage}: ROUGE-L and BLEU are weak proxies for dialogue quality; human preference and task-success evaluation are needed for deployment-ready claims.
     \item \textbf{Repetition}: The response model shows high 3-gram repetition (66.7\%) and generates responses 2.3$\times$ longer than references, indicating a need for length penalties or nucleus sampling tuning.
@@ -589,9 +600,9 @@ Static attributes---risk type, face pressure, emotional valence---are highly pre
 Dynamic per-turn changes---how much trust or familiarity shifted in a single exchange---are near chance ($\kappa{<}0.50$).
 This gap between levels and deltas is consistent across all six relational dimensions and suggests a fundamental limit on what can be inferred from single-turn context.
 
-\textbf{Second, a tiny conditioning signal produces a reliable improvement.}
-Eight numbers---a compressed OCEAN+VAD vector costing less than 0.1\% of the model's parameters---reduce perplexity by 12.3\% over an unconditioned baseline trained on identical data.
-The signal is cheap to compute (CPU encoders, {$<$}10\,ms) and the gain is reproducible.
+\textbf{Second, soft-prefix conditioning helps, but the current OCEAN/VAD values do not explain the gain.}
+The conditioned model reduces perplexity by 12.3\% over an unconditioned baseline trained on identical data, but shuffled and random conditioning controls match the same PPL range.
+This identifies the prefix mechanism as useful while motivating more informative structured social-state representations.
 
 \textbf{Third, architecture matters less than pretraining at small scale.}
 The best from-scratch model (MoE, PPL 42.07, 22.4M parameters) is still an order of magnitude behind the worst pretrained model (TinyLlama SFT, PPL 3.30, 1.1B parameters).
@@ -623,7 +634,7 @@ The structured latent state $Z_t$ provides an interpretable bottleneck between p
 
 \begin{table}[h]
 \centering
-\caption{Per-head latent state prediction metrics, sorted by accuracy (descending). $\kappa$ is estimated from accuracy and uniform chance baseline.}
+\caption{Per-head latent state prediction metrics, sorted by accuracy (descending). The reported $\kappa$ values are normalized above-chance estimates computed from accuracy and a uniform chance baseline; final test reporting should replace these with true Cohen's $\kappa$ from confusion matrices.}
 \label{tab:perhead}
 \scriptsize
 \begin{tabular}{@{}lrrrrr@{}}
@@ -834,14 +845,14 @@ The encoders run in under 10ms per inference on CPU.
     \item \textbf{Social-state-aware chatbots.} Beyond games, any conversational agent that needs to maintain a consistent persona can benefit from explicit personality and affect conditioning.
     Customer service bots, therapeutic agents, and educational tutors all have personas that should remain stable across interactions.
     \item \textbf{Baseline for stronger models.} TinyLlama SFT (val\_ppl $=$ 3.30) provides a clean baseline: ``this is how well a pretrained 1.1B model does without any social state.''
-    The 12.1\% improvement from adding conditioning quantifies the value of the social state for any downstream application.
+    The 12.1\% improvement from adding conditioning quantifies the value of the prefix mechanism, while placebo controls show that the current OCEAN/VAD values should not be treated as the causal signal.
     \item \textbf{Gemma 4 as a capability ceiling.} The Gemma 4 E2B model (16B total, 2B active) demonstrates that sparse MoE architectures can be fine-tuned on a single 24\,GB GPU for training.
     Inference requires 12--16\,GB VRAM with 4-bit quantisation---well within reach of a consumer RTX 4080 or cloud T4 instance.
     For applications that can afford a larger inference budget, Gemma 4 provides a stronger response quality ceiling than the 1.1B models.
 \end{enumerate}
 
-\textbf{Current capability:} ConditionalDialogue achieves val\_ppl $=$ 2.90, with zero keyword-detected secret leakage in sampled generations.
-The conditioning gain of 12.1\% over the unconditioned baseline is reliable and reproducible.
+\textbf{Current capability:} ConditionalDialogue achieves val\_ppl $=$ 2.90, with no keyword-detected secret leakage in sampled generations.
+The 12.1\% gain over the unconditioned baseline should be interpreted as a soft-prefix capacity effect until multi-seed placebo controls are reported.
 
 \subsection{Track D: Structured LLM Pipeline}
 
@@ -853,7 +864,7 @@ The conditioning gain of 12.1\% over the unconditioned baseline is reliable and 
     \item \textbf{Socially-aware NPC AI.} This is the closest thing we have to a production NPC brain.
     Given conversation history, the latent predictor estimates the NPC's full social state---what they think of the player, whether they are under pressure to keep secrets, what their strategic intent is.
     The response generator then produces dialogue that is consistent with that state.
-    If the state says ``secrecy\_pressure $=$ high, reveal\_decision $=$ none,'' the model is architecturally constrained to not leak sensitive information.
+    If the state says ``secrecy\_pressure $=$ high, reveal\_decision $=$ none,'' the system can route or constrain generation through an auditable disclosure policy.
     \item \textbf{Game master AI.} The 29-head predictor could serve as a ``social radar'' for a game master AI that tracks the social state of every NPC in a scene and decides when to trigger narrative events, introduce new characters, or escalate conflicts.
     \item \textbf{Explainable NPC behaviour.} Because the latent state is a discrete, human-readable vector (not a hidden embedding), game designers can inspect why an NPC behaved a certain way.
     ``The NPC refused to answer because secrecy\_pressure was high'' is a debuggable explanation that an embedding vector cannot provide.
@@ -887,8 +898,8 @@ Computational theory of mind (personality $+$ affect from text)
     & Track B: OCEAN encoder (f1 $=$ 0.678) $+$ VAD encoder (ccc $=$ 0.559); 414-NPC cache
     & Game writers doing automated NPC authoring; live social perception systems \\
 \midrule
-Social-state-conditioned dialogue with 12.1\% PPL improvement
-    & Track C: ConditionalDialogue (ppl $=$ 2.90) vs. TinyLlama SFT (ppl $=$ 3.30); zero secret leakage
+Soft-prefix dialogue with 12.1\% PPL improvement
+    & Track C: ConditionalDialogue (ppl $=$ 2.90) vs. TinyLlama SFT (ppl $=$ 3.30); placebo controls show the gain is prefix-capacity rather than OCEAN/VAD semantics
     & Any conversational agent needing consistent persona and information control \\
 \midrule
 End-to-end social perception $+$ generation in one model

@@ -174,6 +174,7 @@ def _cfg_to_dialogue_config(cfg: Dict[str, Any]) -> DialogueTrainConfig:
         epochs=cfg["epochs"],
         output_dir=cfg["output_dir"],
         memory_top_k=cfg.get("memory_top_k", 3),
+        randomize_vad=cfg.get("randomize_vad", False),
     )
 
 
@@ -407,6 +408,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--prefix-length",       type=int,   dest="prefix_length")
     p.add_argument("--log-every",           type=int,   dest="log_every")
     p.add_argument("--seed",                type=int)
+    p.add_argument("--randomize-vad",       action="store_true", dest="randomize_vad")
     return p.parse_args()
 
 

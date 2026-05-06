@@ -316,7 +316,7 @@
 │  Train loss: 0.99 → 0.58 (dropping)                    │
 │  Token accuracy: 72% → 83% (climbing)                  │
 │                                                         │
-│  Checkpoint: artifacts/gemma2_2b/<run>/best_model       │
+│  Checkpoint: artifacts/gemma4_e2b/<run>/best_model       │
 └─────────────────────────────────────────────────────────┘
 ```
 

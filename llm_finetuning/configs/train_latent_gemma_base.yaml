@@ -1,5 +1,8 @@
-base_model: Qwen/Qwen3-4B
-debug_model: Qwen/Qwen3-1.7B
+# Gemma-4-E2B Latent Predictor — Baseline (no JEPA)
+# Same protocol as Qwen latent training: same data, same heads, same loss, same selection metric.
+
+base_model: google/gemma-4-E2B
+debug_model: google/gemma-4-E2B
 
 quantization: 4bit
 bnb_4bit_compute_dtype: bfloat16
@@ -10,16 +13,16 @@ lora:
   r: 16
   alpha: 32
   dropout: 0.05
-  target_modules: [q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]
+  target_modules: "all-linear"  # Gemma 4 uses Gemma4ClippableLinear — all-linear covers it
   bias: none
   task_type: CAUSAL_LM
 
-pooling: last  # Options: last, mean, attention
+pooling: last
 
 training:
   lr: 2.0e-4
-  head_lr: 4.0e-4  # 2x backbone LR for classification heads
-  use_progressive_lr: true  # Higher LR for heads vs backbone
+  head_lr: 4.0e-4
+  use_progressive_lr: true
   lr_scheduler: cosine
   warmup_ratio: 0.05
   epochs: 5
@@ -36,8 +39,8 @@ training:
   logging_steps: 20
   load_best_model_at_end: true
   metric_for_best_model: val/response_policy_f1
-  use_weighted_sampler: true  # Oversample minority classes
-  label_smoothing: 0.1  # 0.0 to disable
+  use_weighted_sampler: true
+  label_smoothing: 0.1
 
 loss_weights:
   lambda_C: 1.0
@@ -49,24 +52,6 @@ loss_weights:
 
 jepa:
   enabled: false
-  target: social_state
-  fields:
-    - trust_delta
-    - respect_delta
-    - dominance_delta
-    - secrecy_pressure
-    - player_knowledge
-    - response_policy
-    - reveal_decision
-  horizons: [1]
-  horizon_weights:
-    1: 1.0
-  emb_dim: 64
-  target_dim: 128
-  predictor_dim: 256
-  dropout: 0.1
-  lambda_jepa: 0.05
-  var_weight: 0.01
 
 data:
   train_file: data/splits/train_heads.jsonl
@@ -74,12 +59,12 @@ data:
   artifact_type: head_supervision
 
 output:
-  checkpoint_dir: checkpoints/latent_predictor
-  best_model_dir: checkpoints/latent_predictor_best
+  checkpoint_dir: checkpoints/latent_predictor_gemma
+  best_model_dir: checkpoints/latent_predictor_gemma_best
 
 mlflow:
   experiment_name: latent_state_prediction
-  run_name: qwen3_4b_schema_v1_latent
+  run_name: gemma4_e2b_schema_v1_latent
   tracking_uri: mlruns
 
 schema_version: v1

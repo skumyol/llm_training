@@ -148,11 +148,17 @@ case "${SYSTEM}_${STAGE}" in
         python -m src.train.run_dialogue --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
             2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
         ;;
+    slm_latent)
+        cd "${REPO_DIR}"
+        export PYTHONPATH="${REPO_DIR}:${REPO_DIR}/llm_finetuning"
+        python -m slm_training.src.train.train_latent_slm --run-id "${RUN_ID}" "${EXTRA_ARGS[@]}" \
+            2>&1 | tee "${LOG_DIR}/${RUN_ID}.log"
+        ;;
     *)
         echo "Unknown stage: ${SYSTEM}/${STAGE}" >&2
         echo "Valid combos:" >&2
         echo "  llm: latent | response | joint" >&2
-        echo "  slm: personality | affect | small_lm | dialogue" >&2
+        echo "  slm: personality | affect | small_lm | dialogue | latent" >&2
         exit 1
         ;;
 esac

@@ -42,7 +42,7 @@ loss_weights:
   lambda_N: 1.0
   lambda_D: 2.0
   lambda_Y: 1.0
-  lambda_consistency: 0.5
+  lambda_consistency: 0.0
 
 init_from:
   latent_checkpoint: checkpoints/latent_predictor_best
@@ -55,12 +55,12 @@ data:
   heads_val_file: data/splits/val_heads.jsonl
 
 output:
-  checkpoint_dir: checkpoints/joint_model
-  best_model_dir: checkpoints/joint_model_best_consist05
+  checkpoint_dir: checkpoints/joint_model_no_consist
+  best_model_dir: checkpoints/joint_model_no_consist_best
 
 mlflow:
   experiment_name: latent_state_prediction
-  run_name: qwen3_4b_schema_v1_joint
+  run_name: qwen3_4b_schema_v1_joint_no_consist
   tracking_uri: mlruns
 
 schema_version: v1

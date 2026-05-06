@@ -1,0 +1,46 @@
+# SLM MoE Latent Predictor — Baseline (no JEPA)
+# Matches MoE-SLM 22.4M vs GPT-SLM 17.9M for param-matched comparison.
+
+architecture: moe
+hardware_profile: m1_small
+
+pooling: last
+
+training:
+  lr: 3.0e-4
+  lr_scheduler: cosine
+  warmup_ratio: 0.05
+  epochs: 10
+  max_seq_len: 256
+  batch_size: 4
+  grad_accum: 4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+  metric_for_best_model: val_response_policy_f1
+
+loss_weights:
+  lambda_C: 1.0
+  lambda_A: 1.0
+  lambda_M: 1.5
+  lambda_R: 2.0
+  lambda_N: 1.0
+  lambda_D: 2.0
+
+jepa:
+  enabled: false
+
+data:
+  train_file: data/splits/train_heads.jsonl
+  val_file: data/splits/val_heads.jsonl
+
+output:
+  checkpoint_dir: checkpoints/slm_latent_moe
+  best_model_dir: checkpoints/slm_latent_moe_best
+
+mlflow:
+  experiment_name: slm_latent_prediction
+  run_name: slm_moe_base
+  enabled: true
+
+seed: 42

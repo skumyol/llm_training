@@ -206,11 +206,12 @@ def run_interactive(
         with torch.no_grad():
             generated_ids = predictor.backbone.generate(
                 **lm_inputs,
-                max_new_tokens=150,
+                max_new_tokens=128,
                 do_sample=True,
                 temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
+                top_p=0.92,
+                repetition_penalty=1.15,
+                no_repeat_ngram_size=3,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id
             )

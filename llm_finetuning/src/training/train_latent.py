@@ -10,6 +10,13 @@ from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from src.training.dataset import HeadSupervisionDataset, collate_head_batch, LABEL_MAPS, LABEL_TO_IDX
+from src.training.jepa import (
+    JEPA_FIELDS,
+    SocialJEPAHead,
+    SocialJEPAPredictorConfig,
+    SocialStateEmbeddingConfig,
+    social_jepa_loss,
+)
 from src.training.loss import MultiHeadLoss, compute_class_weights
 from src.training.model import build_latent_predictor, save_predictor
 from src.metrics_report import compute_latent_metrics, log_metrics_to_mlflow, write_metrics_bundle
@@ -21,6 +28,30 @@ def _batch_to_device(batch: dict, device) -> dict:
         k: v.to(device) if isinstance(v, torch.Tensor) else v
         for k, v in batch.items()
     }
+
+
+def _future_label_ids_from_batch(batch: dict, horizons: list[int], fields: list[str]) -> dict[int, dict[str, torch.Tensor]]:
+    future_label_ids: dict[int, dict[str, torch.Tensor]] = {}
+    for horizon in horizons:
+        future_label_ids[horizon] = {}
+        for field in fields:
+            key = f"future_{horizon}_{field}"
+            if key in batch:
+                future_label_ids[horizon][field] = batch[key]
+    return future_label_ids
+
+
+def _save_jepa_head(jepa_head: SocialJEPAHead | None, save_dir: Path, cfg: dict) -> None:
+    if jepa_head is None:
+        return
+    save_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": jepa_head.state_dict(),
+            "config": cfg,
+        },
+        save_dir / "jepa_head.pt",
+    )
 
 
 def train_latent(config_path: str, debug: bool = False) -> None:
@@ -37,6 +68,11 @@ def train_latent(config_path: str, debug: bool = False) -> None:
     lora_cfg = cfg.get("lora", {})
     train_cfg = cfg["training"]
     loss_weights = cfg.get("loss_weights", {})
+    jepa_cfg = cfg.get("jepa", {})
+    jepa_enabled = bool(jepa_cfg.get("enabled", False))
+    jepa_fields = jepa_cfg.get("fields", JEPA_FIELDS)
+    jepa_horizons = [int(k) for k in jepa_cfg.get("horizons", [1])]
+    jepa_shuffle = bool(jepa_cfg.get("shuffle_future_labels", False))
 
     print(f"Loading model: {model_name}")
     pooling = cfg.get("pooling", "last")
@@ -62,11 +98,17 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         cfg["data"]["train_file"],
         tokenizer,
         max_seq_len=train_cfg.get("max_seq_len", 1024),
+        jepa_fields=jepa_fields if jepa_enabled else None,
+        jepa_horizons=jepa_horizons if jepa_enabled else None,
+        shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
     )
     val_ds = HeadSupervisionDataset(
         cfg["data"]["val_file"],
         tokenizer,
         max_seq_len=train_cfg.get("max_seq_len", 1024),
+        jepa_fields=jepa_fields if jepa_enabled else None,
+        jepa_horizons=jepa_horizons if jepa_enabled else None,
+        shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
     )
 
     # Compute class weights early (needed for sampler and loss)
@@ -114,6 +156,25 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
     label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
     loss_fn = MultiHeadLoss(loss_weights, class_weights=class_weights, label_smoothing=label_smoothing)
+    jepa_head = None
+    if jepa_enabled:
+        label_vocab_sizes = {field: len(LABEL_MAPS[field]) for field in jepa_fields}
+        jepa_head = SocialJEPAHead(
+            SocialJEPAPredictorConfig(
+                hidden_dim=predictor.hidden_size,
+                target_dim=int(jepa_cfg.get("target_dim", 128)),
+                predictor_dim=int(jepa_cfg.get("predictor_dim", 256)),
+                horizons=jepa_horizons,
+                dropout=float(jepa_cfg.get("dropout", 0.1)),
+            ),
+            label_vocab_sizes=label_vocab_sizes,
+            state_emb_cfg=SocialStateEmbeddingConfig(
+                emb_dim=int(jepa_cfg.get("emb_dim", 64)),
+                out_dim=int(jepa_cfg.get("target_dim", 128)),
+                dropout=float(jepa_cfg.get("dropout", 0.1)),
+            ),
+        ).to(next(predictor.heads.parameters()).device)
+        print(f"Social-State JEPA enabled: fields={jepa_fields}, horizons={jepa_horizons}")
     if label_smoothing > 0:
         print(f"Using label smoothing: {label_smoothing}")
     base_lr = float(train_cfg.get("lr", 2e-4))
@@ -125,9 +186,13 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             {"params": predictor.heads.parameters(), "lr": head_lr, "weight_decay": float(train_cfg.get("weight_decay", 0.01))},
             {"params": [p for n, p in predictor.backbone.named_parameters() if p.requires_grad], "lr": base_lr, "weight_decay": float(train_cfg.get("weight_decay", 0.01))},
         ]
+        if jepa_head is not None:
+            param_groups.append({"params": jepa_head.parameters(), "lr": head_lr, "weight_decay": float(train_cfg.get("weight_decay", 0.01))})
         print(f"Progressive LR: heads={head_lr}, backbone={base_lr}")
     else:
         param_groups = [p for p in predictor.parameters() if p.requires_grad]
+        if jepa_head is not None:
+            param_groups += list(jepa_head.parameters())
 
     optimizer = torch.optim.AdamW(
         param_groups,
@@ -171,7 +236,10 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
         for epoch in range(1, epochs + 1):
             predictor.train()
+            if jepa_head is not None:
+                jepa_head.train()
             epoch_loss = 0.0
+            epoch_jepa_loss = 0.0
             optimizer.zero_grad()
 
             for step, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}")):
@@ -182,13 +250,26 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
                 out = predictor(input_ids=input_ids, attention_mask=attention_mask)
                 total_loss, detail = loss_fn(out["logits"], batch)
+                if jepa_head is not None:
+                    future_label_ids = _future_label_ids_from_batch(batch, jepa_horizons, jepa_fields)
+                    jepa_out = jepa_head(out["pooled"], future_label_ids)
+                    loss_jepa = social_jepa_loss(
+                        jepa_out,
+                        horizon_weights={int(k): float(v) for k, v in jepa_cfg.get("horizon_weights", {}).items()},
+                        var_weight=float(jepa_cfg.get("var_weight", 0.0)),
+                    )
+                    total_loss = total_loss + float(jepa_cfg.get("lambda_jepa", 0.05)) * loss_jepa
+                    epoch_jepa_loss += loss_jepa.item()
                 total_loss = total_loss / grad_accum
                 total_loss.backward()
 
                 epoch_loss += total_loss.item() * grad_accum
 
                 if (step + 1) % grad_accum == 0:
-                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), max_grad_norm)
+                    clip_params = list(predictor.parameters())
+                    if jepa_head is not None:
+                        clip_params += list(jepa_head.parameters())
+                    torch.nn.utils.clip_grad_norm_(clip_params, max_grad_norm)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
@@ -196,8 +277,18 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
                     if global_step % train_cfg.get("logging_steps", 20) == 0:
                         mlflow.log_metric("train/loss", epoch_loss / (step + 1), step=global_step)
+                        if jepa_head is not None:
+                            mlflow.log_metric("train/jepa_loss", epoch_jepa_loss / (step + 1), step=global_step)
 
-            val_loss, val_metrics = _evaluate(predictor, val_loader, loss_fn)
+            val_loss, val_metrics = _evaluate(
+                predictor,
+                val_loader,
+                loss_fn,
+                jepa_head=jepa_head,
+                jepa_cfg=jepa_cfg,
+                jepa_horizons=jepa_horizons,
+                jepa_fields=jepa_fields,
+            )
             log_metrics_to_mlflow({"loss": val_loss}, prefix="val", step=epoch)
             log_metrics_to_mlflow(val_metrics.get("summary", {}), prefix="val", step=epoch)
             if val_metrics.get("groups"):
@@ -219,6 +310,8 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             current_metric = val_metrics.get("summary", {}).get(metric_key, val_loss)
 
             summary_parts = [f"train_loss={epoch_loss/max(1, len(train_loader)):.4f}", f"val_loss={val_loss:.4f}"]
+            if jepa_head is not None:
+                summary_parts.append(f"train_jepa_loss={epoch_jepa_loss/max(1, len(train_loader)):.4f}")
             for key in ["response_policy_f1", "mean_accuracy", "trust_delta_f1"]:
                 value = val_metrics.get("summary", {}).get(key)
                 if value is not None:
@@ -233,10 +326,12 @@ def train_latent(config_path: str, debug: bool = False) -> None:
             if is_better:
                 best_metric_value = current_metric
                 save_predictor(predictor, str(best_dir))
+                _save_jepa_head(jepa_head, best_dir, jepa_cfg)
                 mlflow.log_metric(f"val/best_{metric_key}", best_metric_value, step=epoch)
                 print(f"  → New best model ({best_metric_name}={best_metric_value:.4f}) saved to {best_dir}")
 
         save_predictor(predictor, str(output_dir / "final"))
+        _save_jepa_head(jepa_head, output_dir / "final", jepa_cfg)
         final_summary = {
             "model_name": model_name,
             "stage": "latent",
@@ -256,9 +351,21 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
 
 @torch.no_grad()
-def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
+def _evaluate(
+    predictor,
+    val_loader,
+    loss_fn,
+    jepa_head: SocialJEPAHead | None = None,
+    jepa_cfg: dict | None = None,
+    jepa_horizons: list[int] | None = None,
+    jepa_fields: list[str] | None = None,
+) -> tuple[float, dict]:
     predictor.eval()
+    if jepa_head is not None:
+        jepa_head.eval()
     total_loss = 0.0
+    total_jepa_loss = 0.0
+    jepa_batches = 0
     all_preds: dict[str, list] = {}
     all_golds: dict[str, list] = {}
 
@@ -270,6 +377,16 @@ def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
 
         out = predictor(input_ids=input_ids, attention_mask=attention_mask)
         loss, detail = loss_fn(out["logits"], batch)
+        if jepa_head is not None and jepa_cfg is not None and jepa_horizons is not None and jepa_fields is not None:
+            future_label_ids = _future_label_ids_from_batch(batch, jepa_horizons, jepa_fields)
+            jepa_out = jepa_head(out["pooled"], future_label_ids)
+            loss_jepa = social_jepa_loss(
+                jepa_out,
+                horizon_weights={int(k): float(v) for k, v in jepa_cfg.get("horizon_weights", {}).items()},
+                var_weight=float(jepa_cfg.get("var_weight", 0.0)),
+            )
+            total_jepa_loss += loss_jepa.item()
+            jepa_batches += 1
         total_loss += loss.item()
 
         for field, logit_tensor in out["logits"].items():
@@ -302,6 +419,8 @@ def _evaluate(predictor, val_loader, loss_fn) -> tuple[float, dict]:
             all_golds[field].extend(gold[valid].cpu().tolist())
 
     metrics = compute_latent_metrics(all_preds, all_golds)
+    if jepa_batches > 0:
+        metrics.setdefault("summary", {})["jepa_loss"] = total_jepa_loss / jepa_batches
 
     avg_loss = total_loss / max(1, len(val_loader))
     return avg_loss, metrics

@@ -30,6 +30,7 @@ class DialogueCollator:
         self.tokenizer = tokenizer
         self.device = device
         self.personality_cache = PersonalityCache(cfg.personality_cache_path)
+        self.randomize_vad = getattr(cfg, 'randomize_vad', False)
 
         self.affect_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
         self.affect_encoder = DistilBertRegressor("distilbert-base-uncased", out_dim=3).to(device)
@@ -72,7 +73,10 @@ class DialogueCollator:
             if p is None:
                 raise KeyError(f"Missing cached personality vector for {ex.npc_id}")
             p_vec = torch.tensor(p, dtype=torch.float)
-            a_vec = self._affect(ex)
+            if self.randomize_vad:
+                a_vec = torch.rand(3, dtype=torch.float)
+            else:
+                a_vec = self._affect(ex)
             cond_vecs.append(torch.cat([p_vec, a_vec], dim=-1))
 
         model_inputs = self.tokenizer(
