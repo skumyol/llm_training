@@ -154,7 +154,11 @@ def load_backbone(
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
 
-    hidden_size = model.config.hidden_size
+    # Gemma 4 stores hidden_size under text_config
+    if hasattr(model.config, 'text_config') and hasattr(model.config.text_config, 'hidden_size'):
+        hidden_size = model.config.text_config.hidden_size
+    else:
+        hidden_size = model.config.hidden_size
     return model, tokenizer, hidden_size
 
 
