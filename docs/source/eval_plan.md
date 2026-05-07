@@ -65,8 +65,11 @@ Artifact files:
 Summary metrics:
 
 - `mean_accuracy`
+- `mean_balanced_accuracy`
+- `mean_cohen_kappa`
 - `mean_macro_f1`
 - `mean_weighted_f1`
+- `mean_mcc`
 - `response_policy_f1`
 - `response_policy_accuracy`
 - `reveal_decision_f1`
@@ -80,8 +83,11 @@ Summary metrics:
 Field-level metrics:
 
 - `accuracy`
+- `balanced_accuracy`
+- `cohen_kappa`
 - `macro_f1`
 - `weighted_f1`
+- `mcc`
 - `support`
 - `dialogue_act.micro_f1`
 - `dialogue_act.macro_f1`
@@ -98,6 +104,9 @@ Group-level metrics:
 - `N.mean_accuracy`, `N.mean_macro_f1`, `N.mean_weighted_f1`
 - `D.mean_accuracy`, `D.mean_macro_f1`, `D.mean_weighted_f1`
 
+Each group also reports `mean_balanced_accuracy`, `mean_cohen_kappa`, and `mean_mcc`.
+For the paper, prefer macro-F1, balanced accuracy, Cohen's kappa, and MCC over raw accuracy whenever a field has skewed class marginals.
+
 ### Response evaluation
 
 Written by `llm_finetuning/src/eval/eval_response.py`.
@@ -111,12 +120,23 @@ Artifact files:
 Canonical metrics:
 
 - `rouge_l`
+- `rouge_l_ci_low`
+- `rouge_l_ci_high`
+- `bleu_1`
+- `bleu_2`
+- `bleu_4`
 - `secret_leakage_rate`
 - `contradiction_rate`
 - `distinct_1`
 - `distinct_2`
+- `repeated_3gram_rate`
+- `degenerate_repetition_rate`
+- `prompt_artifact_rate`
 - `avg_len`
 - `n_evaluated`
+
+ROUGE and BLEU are diagnostic overlap metrics, not evidence of good role-play quality.
+For EMNLP reporting, pair them with degeneration metrics, constraint-violation rates, and human or LLM-assisted preference judgments.
 
 ### Routing evaluation
 
@@ -189,3 +209,43 @@ The paper should prefer these numbers in order:
 3. A manually transcribed number only if the artifact is missing.
 
 That keeps the paper tied to the actual experiment outputs instead of a hand-maintained secondary source.
+
+## EMNLP-Grade Evaluation Upgrade
+
+The next evaluation batch should be framed around validity, not metric quantity.
+The current strongest story is that structured social state is an auditable intermediate representation; therefore the evaluation must test state validity, causal usefulness, and generated-behaviour consistency.
+
+### What can be improved without new training
+
+- Re-run offline latent evaluation so `latent_eval_metrics.json` contains true Cohen's kappa, balanced accuracy, and MCC instead of any post-hoc estimated agreement.
+- Re-run response evaluation so `response_eval_metrics.json` includes BLEU, bootstrap ROUGE-L confidence intervals, repetition rate, degeneration rate, and prompt-artifact rate.
+- Build a 100-200 item blinded human-evaluation packet from `sample_generations.json`, stratified by scenario family and `reveal_decision`.
+- Report zero leakage as "0 detected by keyword/rule audit" with a Wilson upper confidence bound, not as a safety guarantee.
+- Re-label routing F1 as a deterministic policy sanity check unless routing is evaluated against independently annotated route decisions.
+
+### Next cluster runs
+
+- Multi-seed all headline comparisons: Qwen latent, joint vs separate, no-consistency, and Track A GPT/MoE. Use seeds 42/43/44 at minimum.
+- Add a parameter-matched dense GPT baseline near the MoE parameter count before making architectural claims about MoE.
+- Run an intervention/counterfactual generation evaluation: hold context fixed, change one `Z_t` field, and measure whether the response changes in the expected direction.
+- Evaluate predicted-`Z_t` conditioning separately from gold-`Z_t` conditioning. This is the causal bridge reviewers will expect.
+- Add an out-of-domain split by scenario family or NPC role to test whether the schema generalizes rather than memorizing the synthetic generator.
+
+### Human evaluation protocol
+
+Use a within-item, blinded pairwise design whenever possible.
+Annotators see the scenario, dialogue history, hidden social-state rubric, and two anonymized model responses.
+Collect:
+
+- Role consistency: does the NPC stay in character?
+- Social-state consistency: does the response match duty, secrecy, face, stance, and reveal policy?
+- Helpfulness/coherence: does the answer respond naturally to the player?
+- Safety/constraint violation: does it reveal forbidden information or contradict the specified state?
+- Preference: which response would be better in an interactive narrative?
+
+Report Krippendorff's alpha or Fleiss' kappa for categorical labels, bootstrap confidence intervals for preferences, and a short qualitative error taxonomy.
+
+### Paper framing
+
+For EMNLP, the paper should not sell this as a new SOTA dialogue generator.
+The defensible claim is narrower and stronger: structured social-state supervision exposes which social variables are recoverable from dialogue, identifies which conditioning signals are placebo, and provides an auditable control interface for NPC dialogue.

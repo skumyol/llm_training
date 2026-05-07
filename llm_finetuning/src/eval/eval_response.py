@@ -1,4 +1,8 @@
 import json
+import math
+import random
+import re
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -83,6 +87,7 @@ def eval_response(config_path: str) -> dict:
     contradiction_flags = 0
 
     rouge_l_scores: list[float] = []
+    gold_texts: list[str] = []
     generated_texts: list[str] = []
     generated_lengths: list[int] = []
 
@@ -123,6 +128,7 @@ def eval_response(config_path: str) -> dict:
 
             rouge_l = _rouge_l(gold_text, generated)
             rouge_l_scores.append(rouge_l)
+            gold_texts.append(gold_text)
             generated_texts.append(generated)
             generated_lengths.append(len(generated.split()))
 
@@ -144,12 +150,21 @@ def eval_response(config_path: str) -> dict:
                     "secret_leak": leaks,
                 })
 
+    rouge_l_ci_low, rouge_l_ci_high = _bootstrap_mean_ci(rouge_l_scores)
     metrics = {
         "rouge_l": sum(rouge_l_scores) / max(1, len(rouge_l_scores)),
+        "rouge_l_ci_low": rouge_l_ci_low,
+        "rouge_l_ci_high": rouge_l_ci_high,
+        "bleu_1": _corpus_bleu(gold_texts, generated_texts, max_n=1),
+        "bleu_2": _corpus_bleu(gold_texts, generated_texts, max_n=2),
+        "bleu_4": _corpus_bleu(gold_texts, generated_texts, max_n=4),
         "secret_leakage_rate": secret_leakage / max(1, total_secret_turns),
         "contradiction_rate": contradiction_flags / max(1, len(rouge_l_scores)),
         "distinct_1": _distinct_n(generated_texts, 1),
         "distinct_2": _distinct_n(generated_texts, 2),
+        "repeated_3gram_rate": _mean_repeated_ngram_rate(generated_texts, 3),
+        "degenerate_repetition_rate": _degenerate_repetition_rate(generated_texts, n=3, threshold=0.25),
+        "prompt_artifact_rate": _prompt_artifact_rate(generated_texts),
         "avg_len": sum(generated_lengths) / max(1, len(generated_lengths)),
         "n_evaluated": len(rouge_l_scores),
     }
@@ -188,6 +203,59 @@ def _rouge_l(reference: str, hypothesis: str) -> float:
     if precision + recall == 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"\w+|[^\w\s]", text.lower(), flags=re.UNICODE)
+
+
+def _corpus_bleu(references: list[str], hypotheses: list[str], max_n: int = 4) -> float:
+    if not references or not hypotheses:
+        return 0.0
+
+    clipped_counts = [0] * max_n
+    total_counts = [0] * max_n
+    ref_len = 0
+    hyp_len = 0
+
+    for reference, hypothesis in zip(references, hypotheses):
+        ref_tokens = _tokens(reference)
+        hyp_tokens = _tokens(hypothesis)
+        ref_len += len(ref_tokens)
+        hyp_len += len(hyp_tokens)
+
+        for n in range(1, max_n + 1):
+            hyp_ngrams = Counter(tuple(hyp_tokens[i : i + n]) for i in range(max(0, len(hyp_tokens) - n + 1)))
+            ref_ngrams = Counter(tuple(ref_tokens[i : i + n]) for i in range(max(0, len(ref_tokens) - n + 1)))
+            clipped_counts[n - 1] += sum(min(count, ref_ngrams[ng]) for ng, count in hyp_ngrams.items())
+            total_counts[n - 1] += sum(hyp_ngrams.values())
+
+    if hyp_len == 0:
+        return 0.0
+
+    # Chen-Cherry style smoothing is overkill here; add-one smoothing keeps
+    # the corpus BLEU stable for small eval samples with sparse higher n-grams.
+    precisions = [
+        (clipped_counts[i] + 1.0) / (total_counts[i] + 1.0)
+        for i in range(max_n)
+    ]
+    brevity_penalty = 1.0 if hyp_len > ref_len else math.exp(1 - ref_len / max(1, hyp_len))
+    return float(brevity_penalty * math.exp(sum(math.log(p) for p in precisions) / max_n))
+
+
+def _bootstrap_mean_ci(values: list[float], n_bootstrap: int = 1000, seed: int = 13) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    rng = random.Random(seed)
+    n = len(values)
+    means = []
+    for _ in range(n_bootstrap):
+        sample_sum = sum(values[rng.randrange(n)] for _ in range(n))
+        means.append(sample_sum / n)
+    means.sort()
+    low_idx = int(0.025 * (n_bootstrap - 1))
+    high_idx = int(0.975 * (n_bootstrap - 1))
+    return float(means[low_idx]), float(means[high_idx])
 
 
 def _lcs_length(a: list, b: list) -> int:
@@ -243,6 +311,9 @@ def _print_summary(metrics: dict, thresholds: dict) -> None:
     
     print("\n=== Response Generation Evaluation Summary ===")
     print(f"  ROUGE-L:             {metrics.get('rouge_l', 0):.4f}")
+    print(f"  BLEU-4:              {metrics.get('bleu_4', 0):.4f}")
+    print(f"  Repeated 3-grams:    {metrics.get('repeated_3gram_rate', 0):.4f}")
+    print(f"  Prompt Artifacts:    {metrics.get('prompt_artifact_rate', 0):.4f}")
     print(f"  Secret Leakage:      {leakage:.4f}  (95% CI upper: {ci_upper:.4f})  (threshold ≤ {thresholds.get('secret_leakage_rate', 0.05)})")
     print(f"  Contradiction Rate:  {metrics.get('contradiction_rate', 0):.4f}  (threshold ≤ {thresholds.get('contradiction_rate', 0.08)})")
     print()
@@ -258,3 +329,39 @@ def _distinct_n(texts: list[str], n: int) -> float:
     if not ngrams:
         return 0.0
     return len(set(ngrams)) / len(ngrams)
+
+
+def _repeated_ngram_rate(text: str, n: int = 3) -> float:
+    tokens = _tokens(text)
+    if len(tokens) < n:
+        return 0.0
+    ngrams = [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
+    counts = Counter(ngrams)
+    repeated = sum(count - 1 for count in counts.values() if count > 1)
+    return repeated / max(1, len(ngrams))
+
+
+def _mean_repeated_ngram_rate(texts: list[str], n: int = 3) -> float:
+    if not texts:
+        return 0.0
+    return float(sum(_repeated_ngram_rate(text, n) for text in texts) / len(texts))
+
+
+def _degenerate_repetition_rate(texts: list[str], n: int = 3, threshold: float = 0.25) -> float:
+    if not texts:
+        return 0.0
+    return float(sum(_repeated_ngram_rate(text, n) >= threshold for text in texts) / len(texts))
+
+
+def _prompt_artifact_rate(texts: list[str]) -> float:
+    if not texts:
+        return 0.0
+    patterns = [
+        r"</?(response|scene|emotion|speech)>",
+        r"\bbased on the\b",
+        r"\bokay,\s+let'?s see\b",
+        r"\bthe response should\b",
+        r"\bgenerate npc response\b",
+    ]
+    artifact_re = re.compile("|".join(patterns), flags=re.IGNORECASE)
+    return float(sum(bool(artifact_re.search(text)) for text in texts) / len(texts))

@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
-from sklearn.metrics import accuracy_score, f1_score, hamming_loss
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    cohen_kappa_score,
+    f1_score,
+    hamming_loss,
+    matthews_corrcoef,
+)
 
 from src.training.loss import GROUP_FIELDS
 
@@ -54,8 +61,11 @@ def compute_latent_metrics(
 
         fields[field] = {
             "accuracy": float(accuracy_score(golds, preds)),
+            "balanced_accuracy": float(balanced_accuracy_score(golds, preds)),
+            "cohen_kappa": float(cohen_kappa_score(golds, preds)),
             "macro_f1": float(f1_score(golds, preds, average="macro", zero_division=0)),
             "weighted_f1": float(f1_score(golds, preds, average="weighted", zero_division=0)),
+            "mcc": float(matthews_corrcoef(golds, preds)),
             "support": float(len(golds)),
         }
 
@@ -66,21 +76,35 @@ def compute_latent_metrics(
             continue
 
         acc_vals = [m["accuracy"] for m in group_metrics if "accuracy" in m]
+        bal_acc_vals = [m["balanced_accuracy"] for m in group_metrics if "balanced_accuracy" in m]
+        kappa_vals = [m["cohen_kappa"] for m in group_metrics if "cohen_kappa" in m]
         macro_f1_vals = [m["macro_f1"] for m in group_metrics if "macro_f1" in m]
         weighted_f1_vals = [m["weighted_f1"] for m in group_metrics if "weighted_f1" in m]
+        mcc_vals = [m["mcc"] for m in group_metrics if "mcc" in m]
         groups[group] = {
             "mean_accuracy": float(sum(acc_vals) / len(acc_vals)) if acc_vals else 0.0,
+            "mean_balanced_accuracy": float(sum(bal_acc_vals) / len(bal_acc_vals)) if bal_acc_vals else 0.0,
+            "mean_cohen_kappa": float(sum(kappa_vals) / len(kappa_vals)) if kappa_vals else 0.0,
             "mean_macro_f1": float(sum(macro_f1_vals) / len(macro_f1_vals)) if macro_f1_vals else 0.0,
             "mean_weighted_f1": float(sum(weighted_f1_vals) / len(weighted_f1_vals)) if weighted_f1_vals else 0.0,
+            "mean_mcc": float(sum(mcc_vals) / len(mcc_vals)) if mcc_vals else 0.0,
         }
 
     summary: dict[str, Any] = {}
     accuracy_vals = [m["accuracy"] for m in fields.values() if "accuracy" in m]
+    balanced_accuracy_vals = [m["balanced_accuracy"] for m in fields.values() if "balanced_accuracy" in m]
+    kappa_vals = [m["cohen_kappa"] for m in fields.values() if "cohen_kappa" in m]
     macro_f1_vals = [m["macro_f1"] for m in fields.values() if "macro_f1" in m]
     weighted_f1_vals = [m["weighted_f1"] for m in fields.values() if "weighted_f1" in m]
+    mcc_vals = [m["mcc"] for m in fields.values() if "mcc" in m]
     summary["mean_accuracy"] = float(sum(accuracy_vals) / len(accuracy_vals)) if accuracy_vals else 0.0
+    summary["mean_balanced_accuracy"] = (
+        float(sum(balanced_accuracy_vals) / len(balanced_accuracy_vals)) if balanced_accuracy_vals else 0.0
+    )
+    summary["mean_cohen_kappa"] = float(sum(kappa_vals) / len(kappa_vals)) if kappa_vals else 0.0
     summary["mean_macro_f1"] = float(sum(macro_f1_vals) / len(macro_f1_vals)) if macro_f1_vals else 0.0
     summary["mean_weighted_f1"] = float(sum(weighted_f1_vals) / len(weighted_f1_vals)) if weighted_f1_vals else 0.0
+    summary["mean_mcc"] = float(sum(mcc_vals) / len(mcc_vals)) if mcc_vals else 0.0
 
     if "response_policy" in fields:
         summary["response_policy_f1"] = fields["response_policy"].get("macro_f1", 0.0)

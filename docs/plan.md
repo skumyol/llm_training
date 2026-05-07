@@ -133,6 +133,115 @@ Single selection metric: `val/response_policy_f1`. Never select on `jepa_loss`.
 
 ---
 
+## 3.5 Better experiment protocol for the next batch
+
+The next batch should be organized around reviewer-grade questions, not around "try another model."
+Every run must answer one of these:
+
+1. **Recoverability:** which parts of `Z_t` can be predicted from dialogue?
+2. **Causal utility:** does `Z_t` change generation in the intended direction?
+3. **System validity:** does the structured pipeline reduce violations or improve human preference?
+
+### Required response-generation comparisons
+
+Run all four settings on the same validation split:
+
+| Setting | Purpose |
+|---|---|
+| `none` | lower-bound response baseline |
+| `gold_Z_t` | oracle upper bound for structured state |
+| `predicted_Z_t` | deployed pipeline condition |
+| `shuffled_Z_t` | placebo/control for state semantics |
+
+Report PPL, ROUGE-L, BLEU-4, repeated 3-gram rate, prompt-artifact rate, constraint violations, and secret-leakage Wilson upper bound.
+If `gold_Z_t` is not better than `none`, the structured-state generation claim is weak and should be reported as a null.
+If `gold_Z_t > predicted_Z_t > none > shuffled_Z_t`, the bridge claim is strong.
+
+### Counterfactual control evaluation
+
+Hold context fixed and change exactly one state field.
+Start with:
+
+- `reveal_decision`: `none`, `hint`, `partial`, `full`
+- `secrecy_pressure`: `low`, `medium`, `high`
+- `response_policy`: `answer`, `deflect`, `negotiate`, `challenge`, `soothe`
+
+Measure intervention success with rule-based checks plus human/LLM-assisted judgments.
+Examples:
+
+- Higher `reveal_decision` should increase specific information content.
+- Higher `secrecy_pressure` should reduce direct disclosure.
+- `response_policy=soothe` should reduce threat/challenge language.
+
+### Generalization split
+
+Add a non-random held-out split:
+
+- Hold out entire scenario families.
+- Hold out NPC roles if enough data exists.
+- Report in-domain vs held-out macro-F1, MCC, and violation rates.
+
+This is necessary to show the schema generalizes beyond the synthetic generator's surface patterns.
+
+### Multi-seed policy
+
+Do not multi-seed everything.
+Run seeds 42/43/44 for only the headline results:
+
+- Qwen latent predictor.
+- Gold/predicted/shuffled/no-`Z_t` generation.
+- Joint vs separate.
+- Parameter-matched GPT vs MoE.
+
+Report mean ± std or paired bootstrap confidence intervals.
+
+### Human evaluation packet
+
+Build a 100-200 item blinded packet after the automatic eval stabilizes.
+Balance it across scenario family, `reveal_decision`, `response_policy`, and secrecy pressure.
+Collect naturalness, role consistency, social-state consistency, player relevance, constraint safety, and forced preference.
+
+---
+
+## 3.6 Architecture improvement roadmap
+
+The architecture work should improve structured-state understanding and controllability, not just raw PPL.
+Prioritize changes that are easy to ablate and easy to defend.
+
+### Latent predictor improvements
+
+| Idea | Why it matters | Acceptance |
+|---|---|---|
+| Pooling strategy: `last_token` vs `avg_pool` vs learned attention pooling | Decoder final token may be a weak sequence summary for classification | improves R/D macro-F1 or MCC without hurting mean metrics |
+| Ordinal heads for stance levels/deltas | `R_t` labels are ordered, not nominal | better delta/level MAE and macro-F1 |
+| Group-specific adapters | Reduces negative transfer across `C/A/M/R/N/D` | improves at least two groups with no large regression |
+| Hierarchical dependency layer | Lets `N_t` influence `D_t`, and affect/stance influence repair | reduces consistency violations and improves D-head F1 |
+| Class-balanced or focal loss | Handles skewed labels better than raw cross-entropy | improves macro-F1/MCC over accuracy-only gains |
+| Calibration loss or temperature scaling | Makes confidence meaningful for routing and selective generation | lower ECE while preserving F1 |
+
+### Response model improvements
+
+| Idea | Why it matters | Acceptance |
+|---|---|---|
+| Serialized `Z_t` control tokens | Replaces placebo OCEAN/VAD prefix with auditable state | gold/predicted beat shuffled/no-state |
+| Generate-then-verify reranking | Uses the latent predictor as a response consistency critic | fewer violations and lower repetition at same PPL range |
+| Constrained decoding for secrets | Prevents obvious forbidden disclosure at inference time | lower leakage with Wilson CI reported |
+| State-delta conditioning | Optimizes intended social transition, not only current state | better intervention success on trust/threat/obligation |
+| Stop-token and artifact training cleanup | Current samples include tags and prompt reasoning | prompt-artifact rate below 5% |
+
+### Higher-risk research directions
+
+- **Graph-structured `Z_t`:** model fields as dependency graph nodes; useful if consistency rules are central to the paper.
+- **Latent transition world model:** train `p(Z_{t+1} | Z_t, player, response)` for trajectory-level social dynamics.
+- **Social-function MoE:** route by interpretable social function such as secrecy, repair, negotiation, threat, or bonding, not by generic token likelihood.
+- **Contrastive counterfactual loss:** same context with altered `Z_t` should produce distinguishable hidden states/responses.
+- **Preference optimization:** run DPO/IPO using human or carefully audited judge preferences for role and social-state consistency.
+
+Do not add all of these at once.
+The strongest near-term architecture package is: pooling ablation, ordinal `R_t` heads, serialized `Z_t` response conditioning, and generate-then-verify reranking.
+
+---
+
 ## 4. Documentation alignment
 
 - `docs/ablations.md` — replace "estimated κ via normalized above-chance agreement" with "Cohen's κ from confusion matrices" once §2.1.C lands; mark Ablation 3 as superseded.
