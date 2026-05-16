@@ -1,4 +1,4 @@
-# Research Improvement Plan
+# Research Improvement Plan _(SUPERSEDED — see docs/results_matrix.md for current state)_
 
 _Last updated: 2026-05-05. Single source of truth for the remaining work needed to defend RQ\* (SLMs ≈ pretrained backbones on structured social-state understanding) and ship a coherent paper + docs + code._
 

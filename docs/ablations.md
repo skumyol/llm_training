@@ -92,8 +92,10 @@ Some heads show tradeoffs (secrecy_pressure +0.12 in joint, reveal_decision -0.1
 
 ---
 
-## Ablation 5: Consistency Loss Ablation 🔄 RUNNING (35% epoch 1/3, ~3h remaining)
+## Ablation 5: Consistency Loss Ablation ✅ DONE
 **Claim tested:** "Consistency constraints prevent impossible states"
+
+**Results:** λ_consist=0.5 vs 0.0 on Qwen3-1.7B joint model.
 
 **Question:** Does the consistency loss λ_consist actually reduce violations, or are the constraints learned from data alone?
 
@@ -154,4 +156,4 @@ All checkpoints at `checkpoints/`. All eval at `eval_results/latent_matrix/`. Re
 | 887549 | Joint vs Separate (attempt 3) | ❌ Crashed (tokenizer bug) |
 | 887621 | Joint vs Separate (attempt 4) | ✅ Complete |
 | 887460 | Consistency loss (attempt 1) | ❌ Crashed (wrong base model) |
-| 887542 | Consistency loss (attempt 2) | 🔄 Running |
+| 887542 | Consistency loss (attempt 2) | ✅ Complete |
