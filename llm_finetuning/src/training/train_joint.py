@@ -119,7 +119,11 @@ def train_joint(config_path: str, debug: bool = False) -> None:
         collate_fn=collate_joint_batch, num_workers=0,
     )
 
-    loss_fn = JointLoss(loss_weights)
+    loss_fn = JointLoss(
+        loss_weights,
+        label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+        focal_gamma=float(train_cfg.get("focal_gamma", 0.0)),
+    )
     optimizer = torch.optim.AdamW(
         [p for p in predictor.parameters() if p.requires_grad],
         lr=float(train_cfg.get("lr", 5e-5)),

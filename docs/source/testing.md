@@ -164,7 +164,7 @@ Test trained model manually::
    cd llm_finetuning
    PYTHONPATH=. python src/inference/interactive.py \
        --checkpoint ../checkpoints/joint_model_best \
-       --base_model Qwen/Qwen3-4B \
+       --base_model Qwen/Qwen3-1.7B \
        --scenario ../data/world_contexts/oakhaven_siege.yaml \
        --npc commander_vance
 
@@ -252,7 +252,7 @@ Reference times (RTX 4090):
 Task                         Time          Command
 ============================ ============= =============================
 Data generation (100 ep)   ~30 min       run_data_gen.py
-Stage 1 training (Qwen3-4B)  ~2 hours      train_latent.yaml
+Stage 1 training (Qwen3-4B config, Qwen3-1.7B reported runs)  ~2 hours      train_latent.yaml
 Stage 2 training             ~1.5 hours    train_response.yaml
 Stage 3 training             ~1 hour       train_joint.yaml
 SLM HPO (20 trials × 6)    ~8 hours      train_small_lms.sh

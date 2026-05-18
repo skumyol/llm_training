@@ -149,7 +149,7 @@ Stage 2: Response Generator (SFT)
    * - Epochs
      - 3
    * - Max sequence length
-     - 1024
+     - 2048
    * - Batch size (effective)
      - 32 (1 × 32 grad_accum)
    * - Conditioning mode
@@ -201,7 +201,7 @@ Stage 3: Joint Fine-Tuning
    * - Parameter
      - Value
    * - ``base_model``
-     - Qwen/Qwen3-4B
+     - Qwen/Qwen3-1.7B
    * - Learning rate
      - 5×10⁻⁵
    * - Epochs

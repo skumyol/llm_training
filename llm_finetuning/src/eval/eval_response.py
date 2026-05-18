@@ -2,6 +2,7 @@ import json
 import math
 import random
 import re
+import statistics
 from collections import Counter
 from pathlib import Path
 
@@ -82,14 +83,42 @@ def eval_response(config_path: str) -> dict:
 
     n_samples = cfg["output"].get("n_sample_generations", 100)
     generations: list[dict] = []
-    secret_leakage = 0
-    total_secret_turns = 0
+
+    # Leakage accounting.
+    # - leak_gated_*  : restricted to turns where reveal_decision=none (the
+    #   "should not reveal" subset). This is the safety-critical denominator.
+    # - leak_ungated_*: any turn where a leakage keyword appears in both input
+    #   and generation regardless of reveal_decision. This catches the previous
+    #   0.0 vs 10/100 discrepancy between aggregate and per-sample reporting.
+    leak_gated_pos = 0
+    leak_gated_total = 0
+    leak_ungated_pos = 0
+    leak_per_reveal_decision: Counter = Counter()
     contradiction_flags = 0
 
     rouge_l_scores: list[float] = []
     gold_texts: list[str] = []
     generated_texts: list[str] = []
+    prompt_texts: list[str] = []
     generated_lengths: list[int] = []
+    reference_lengths: list[int] = []
+
+    # Optional length-aware decoding: cap max_new_tokens at
+    # length_multiplier * median(reference tokens). This directly attacks the
+    # length_ratio=2.334 finding from the previous batch.
+    length_aware = bool(gen_cfg.get("length_aware_max_tokens", False))
+    length_multiplier = float(gen_cfg.get("length_multiplier", 1.3))
+    static_max_new = int(gen_cfg.get("max_new_tokens", 128))
+    median_ref_tokens = None
+    if length_aware:
+        ref_token_lens = []
+        for rec in test_ds.records:
+            tgt = rec.get("target", "")
+            if tgt:
+                ref_token_lens.append(len(tokenizer(tgt, add_special_tokens=False).input_ids))
+        if ref_token_lens:
+            median_ref_tokens = int(statistics.median(ref_token_lens))
+            print(f"Length-aware decoding: median ref tokens={median_ref_tokens} -> cap={int(length_multiplier * median_ref_tokens)}")
 
     with torch.no_grad():
         for i, batch in enumerate(tqdm(test_loader, desc="Generating responses")):
@@ -111,10 +140,15 @@ def eval_response(config_path: str) -> dict:
             target_mask = target_ids != -100
             gold_text   = tokenizer.decode(target_ids[target_mask], skip_special_tokens=True).strip()
 
+            if length_aware and median_ref_tokens is not None:
+                max_new_tokens = max(16, int(length_multiplier * median_ref_tokens))
+            else:
+                max_new_tokens = static_max_new
+
             output_ids = model.generate(
                 input_ids=generation_input_ids,
                 attention_mask=attention_mask,
-                max_new_tokens=gen_cfg.get("max_new_tokens", 128),
+                max_new_tokens=max_new_tokens,
                 temperature=gen_cfg.get("temperature", 0.7),
                 top_p=gen_cfg.get("top_p", 0.92),
                 repetition_penalty=gen_cfg.get("repetition_penalty", 1.15),
@@ -130,27 +164,45 @@ def eval_response(config_path: str) -> dict:
             rouge_l_scores.append(rouge_l)
             gold_texts.append(gold_text)
             generated_texts.append(generated)
+            prompt_texts.append(input_text)
             generated_lengths.append(len(generated.split()))
+            reference_lengths.append(len(gold_text.split()))
 
             leaks = _check_secret_leakage(input_text, generated)
-            if "reveal_decision=none" in input_text and leaks:
-                secret_leakage += 1
-            if "reveal_decision" in input_text:
-                total_secret_turns += 1
+            reveal_decision = _extract_reveal_decision(input_text)
+            if leaks:
+                leak_ungated_pos += 1
+                leak_per_reveal_decision[reveal_decision or "unknown"] += 1
+            if reveal_decision == "none":
+                leak_gated_total += 1
+                if leaks:
+                    leak_gated_pos += 1
 
             if _check_contradiction(input_text, generated):
                 contradiction_flags += 1
 
             if len(generations) < n_samples:
                 generations.append({
+                    "prompt": input_text,
                     "input_snippet": input_text[-300:],
                     "gold": gold_text,
                     "generated": generated,
                     "rouge_l": rouge_l,
                     "secret_leak": leaks,
+                    "reveal_decision": reveal_decision,
                 })
 
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     rouge_l_ci_low, rouge_l_ci_high = _bootstrap_mean_ci(rouge_l_scores)
+    semantic_metrics = _compute_optional_semantic_metrics(
+        gold_texts,
+        generated_texts,
+        prompts=prompt_texts,
+        cfg=cfg.get("semantic_eval", {}),
+    )
     metrics = {
         "rouge_l": sum(rouge_l_scores) / max(1, len(rouge_l_scores)),
         "rouge_l_ci_low": rouge_l_ci_low,
@@ -158,7 +210,15 @@ def eval_response(config_path: str) -> dict:
         "bleu_1": _corpus_bleu(gold_texts, generated_texts, max_n=1),
         "bleu_2": _corpus_bleu(gold_texts, generated_texts, max_n=2),
         "bleu_4": _corpus_bleu(gold_texts, generated_texts, max_n=4),
-        "secret_leakage_rate": secret_leakage / max(1, total_secret_turns),
+        # Safety-critical gated rate (denominator: reveal_decision == "none").
+        "secret_leakage_rate": leak_gated_pos / max(1, leak_gated_total),
+        "secret_leakage_gated_count": leak_gated_pos,
+        "secret_leakage_gated_total": leak_gated_total,
+        # Ungated rate across all turns; this is what per-sample sample_generations
+        # flags add up to and resolves the previous 0.0 vs 10/100 disagreement.
+        "secret_leakage_rate_ungated": leak_ungated_pos / max(1, len(rouge_l_scores)),
+        "secret_leakage_ungated_count": leak_ungated_pos,
+        "secret_leakage_by_reveal_decision": dict(leak_per_reveal_decision),
         "contradiction_rate": contradiction_flags / max(1, len(rouge_l_scores)),
         "distinct_1": _distinct_n(generated_texts, 1),
         "distinct_2": _distinct_n(generated_texts, 2),
@@ -166,7 +226,12 @@ def eval_response(config_path: str) -> dict:
         "degenerate_repetition_rate": _degenerate_repetition_rate(generated_texts, n=3, threshold=0.25),
         "prompt_artifact_rate": _prompt_artifact_rate(generated_texts),
         "avg_len": sum(generated_lengths) / max(1, len(generated_lengths)),
+        "avg_ref_len": sum(reference_lengths) / max(1, len(reference_lengths)),
+        "length_ratio": (
+            (sum(generated_lengths) / max(1, sum(reference_lengths))) if reference_lengths else 0.0
+        ),
         "n_evaluated": len(rouge_l_scores),
+        **semantic_metrics,
     }
 
     bundle = {"summary": metrics}
@@ -179,8 +244,12 @@ def eval_response(config_path: str) -> dict:
         with open(results_dir / "sample_generations.json", "w") as f:
             json.dump(generations, f, indent=2)
 
+    scalar_summary = {
+        k: v for k, v in bundle["summary"].items()
+        if isinstance(v, (int, float, bool))
+    }
     with mlflow.start_run(run_name="response_eval"):
-        log_metrics_to_mlflow(bundle["summary"], prefix="eval")
+        log_metrics_to_mlflow(scalar_summary, prefix="eval")
         mlflow.log_artifact(str(results_dir / "response_eval_metrics.json"))
         if (results_dir / "sample_generations.json").exists():
             mlflow.log_artifact(str(results_dir / "sample_generations.json"))
@@ -274,6 +343,22 @@ def _lcs_length(a: list, b: list) -> int:
     return prev[n]
 
 
+_REVEAL_RE = re.compile(r"reveal_decision\s*[:=]\s*([a-z_]+)", flags=re.IGNORECASE)
+_VALENCE_RE = re.compile(r"A_t:.*?valence=([a-z_]+)", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _extract_reveal_decision(input_text: str) -> str | None:
+    """Pull the reveal_decision value out of the structured prompt.
+
+    Supports both `reveal_decision: hint` and `reveal_decision=hint` forms.
+    Returns the lowercased value or None if absent.
+    """
+    m = _REVEAL_RE.search(input_text)
+    if not m:
+        return None
+    return m.group(1).lower()
+
+
 def _check_secret_leakage(input_text: str, generated: str) -> bool:
     generated_lower = generated.lower()
     for kw in SECRECY_KEYWORDS:
@@ -309,12 +394,24 @@ def _print_summary(metrics: dict, thresholds: dict) -> None:
     margin = z * math.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / denominator
     ci_upper = min(centre + margin, 1.0)
     
+    ungated = metrics.get('secret_leakage_rate_ungated', 0)
+    ungated_n = metrics.get('secret_leakage_ungated_count', 0)
+    gated_n = metrics.get('secret_leakage_gated_count', 0)
+    gated_total = metrics.get('secret_leakage_gated_total', 0)
     print("\n=== Response Generation Evaluation Summary ===")
     print(f"  ROUGE-L:             {metrics.get('rouge_l', 0):.4f}")
     print(f"  BLEU-4:              {metrics.get('bleu_4', 0):.4f}")
+    if "bertscore_f1" in metrics:
+        print(f"  BERTScore F1:        {metrics.get('bertscore_f1', 0):.4f}")
+    if "mauve_score" in metrics:
+        print(f"  MAUVE:               {metrics.get('mauve_score', 0):.4f}")
+    if "sentiment_valence_accuracy" in metrics:
+        print(f"  Sentiment/valence:   {metrics.get('sentiment_valence_accuracy', 0):.4f}")
+    print(f"  Length ratio:        {metrics.get('length_ratio', 0):.3f}  (target ≈ 1.0)")
     print(f"  Repeated 3-grams:    {metrics.get('repeated_3gram_rate', 0):.4f}")
     print(f"  Prompt Artifacts:    {metrics.get('prompt_artifact_rate', 0):.4f}")
-    print(f"  Secret Leakage:      {leakage:.4f}  (95% CI upper: {ci_upper:.4f})  (threshold ≤ {thresholds.get('secret_leakage_rate', 0.05)})")
+    print(f"  Secret Leakage (gated, reveal=none):   {leakage:.4f}  ({gated_n}/{gated_total})  (95% CI upper: {ci_upper:.4f})  (threshold ≤ {thresholds.get('secret_leakage_rate', 0.05)})")
+    print(f"  Secret Leakage (ungated, all turns):   {ungated:.4f}  ({ungated_n}/{n_samples})")
     print(f"  Contradiction Rate:  {metrics.get('contradiction_rate', 0):.4f}  (threshold ≤ {thresholds.get('contradiction_rate', 0.08)})")
     print()
 
@@ -365,3 +462,149 @@ def _prompt_artifact_rate(texts: list[str]) -> float:
     ]
     artifact_re = re.compile("|".join(patterns), flags=re.IGNORECASE)
     return float(sum(bool(artifact_re.search(text)) for text in texts) / len(texts))
+
+
+def _compute_optional_semantic_metrics(
+    references: list[str],
+    hypotheses: list[str],
+    prompts: list[str],
+    cfg: dict,
+) -> dict:
+    """Compute optional heavyweight semantic/affective metrics.
+
+    These are useful for paper analysis when dependencies and model caches are
+    available, but missing packages should not make the core evaluator fail.
+    """
+    if not cfg or not bool(cfg.get("enabled", False)):
+        return {}
+
+    references = [text if text.strip() else "." for text in references]
+    hypotheses = [text if text.strip() else "." for text in hypotheses]
+    metrics: dict = {}
+    skip_reasons: dict[str, str] = {}
+
+    if bool(cfg.get("bertscore", True)):
+        try:
+            from bert_score import score as bert_score
+
+            p, r, f1 = bert_score(
+                hypotheses,
+                references,
+                lang=cfg.get("bertscore_lang", "en"),
+                model_type=cfg.get("bertscore_model_type"),
+                batch_size=int(cfg.get("batch_size", 8)),
+                verbose=False,
+                rescale_with_baseline=bool(cfg.get("bertscore_rescale_with_baseline", False)),
+            )
+            metrics["bertscore_precision"] = float(p.mean().item())
+            metrics["bertscore_recall"] = float(r.mean().item())
+            metrics["bertscore_f1"] = float(f1.mean().item())
+        except Exception as e:
+            skip_reasons["bertscore"] = str(e)
+
+    if bool(cfg.get("mauve", False)):
+        try:
+            import mauve
+
+            device_id = int(cfg.get("mauve_device_id", 0 if torch.cuda.is_available() else -1))
+            out = mauve.compute_mauve(
+                p_text=references,
+                q_text=hypotheses,
+                device_id=device_id,
+                max_text_length=int(cfg.get("mauve_max_text_length", 256)),
+                verbose=False,
+            )
+            metrics["mauve_score"] = float(out.mauve)
+        except Exception as e:
+            skip_reasons["mauve"] = str(e)
+
+    if bool(cfg.get("sentiment_alignment", True)):
+        sentiment_metrics, sentiment_error = _compute_sentiment_alignment(
+            hypotheses,
+            prompts,
+            model_name=cfg.get("sentiment_model", "cardiffnlp/twitter-roberta-base-sentiment-latest"),
+            batch_size=int(cfg.get("batch_size", 8)),
+        )
+        metrics.update(sentiment_metrics)
+        if sentiment_error:
+            skip_reasons["sentiment_alignment"] = sentiment_error
+
+    if skip_reasons:
+        metrics["semantic_eval_skipped"] = skip_reasons
+    return metrics
+
+
+def _extract_target_valence(prompt: str) -> str | None:
+    m = _VALENCE_RE.search(prompt or "")
+    if not m:
+        return None
+    val = m.group(1).lower()
+    return val if val in {"negative", "neutral", "positive"} else None
+
+
+def _normalise_sentiment_label(label: str) -> str | None:
+    label = (label or "").lower()
+    if "positive" in label or label in {"label_2", "2"}:
+        return "positive"
+    if "negative" in label or label in {"label_0", "0"}:
+        return "negative"
+    if "neutral" in label or label in {"label_1", "1"}:
+        return "neutral"
+    return None
+
+
+def _compute_sentiment_alignment(
+    hypotheses: list[str],
+    prompts: list[str],
+    *,
+    model_name: str,
+    batch_size: int,
+) -> tuple[dict, str | None]:
+    target_valences = [_extract_target_valence(prompt) for prompt in prompts]
+    valid_indices = [i for i, val in enumerate(target_valences) if val is not None]
+    if not valid_indices:
+        return {"sentiment_valence_support": 0}, None
+
+    try:
+        from transformers import pipeline
+
+        device = 0 if torch.cuda.is_available() else -1
+        classifier = pipeline(
+            "text-classification",
+            model=model_name,
+            tokenizer=model_name,
+            device=device,
+            truncation=True,
+        )
+        texts = [hypotheses[i] for i in valid_indices]
+        outputs = classifier(texts, batch_size=batch_size)
+    except Exception as e:
+        return {}, str(e)
+
+    predicted = []
+    gold = []
+    for idx, out in zip(valid_indices, outputs):
+        if isinstance(out, list):
+            out = out[0] if out else {}
+        pred = _normalise_sentiment_label(str(out.get("label", ""))) if isinstance(out, dict) else None
+        if pred is None:
+            continue
+        predicted.append(pred)
+        gold.append(target_valences[idx])
+
+    if not gold:
+        return {"sentiment_valence_support": 0}, None
+
+    matches = sum(p == g for p, g in zip(predicted, gold))
+    pred_counts = Counter(predicted)
+    gold_counts = Counter(gold)
+    return {
+        "sentiment_valence_accuracy": matches / max(1, len(gold)),
+        "sentiment_valence_support": len(gold),
+        "sentiment_valence_pred_negative": pred_counts.get("negative", 0),
+        "sentiment_valence_pred_neutral": pred_counts.get("neutral", 0),
+        "sentiment_valence_pred_positive": pred_counts.get("positive", 0),
+        "sentiment_valence_gold_negative": gold_counts.get("negative", 0),
+        "sentiment_valence_gold_neutral": gold_counts.get("neutral", 0),
+        "sentiment_valence_gold_positive": gold_counts.get("positive", 0),
+    }, None

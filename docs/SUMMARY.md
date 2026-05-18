@@ -1,11 +1,15 @@
 # Documentation Summary
 
-The canonical technical documentation now lives under `docs/source/`.
+The canonical documentation lives under `docs/source/`.
 
 Start here:
 
-- `docs/source/technical_paper.md` — paper-style explanation covering the data model, LLM training, SLM training, inference, and architecture comparisons.
-- `docs/source/model_registry.md` — generated architecture, hyperparameter, and data registry.
-- `docs/source/index.rst` — Sphinx entry point.
+- `docs/source/technical_paper.md` - repo-grounded technical overview.
+- `docs/source/research_status.md` - evidence ledger for paper claims and evaluation gaps.
+- `docs/source/experiment_results_report.md` - current result reconciliation and next remote batch checklist.
+- `docs/source/eval_plan.md` - canonical evaluation contract and upgrade plan.
+- `docs/source/model_registry.md` - generated architecture, hyperparameter, and data registry.
+- `docs/remote_experiment_plan.html` - browser-readable runbook for the next remote experiment batch.
+- `docs/source/index.rst` - Sphinx entry point.
 
-Related older narrative docs have been merged into `technical_paper.md` to avoid drifting claims about model versions, data counts, and parameter counts.
+Older top-level narrative drafts were removed because they repeated paper claims and had drifted from the checked-in evaluation artifacts.

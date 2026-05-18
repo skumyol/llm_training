@@ -48,12 +48,19 @@ def eval_latent(config_path: str) -> dict:
     secret_leakage = 0
     total_turns = 0
 
+    # Per-record predictions for routing export
+    per_record_preds: list[dict] = []
+    idx_to_label = {field: {i: name for i, name in enumerate(LABEL_MAPS[field])} for field in LABEL_MAPS}
+
     predictor.eval()
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating latent heads"):
             input_ids      = batch["input_ids"].to(predictor.backbone.device)
             attention_mask = batch["attention_mask"].to(predictor.backbone.device)
             out = predictor(input_ids=input_ids, attention_mask=attention_mask)
+
+            bsz = input_ids.size(0)
+            episode_ids = batch.get("episode_ids", [""] * bsz)
 
             for field in out["logits"]:
                 label_key = f"label_{field}"
@@ -84,6 +91,24 @@ def eval_latent(config_path: str) -> dict:
                     all_golds[field] = []
                 all_preds[field].extend(pred[valid].cpu().tolist())
                 all_golds[field].extend(gold[valid].cpu().tolist())
+
+            # Collect per-record predictions for routing fields. Keep the base
+            # index stable for the whole batch; len(per_record_preds) changes
+            # as we append inside this loop.
+            routing_fields = ["value_conflict", "response_policy", "reveal_decision", "secrecy_pressure"]
+            base_idx = len(per_record_preds)
+            for i in range(bsz):
+                record = test_ds.records[base_idx + i]
+                rec_pred = {
+                    "record_idx": base_idx + i,
+                    "episode_id": str(record.get("episode_id", episode_ids[i])),
+                    "turn_idx": record.get("turn_idx", record.get("turn", -1)),
+                }
+                for field in routing_fields:
+                    if field in out["logits"]:
+                        idx = int(out["logits"][field][i].argmax(dim=-1).cpu().item())
+                        rec_pred[field] = idx_to_label[field].get(idx, "")
+                per_record_preds.append(rec_pred)
 
             reveal_logits = out["logits"].get("reveal_decision")
             secrecy_label_key = "label_secrecy_pressure"
@@ -120,11 +145,19 @@ def eval_latent(config_path: str) -> dict:
         secret_leakage_rate=secret_leakage / max(1, total_turns),
     )
 
+    pred_path = results_dir / "predicted_zt.jsonl"
+    with open(pred_path, "w") as f:
+        for rec in per_record_preds:
+            f.write(json.dumps(rec) + "\n")
+    print(f"Saved predicted Z_t for {len(per_record_preds)} records to {pred_path}")
+
     with open(results_dir / "latent_eval_metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
     write_metrics_bundle(results_dir, "latent_eval_report", metrics, title="Latent Evaluation Report")
 
     with mlflow.start_run(run_name="latent_eval"):
+        if pred_path.exists():
+            mlflow.log_artifact(str(pred_path))
         log_metrics_to_mlflow(metrics.get("summary", {}), prefix="eval")
         if metrics.get("groups"):
             log_metrics_to_mlflow(metrics["groups"], prefix="eval/groups")

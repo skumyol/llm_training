@@ -64,12 +64,54 @@ def compute_class_weights(train_file: str, label_maps: dict) -> dict[str, torch.
     return weights
 
 
+def _focal_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    gamma: float,
+    weight: torch.Tensor | None = None,
+    label_smoothing: float = 0.0,
+) -> torch.Tensor:
+    """Multi-class focal CE with optional class weights and label smoothing.
+
+    Reduces to standard (weighted, smoothed) cross-entropy when gamma == 0.
+    Targets are class indices; -1 entries must be filtered by the caller.
+    """
+    if gamma <= 0.0:
+        return F.cross_entropy(logits, targets, weight=weight, label_smoothing=label_smoothing)
+    log_probs = F.log_softmax(logits, dim=-1)
+    probs = log_probs.exp()
+    n_classes = logits.size(-1)
+    with torch.no_grad():
+        if label_smoothing > 0.0:
+            true_dist = torch.full_like(log_probs, label_smoothing / max(1, n_classes - 1))
+            true_dist.scatter_(1, targets.unsqueeze(1), 1.0 - label_smoothing)
+        else:
+            true_dist = F.one_hot(targets, num_classes=n_classes).to(log_probs.dtype)
+    # focal weighting on the true-class probability
+    pt = (probs * true_dist).sum(dim=-1).clamp(min=1e-8, max=1.0)
+    focal = (1.0 - pt).pow(gamma)
+    nll = -(true_dist * log_probs).sum(dim=-1)
+    if weight is not None:
+        # per-sample class weight applied via target class index
+        w = weight.gather(0, targets)
+        nll = nll * w
+    return (focal * nll).mean()
+
+
 class MultiHeadLoss(nn.Module):
-    def __init__(self, loss_weights: dict[str, float], class_weights: dict[str, torch.Tensor] | None = None, label_smoothing: float = 0.0):
+    def __init__(
+        self,
+        loss_weights: dict[str, float],
+        class_weights: dict[str, torch.Tensor] | None = None,
+        label_smoothing: float = 0.0,
+        focal_gamma: float = 0.0,
+    ):
         super().__init__()
         self.weights = loss_weights
         self.class_weights = class_weights or {}
         self.label_smoothing = label_smoothing
+        self.focal_gamma = float(focal_gamma)
         self.ce = nn.CrossEntropyLoss(ignore_index=-1, label_smoothing=label_smoothing)
         self.bce = nn.BCEWithLogitsLoss()
 
@@ -99,11 +141,16 @@ class MultiHeadLoss(nn.Module):
                 else:
                     valid_mask = gold != -1
                     if valid_mask.any():
-                        if field in self.class_weights:
-                            cw = self.class_weights[field].to(device)
-                            field_loss = F.cross_entropy(pred[valid_mask], gold[valid_mask], weight=cw, ignore_index=-1)
-                        else:
-                            field_loss = self.ce(pred[valid_mask], gold[valid_mask])
+                        cw = self.class_weights.get(field)
+                        if cw is not None:
+                            cw = cw.to(device)
+                        field_loss = _focal_cross_entropy(
+                            pred[valid_mask],
+                            gold[valid_mask],
+                            gamma=self.focal_gamma,
+                            weight=cw,
+                            label_smoothing=self.label_smoothing,
+                        )
                     else:
                         field_loss = torch.tensor(0.0, device=device)
 
@@ -150,9 +197,20 @@ class ConsistencyLoss(nn.Module):
 
 
 class JointLoss(nn.Module):
-    def __init__(self, loss_weights: dict[str, float]):
+    def __init__(
+        self,
+        loss_weights: dict[str, float],
+        class_weights: dict[str, torch.Tensor] | None = None,
+        label_smoothing: float = 0.0,
+        focal_gamma: float = 0.0,
+    ):
         super().__init__()
-        self.multi_head_loss = MultiHeadLoss(loss_weights)
+        self.multi_head_loss = MultiHeadLoss(
+            loss_weights,
+            class_weights=class_weights,
+            label_smoothing=label_smoothing,
+            focal_gamma=focal_gamma,
+        )
         self.consistency_loss = ConsistencyLoss()
         self.lambda_Y = loss_weights.get("lambda_Y", 1.0)
         self.lambda_consistency = loss_weights.get("lambda_consistency", 0.5)

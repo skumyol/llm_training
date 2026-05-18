@@ -155,7 +155,15 @@ def train_latent(config_path: str, debug: bool = False) -> None:
     )
 
     label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
-    loss_fn = MultiHeadLoss(loss_weights, class_weights=class_weights, label_smoothing=label_smoothing)
+    focal_gamma = float(train_cfg.get("focal_gamma", 0.0))
+    loss_fn = MultiHeadLoss(
+        loss_weights,
+        class_weights=class_weights,
+        label_smoothing=label_smoothing,
+        focal_gamma=focal_gamma,
+    )
+    if focal_gamma > 0.0:
+        print(f"Using focal loss with gamma={focal_gamma}")
     jepa_head = None
     if jepa_enabled:
         label_vocab_sizes = {field: len(LABEL_MAPS[field]) for field in jepa_fields}

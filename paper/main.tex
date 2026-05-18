@@ -40,8 +40,8 @@ We decompose NPC interaction into a 29-dimensional structured latent state $Z_t$
 Training a multi-head predictor on Qwen3-1.7B, we find that some social dimensions are highly recoverable (risk\_type $\kappa{=}0.865$, face\_pressure $\kappa{=}0.802$) while per-turn deltas are near chance (familiarity\_delta $\kappa{=}0.374$), revealing a systematic pattern: \textit{static attributes are predictable from context; dynamic changes are not}.
 Soft-prefix conditioning reduces perplexity by 12.3\% over an unconditioned 1.1B baseline, but placebo ablations show that this gain is not attributable to the semantic content of the current OCEAN+VAD values.
 A comparison of four from-scratch architectures (GPT, PrefixGPT, MoE, Mamba-like) at the 15--22M parameter scale shows that Mixture-of-Experts edges out standard GPT by 7.2\%, but requires 39\% more parameters to do so.
-Keyword-based automatic checks detect no secret leakage in sampled generations.
-All 12 trained models, checkpoints, and evaluation artifacts are released.
+The checked-in leakage artifacts currently disagree: the aggregate response metric reports zero leakage, while 10 of 100 sampled generations carry a \texttt{secret\_leak} flag, making leakage evaluation an unresolved validity issue.
+The checked-in repository releases code, manuscript sources, figures, and compact evaluation artifacts; generated data splits and model checkpoints should be cited separately when synced from the training environment.
 \end{abstract}
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -264,7 +264,7 @@ Three models generate NPC responses:
     \item \textbf{ConditionalDialogue}: From-scratch GPT + personality/affect soft-prefix embeddings ($c_t \to$ prefix via learned projection).
     \item \textbf{TinyLlama + LoRA}: 1.1B pretrained chat model, fine-tuned with LoRA ($r=16$, $\alpha=32$) on SFT data without social-state conditioning.
 
-    \item \textbf{Gemma-4-E2B + QLoRA}: exploratory larger active-parameter baseline.
+    \item \textbf{Gemma + QLoRA}: exploratory larger pretrained baselines, including a corrected Gemma-2-2B-it run and a Gemma-4-E2B engineering run.
 \end{enumerate}
 
 \paragraph{Track D: Structured LLM.}
@@ -330,7 +330,8 @@ Each turn is annotated with the full 29-field $Z_t$ schema (\texttt{train\_heads
 Data is split 80/10/10 into train (6,175 turns, 587 episodes), validation (683 turns, 69 episodes), and test (884 turns, 80 episodes).
 SLM training (Track~A) uses a separate corpus of 16,905 plain-text dialogue lines spanning 414 unique NPCs (\texttt{train.txt} / \texttt{val.txt} split at 95/5).
 Encoder training (Track~B) uses 2,221 personality-labelled samples from essays-big5\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}} and 9,056 affect-labelled samples drawn from EmoBank~\cite{buechel2017emobank} and EmpatheticDialogues~\cite{rashkin2019empathetic}.
-\textbf{Data provenance:} Full source documentation, including which datasets are real (published corpora, human-annotated) versus synthetic (teacher LLM-generated), with sizes and merge details, is provided in Appendix~\ref{app:datagen}.
+\textbf{Data provenance:} Source documentation, including which datasets are real (published corpora, human-annotated) versus synthetic (teacher LLM-generated), with sizes and merge details, is provided in Appendix~\ref{app:datagen}.
+The current public checkout contains scenario definitions and compact evaluation artifacts, but not the generated split JSONL files or model checkpoints; final camera-ready reporting should cite the external artifact bundle for those files.
 
 \paragraph{Hardware.}
 Table~\ref{tab:hardware} summarises the memory requirements for training and inference across all models.
@@ -438,7 +439,7 @@ A cache of 414 NPC personality embeddings was built from training data for effic
 \midrule
 \textbf{ConditionalDialogue} & OCEAN+VAD soft-prefix & 1.064 & \textbf{2.90} & 5 \\
 TinyLlama 1.1B + LoRA       & none (SFT)            & 1.195 & 3.30          & 3 \\
-Gemma-4-E2B + QLoRA        & NPC profile (SFT)     & 1.854 & 6.38          & 2 \\
+Gemma-2-2B-it + QLoRA      & NPC profile (SFT)     & 1.854 & 6.38          & 2 \\
 Gemma-4-E2B + QLoRA          & NPC profile (SFT)     & 2.787 & 16.24         & 1 \\
 \bottomrule
 \end{tabular}
@@ -447,12 +448,12 @@ Gemma-4-E2B + QLoRA          & NPC profile (SFT)     & 2.787 & 16.24         & 1
 \textbf{Finding (RQ3):} Soft-prefix conditioning reduces response perplexity by \textbf{12.3\%} (3.30$\to$2.90; Table~\ref{tab:response_ppl}).
 However, placebo controls with shuffled OCEAN values, random VAD values, and shuffled+random conditioning all converge to the same PPL range (2.88--2.91), indicating that the gain comes from the presence of prefix-conditioning capacity rather than from the semantic content of the current OCEAN/VAD vectors.
 This is still a useful architectural result, but it rules out the stronger claim that the learned OCEAN/VAD values causally improve generation.
-The corrected Gemma-4-E2B run (PPL 6.38) and the exploratory Gemma-4-E2B run (PPL 16.24, 1 epoch) provide pretrained-model baselines but remain behind the task-specific conditional model on this validation split.
+The corrected Gemma-2-2B-it run (PPL 6.38) and the exploratory Gemma-4-E2B run (PPL 16.24, 1 epoch) provide pretrained-model baselines but remain behind the task-specific conditional model on this validation split.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.86\linewidth]{figures/response_ppl_comparison.pdf}
-\caption{Track C response-model validation perplexity. The fixed Gemma-4-E2B run should be treated as the primary Gemma baseline; the Gemma-4-E2B run is retained as an exploratory engineering result.}
+\caption{Track C response-model validation perplexity. The fixed Gemma-2-2B-it run should be treated as the primary Gemma baseline; the Gemma-4-E2B run is retained as an exploratory engineering result.}
 \label{fig:response_ppl}
 \end{figure}
 
@@ -465,31 +466,29 @@ The corrected Gemma-4-E2B run (PPL 6.38) and the exploratory Gemma-4-E2B run (PP
 
 \begin{table}[t]
 \centering
-\caption{Response generation quality metrics (Qwen3-1.7B response model, $n=100$ sampled generations).}
+\caption{Response generation quality metrics (Qwen3-1.7B response model, $n=100$ sampled generations). These are diagnostic automatic metrics from the checked-in artifacts; the evaluator has since been upgraded to regenerate BLEU, confidence intervals, repetition, length ratio, and gated/ungated leakage denominators before submission.}
 \label{tab:response_quality}
 \small
 \begin{tabular}{@{}lr@{}}
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
-ROUGE-L           & 0.120 $\pm$ 0.058 \\
-ROUGE-L 95\% CI   & [0.106, 0.133] \\
-BLEU-1 / BLEU-2 / BLEU-4 & 0.177 / 0.049 / 0.009 \\
-Distinct-1 / Distinct-2 / Distinct-3 & 0.128 / 0.469 / 0.706 \\
-Repetition rate (3-gram / 5-gram)    & 0.667 / 0.302 \\
-Avg gen length / ref length (tokens) & 118.4 / 50.7 \\
-Length ratio (gen/ref)                & 2.334 \\
-Secret leakage rate  & 0.000 \\
+Aggregate ROUGE-L & 0.098 over 683 examples \\
+Sample mean ROUGE-L & 0.115 over 100 sampled generations \\
+Aggregate secret leakage rate & 0.000 in \texttt{response\_eval\_metrics.json} \\
+Sample \texttt{secret\_leak} flags & 10/100 in \texttt{sample\_generations.json} \\
 Contradiction rate   & 0.000 \\
-Mean policy consistency & 0.461 \\
+Missing from checked artifacts & BLEU, ROUGE-L CI, distinct-n, repetition, length ratio, gated/ungated leakage \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:response_quality} reports generation quality for the Qwen3 response model over $n{=}100$ samples.
-ROUGE-L of 0.120 reflects the one-to-many nature of dialogue---multiple valid responses exist for any input, and a single gold reference cannot capture this diversity.
-Distinct-2/3 scores (0.469/0.706) indicate reasonable lexical range, though the 3-gram repetition rate (0.667) and 2.3$\times$ length ratio reveal a tendency toward verbose, repetitive outputs common in small LMs at early training stages.
-Zero keyword-detected instances of secret leakage or contradiction were found.
+Table~\ref{tab:response_quality} reports the checked-in automatic response artifacts.
+Aggregate ROUGE-L of 0.098 and sample mean ROUGE-L of 0.115 are weak overlap scores; this partly reflects the one-to-many nature of dialogue, but also shows that automatic lexical quality is not yet strong evidence for response quality.
+Qualitative inspection of the samples reveals verbose, repetitive outputs; BLEU, distinct-n, repetition, length-ratio, and policy-consistency metrics should be regenerated before submission rather than inferred from prose.
+The checked-in leakage artifacts disagree: the aggregate evaluator reports zero leakage, but the sampled-generation file marks 10 of 100 rows with \texttt{secret\_leak=true}.
+We therefore treat leakage evaluation as unresolved and exclude it from positive claims.
+The next response-evaluation run uses length-aware decoding and reports both gated leakage (only \texttt{reveal\_decision=none}) and ungated leakage across all turns, which will replace this table if the remote rerun succeeds.
 
 \subsection{Track D: Latent State Prediction (RQ2)}
 
@@ -541,6 +540,7 @@ The overfitting gap (train loss 1.68 vs.\ val loss 7.39 at epoch 3) indicates th
 The rule-based fast/slow router achieves perfect precision and recall ($\text{F1}=1.0$) when evaluated on gold validation states, with a slow-path rate of 53.7\%.
 This is a sanity check rather than a deployment result, since the router applies deterministic rules to the same latent state used for ground truth construction.
 In deployment, the router would operate on \textit{predicted} $Z_t$; evaluating that setting is required before claiming routing performance.
+The codebase now includes this predicted-state routing mode: latent evaluation writes \texttt{predicted\_zt.jsonl}, and routing evaluation consumes it with missing predictions treated as an error by default to avoid silently falling back to gold labels.
 
 \begin{figure}[t]
 \centering
@@ -573,8 +573,8 @@ Mean normalized above-chance agreement, reported as estimated $\kappa=0.611$, in
 The interpretability of individual heads (e.g., ``\texttt{secrecy\_pressure=high}'' or ``\texttt{response\_policy=withhold}'') enables human auditing of NPC behaviour.
 
 \paragraph{Secret-keeping.}
-No keyword-detected secret leakage was found in the sampled generations, which is encouraging for the reveal\_decision head and consistency constraints, but this does not constitute a formal leakage guarantee.
-In a deployed system, the latent predictor's $D_t$ output would gate information disclosure, providing a verifiable safety mechanism.
+The current leakage audit is not publication-ready because aggregate and sample-level artifacts disagree.
+In a deployed system, the latent predictor's $D_t$ output could gate information disclosure, but the disclosure evaluator must be fixed before this can be presented as a verified safety mechanism.
 
 \paragraph{Limitations.}
 \begin{enumerate}
@@ -584,6 +584,7 @@ In a deployed system, the latent predictor's $D_t$ output would gate information
     \item \textbf{Synthetic labels}: Social-state annotations are LLM-generated (not human-annotated), introducing label noise.
     \item \textbf{Evaluation coverage}: ROUGE-L and BLEU are weak proxies for dialogue quality; human preference and task-success evaluation are needed for deployment-ready claims.
     \item \textbf{Repetition}: The response model shows high 3-gram repetition (66.7\%) and generates responses 2.3$\times$ longer than references, indicating a need for length penalties or nucleus sampling tuning.
+    \item \textbf{Pending reruns}: Length-aware decoding, secret-span masking, focal loss for weak latent heads, DPO/KTO pairs, and predicted-$Z_t$ routing are implemented for the next remote batch but are not yet new paper results.
 \end{enumerate}
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -608,8 +609,8 @@ This identifies the prefix mechanism as useful while motivating more informative
 The best from-scratch model (MoE, PPL 42.07, 22.4M parameters) is still an order of magnitude behind the worst pretrained model (TinyLlama SFT, PPL 3.30, 1.1B parameters).
 The 39\% parameter increase that MoE requires to achieve a 7.2\% gain over GPT suggests that architectural innovation at the 15--22M scale faces diminishing returns without more data.
 
-All 12 trained models, checkpoints, and evaluation artifacts are released.
-The structured latent state $Z_t$ provides an interpretable bottleneck between perception and generation---one that is predictable, auditable, and cheap enough to deploy.
+The checked-in release contains code, paper sources, figures, and compact evaluation artifacts; trained checkpoints and generated data splits require a separate artifact bundle.
+The structured latent state $Z_t$ provides an interpretable bottleneck between perception and generation---one that is predictable, auditable, and cheap enough to evaluate in a single-GPU research setting.
 
 % ═══════════════════════════════════════════════════════════════════════════════
 % REFERENCES
@@ -778,7 +779,7 @@ These were merged into four unified files:
 
 \textbf{Training subset:} From these merged corpora, we sampled 2,221 personality-labelled examples and 9,056 affect-labelled examples for encoder training (Track~B).
 The SLM dialogue corpus (16,905 lines; Track~A) was drawn from \texttt{merged\_dialogue.txt}.
-The full merged corpora (70K+ turns) are available in the repository for future expansion.
+The full merged corpora (70K+ turns) were used in the training environment but are not present in this checkout; they should be distributed or cited as a separate artifact bundle for full reproducibility.
 
 \textbf{Distinction from synthetic data:} The personality (essays-big5) and affect (EmoBank, EmpatheticDialogues) labels are \textit{real human annotations} from published academic corpora.
 The dialogue text in the external corpora is also real (crowdworker-generated), in contrast to the synthetic teacher-LLM-generated SFT data used for Tracks~C and~D.
@@ -807,7 +808,7 @@ We describe concrete deployment scenarios for each track and the practical capab
     \item \textbf{Privacy-preserving applications.} Because these models are trained from scratch on in-domain data, they never see internet text, user conversations, or any external data.
     For healthcare training simulations or corporate role-play scenarios where data must never leave the device, from-scratch SLMs provide a fully offline, auditable solution.
     \item \textbf{Architecture research platform.} The 15--16M parameter scale makes these models cheap to train (20 epochs in under 5 minutes on an A30) and easy to modify.
-    Researchers can test new architectures (new attention mechanisms, new SSM variants, new expert-routing strategies) and get statistically meaningful comparisons within hours rather than weeks.
+    Researchers can test new architectures (new attention mechanisms, new SSM variants, new expert-routing strategies) within hours rather than weeks; statistical claims still require multi-seed reruns.
 \end{enumerate}
 
 \textbf{Current capability:} The MoE model achieves val\_ppl $=$ 42.07 on held-out dialogue.
@@ -845,14 +846,14 @@ The encoders run in under 10ms per inference on CPU.
     \item \textbf{Social-state-aware chatbots.} Beyond games, any conversational agent that needs to maintain a consistent persona can benefit from explicit personality and affect conditioning.
     Customer service bots, therapeutic agents, and educational tutors all have personas that should remain stable across interactions.
     \item \textbf{Baseline for stronger models.} TinyLlama SFT (val\_ppl $=$ 3.30) provides a clean baseline: ``this is how well a pretrained 1.1B model does without any social state.''
-    The 12.1\% improvement from adding conditioning quantifies the value of the prefix mechanism, while placebo controls show that the current OCEAN/VAD values should not be treated as the causal signal.
-    \item \textbf{Gemma 4 as a capability ceiling.} The Gemma 4 E2B model (16B total, 2B active) demonstrates that sparse MoE architectures can be fine-tuned on a single 24\,GB GPU for training.
+    The 12.3\% improvement from adding conditioning quantifies the value of the prefix mechanism, while placebo controls show that the current OCEAN/VAD values should not be treated as the causal signal.
+    \item \textbf{Gemma as an engineering baseline.} The Gemma-2-2B-it run provides the corrected scientific baseline in this draft, while the Gemma 4 E2B run demonstrates that sparse MoE architectures can be fine-tuned on a single 24\,GB GPU for training.
     Inference requires 12--16\,GB VRAM with 4-bit quantisation---well within reach of a consumer RTX 4080 or cloud T4 instance.
-    For applications that can afford a larger inference budget, Gemma 4 provides a stronger response quality ceiling than the 1.1B models.
+    For applications that can afford a larger inference budget, Gemma-family models remain useful baselines, but the current Gemma runs do not outperform the task-specific conditional model on this validation split.
 \end{enumerate}
 
-\textbf{Current capability:} ConditionalDialogue achieves val\_ppl $=$ 2.90, with no keyword-detected secret leakage in sampled generations.
-The 12.1\% gain over the unconditioned baseline should be interpreted as a soft-prefix capacity effect until multi-seed placebo controls are reported.
+\textbf{Current capability:} ConditionalDialogue achieves val\_ppl $=$ 2.90, but leakage reporting is unresolved because aggregate and sample-level artifacts disagree.
+The 12.3\% gain over the unconditioned baseline should be interpreted as a soft-prefix capacity effect because placebo controls reach the same PPL range.
 
 \subsection{Track D: Structured LLM Pipeline}
 
@@ -861,7 +862,7 @@ The 12.1\% gain over the unconditioned baseline should be interpreted as a soft-
 
 \textbf{Real-world use cases:}
 \begin{enumerate}
-    \item \textbf{Socially-aware NPC AI.} This is the closest thing we have to a production NPC brain.
+    \item \textbf{Socially-aware NPC AI prototype.} This is the closest component in the project to an integrated NPC social-reasoning loop.
     Given conversation history, the latent predictor estimates the NPC's full social state---what they think of the player, whether they are under pressure to keep secrets, what their strategic intent is.
     The response generator then produces dialogue that is consistent with that state.
     If the state says ``secrecy\_pressure $=$ high, reveal\_decision $=$ none,'' the system can route or constrain generation through an auditable disclosure policy.
@@ -875,7 +876,7 @@ The 12.1\% gain over the unconditioned baseline should be interpreted as a soft-
 \textbf{Current capability:} Latent predictor achieves response\_policy\_f1 $=$ 0.474 and mean\_accuracy $=$ 0.704.
 Response generator achieves val\_loss $=$ 0.037.
 Joint model trains end-to-end (train $=$ 4.30, val $=$ 6.47).
-All three checkpoints are saved and ready for deployment.
+The three-stage training path has run, but deployment claims require syncing the external checkpoints and evaluating the joint model with the same response and latent metrics.
 
 \subsection{What We Accomplish Overall}
 
@@ -892,13 +893,13 @@ Table~\ref{tab:accomplish} summarises the concrete capabilities delivered by thi
 \midrule
 Offline NPC dialogue (no pretrained model, no API, 60MB on disk)
     & Track A: 4 from-scratch SLMs trained on 16,905 lines; MoE PPL $=$ 42.07
-    & Game developers shipping embedded dialogue; privacy-critical applications \\
+    & Game developers evaluating embedded dialogue; privacy-critical applications \\
 \midrule
 Computational theory of mind (personality $+$ affect from text)
     & Track B: OCEAN encoder (f1 $=$ 0.678) $+$ VAD encoder (ccc $=$ 0.559); 414-NPC cache
     & Game writers doing automated NPC authoring; live social perception systems \\
 \midrule
-Soft-prefix dialogue with 12.1\% PPL improvement
+Soft-prefix dialogue with 12.3\% PPL improvement
     & Track C: ConditionalDialogue (ppl $=$ 2.90) vs. TinyLlama SFT (ppl $=$ 3.30); placebo controls show the gain is prefix-capacity rather than OCEAN/VAD semantics
     & Any conversational agent needing consistent persona and information control \\
 \midrule
@@ -970,7 +971,7 @@ Best val\_ppl $=$ 2.90 at epoch 2/5.
 \textbf{Model:} TinyLlama-1.1B with LoRA ($r=16$, $\alpha=32$). Standard supervised fine-tuning: input $\rightarrow$ target response, with input tokens masked (label $=-100$).
 \textbf{Output:} Generated NPC response.
 Best val\_ppl $=$ 3.30 at epoch 1/3.
-Conditioning gain $=$ 12.1\%.
+Conditioning gain $=$ 12.3\%.
 
 \paragraph{Gemma 4 E2B + QLoRA.}
 \textbf{Input:} Structured dialogue records from \texttt{from\_gen\_train.jsonl}, each containing \texttt{npc\_id}, \texttt{npc\_profile}, \texttt{dialogue\_context}, and \texttt{target\_response}.
@@ -993,7 +994,7 @@ Each head is a 2-layer MLP (hidden $\rightarrow$ 256 $\rightarrow$ $n_\text{clas
 Weighted multi-head loss: $\lambda_R = \lambda_D = 2.0$, $\lambda_M = 1.5$, others $=1.0$.
 \textbf{Output:} 29 discrete predictions per turn.
 Best response\_policy\_f1 $=$ 0.474, mean\_accuracy $=$ 0.704 at epoch 3/5.
-Checkpoint: \texttt{checkpoints/latent\_predictor\_best}.
+External checkpoint path in the training environment: \texttt{checkpoints/latent\_predictor\_best}.
 
 \paragraph{Stage 2: Response Generator (SFT).}
 \textbf{Input:} \texttt{data/splits/train\_sft.jsonl} with \texttt{input} (scene $+$ history) and \texttt{target} (NPC response).
@@ -1002,7 +1003,7 @@ Input portion masked (label $=-100$).
 \textbf{Model:} Qwen3-1.7B $+$ LoRA ($r=32$, $\alpha=64$). Standard causal LM loss on target tokens only.
 \textbf{Output:} Generated NPC response.
 Best val\_loss $=$ 0.037 (train) / 0.044 (val) at epoch 3/3.
-Checkpoint: \texttt{checkpoints/response\_generator\_best}.
+External checkpoint path in the training environment: \texttt{checkpoints/response\_generator\_best}.
 
 \paragraph{Stage 3: Joint Model.}
 \textbf{Input:} Both data sources combined: each turn has dialogue context, target response, and 29 $Z_t$ labels.
@@ -1011,7 +1012,7 @@ Joint loss: $\mathcal{L}_\text{joint} = \mathcal{L}_\text{heads} + \mathcal{L}_\
 Gradients from both objectives flow through shared parameters.
 \textbf{Output:} Both social state predictions and generated responses from a single model.
 Train loss 4.30, val loss 6.47 at epoch 3/3.
-Checkpoint: \texttt{checkpoints/joint\_model\_best}.
+External checkpoint path in the training environment: \texttt{checkpoints/joint\_model\_best}.
 
 \subsection{End-to-End Integration}
 
@@ -1050,26 +1051,27 @@ The repository is symlinked from \texttt{/home/\$USER/llm\_training} to \texttt{
 The three-stage Qwen3 pipeline uses the following config structure (\texttt{llm\_finetuning/configs/}):
 
 \begin{itemize}
-    \item \texttt{train\_latent.yaml}: Qwen3-1.7B (debug) or Qwen3-4B (production). 4-bit QLoRA, \texttt{nf4} quantisation, \texttt{bfloat16} compute dtype. 29 classification heads.
-    \item \texttt{train\_response.yaml}: Qwen3-1.7B SFT on dialogue data. \texttt{max\_seq\_len: 2048} (increased from 1024 to prevent NaN loss from truncated labels). LoRA $r=32$, $\alpha=64$.
+    \item \texttt{train\_latent.yaml}: Qwen3-1.7B (debug) or Qwen3-4B (production). 4-bit QLoRA, \texttt{nf4} quantisation, \texttt{bfloat16} compute dtype. 29 classification heads. The next batch can enable focal loss via \texttt{focal\_gamma} for weak heads.
+    \item \texttt{train\_response.yaml}: Qwen3-1.7B SFT on dialogue data. \texttt{max\_seq\_len: 2048} (increased from 1024 to prevent NaN loss from truncated labels). LoRA $r=32$, $\alpha=64$. The next batch enables secret-span masking using per-record \texttt{secret\_strings} from the packaged SFT split.
     \item \texttt{train\_joint.yaml}: Joint training combining latent prediction and response generation losses.
+    \item \texttt{eval.yaml}: Length-aware response generation, dual leakage accounting, and gold/predicted routing modes. Predicted routing requires \texttt{predicted\_zt.jsonl} from latent evaluation.
 \end{itemize}
 
 \subsection{Evaluation Framework}
 
-The evaluation script (\texttt{eval\_results/comprehensive\_eval.py}) computes NeurIPS-grade metrics:
+The intended comprehensive evaluation script computes the following metrics when generated predictions and labels are available:
 
 \begin{itemize}
     \item \textbf{Per-head metrics:} Accuracy, estimated Cohen's $\kappa$, lift-over-chance for all 28 single-label heads.
     \item \textbf{Per-group aggregation:} Mean $\pm$ standard deviation across $C_t$, $A_t$, $M_t$, $R_t$, $N_t$, $D_t$ groups.
     \item \textbf{Response quality:} ROUGE-L with bootstrap 95\% CI ($n=1{,}000$ resamples), BLEU-1/2/4, Distinct-1/2/3, 3-gram and 5-gram repetition rates, generation-to-reference length ratio.
     \item \textbf{Policy consistency:} Keyword-based checks for withhold, reveal, and soothe adherence.
-    \item \textbf{Secret leakage:} Regular expression matching against known secret patterns from scenario definitions.
+    \item \textbf{Secret leakage:} Regular expression matching against known secret patterns from scenario definitions, reported both as gated leakage over \texttt{reveal\_decision=none} turns and ungated leakage across all sampled turns.
     \item \textbf{Contradiction detection:} Checks for contradictory statements within single generated responses.
-    \item \textbf{Routing:} Precision, recall, F1, and balanced accuracy for the fast/slow path router.
+    \item \textbf{Routing:} Precision, recall, F1, slow-path rate, and prediction coverage for the fast/slow path router. Gold-state routing is a deterministic sanity check; predicted-state routing consumes \texttt{predicted\_zt.jsonl} and is the deployment-relevant mode.
 \end{itemize}
 
-Outputs are saved to \texttt{eval\_results/comprehensive\_results.json}, \texttt{eval\_results/paper\_tables.md} (8 publication-ready tables), and \texttt{eval\_results/per\_head\_metrics.csv}.
+The current checkout does not include \texttt{comprehensive\_results.json}, \texttt{paper\_tables.md}, or \texttt{per\_head\_metrics.csv}; those files should be regenerated before submission rather than inferred from prose.
 
 \subsection{Code Modifications for Reproducibility}
 

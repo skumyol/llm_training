@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM/SLM Remote Experiment Plan - May 18, 2026</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5b6673;
+      --line: #d7dde5;
+      --panel: #f7f9fc;
+      --accent: #0b5cad;
+      --warn: #8a4b00;
+      --bad: #9b1c1c;
+      --good: #17633a;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: white;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 20px 60px;
+    }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { margin: 0 0 6px; font-size: 32px; }
+    h2 { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--line); }
+    h3 { margin-top: 22px; }
+    .sub { color: var(--muted); margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+    .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--panel); }
+    .status { font-weight: 700; color: var(--accent); }
+    .risk { color: var(--bad); font-weight: 700; }
+    .ok { color: var(--good); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    pre {
+      overflow-x: auto;
+      background: #0f1720;
+      color: #e8edf2;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0 18px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #edf2f7; }
+    ul { padding-left: 22px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Remote Experiment Plan</h1>
+  <div class="sub">Goal for May 18, 2026: rerun LLM Gemma/Qwen and SLM experiments with improved code, then run comprehensive evaluation and prepare human studies.</div>
+
+  <div class="grid">
+    <section class="card">
+      <h3>Primary Claim Discipline</h3>
+      <p>Do not claim improved response quality, zero leakage, or routing generalization until the new artifacts exist. Treat today's run as evidence generation.</p>
+    </section>
+    <section class="card">
+      <h3>Critical First Artifact</h3>
+      <p><code>eval_results/response_eval_metrics.json</code> with length-aware decoding, semantic metrics, repetition, length ratio, and gated/ungated leakage.</p>
+    </section>
+    <section class="card">
+      <h3>Critical Routing Artifact</h3>
+      <p><code>eval_results/predicted_zt.jsonl</code> from latent eval, followed by <code>routing_mode: predicted</code> with full coverage.</p>
+    </section>
+  </div>
+
+  <h2>0. Remote Setup</h2>
+  <p>Run from the scratch checkout unless you intentionally override <code>WORK_BASE</code>.</p>
+  <pre><code>ssh skumyol@hpc4.ust.hk
+cd /scratch/$USER/npc
+git status --short
+
+# Optional only if you want BERTopic/MAUVE. BERTScore is already in requirements.txt.
+source /scratch/$USER/venvs/llm_env/bin/activate
+pip install -r requirements_eval_extra.txt</code></pre>
+
+  <h2>1. Data Packaging Gate</h2>
+  <p class="warn">Required before secret-masked response SFT if the existing split JSONL files do not contain <code>secret_strings</code>.</p>
+  <pre><code>cd /scratch/$USER/npc
+python - <<'PY'
+import json, pathlib
+p = pathlib.Path("llm_finetuning/data/splits/train_sft.jsonl")
+if not p.exists():
+    p = pathlib.Path("data/splits/train_sft.jsonl")
+if not p.exists():
+    print("SFT split not found; run the existing packaging pipeline first.")
+else:
+    rec = json.loads(p.read_text().splitlines()[0])
+    print("split:", p)
+    print("has_secret_strings:", "secret_strings" in rec)
+PY</code></pre>
+  <p>If this prints <code>False</code>, rerun the packager/splitter pipeline before response SFT. Secret-span masking is only meaningful when records carry secret strings or an external secret index exists.</p>
+
+  <h2>2. Qwen LLM Runs</h2>
+  <table>
+    <tr><th>Run</th><th>Purpose</th><th>Command</th><th>Must Check</th></tr>
+    <tr>
+      <td>Latent focal</td>
+      <td>Improve weak relational and decision heads using <code>focal_gamma=1.5</code>.</td>
+      <td><code>sbatch --time=48:00:00 scripts/slurm_train.sh llm latent</code></td>
+      <td>Best checkpoint exists; response-policy F1, macro-F1, kappa.</td>
+    </tr>
+    <tr>
+      <td>Response secret-masked SFT</td>
+      <td>Reduce leakage pressure at training time.</td>
+      <td><code>sbatch --time=48:00:00 scripts/slurm_train.sh llm response</code></td>
+      <td>Loss finite; samples do not reproduce literal secrets.</td>
+    </tr>
+    <tr>
+      <td>Joint model</td>
+      <td>Check whether shared training improves or hurts heads and generation.</td>
+      <td><code>sbatch --time=48:00:00 scripts/slurm_train.sh llm joint</code></td>
+      <td>Compare against separate latent + response, not just train loss.</td>
+    </tr>
+  </table>
+
+  <h2>3. Gemma Runs</h2>
+  <p>Use Gemma as a pretrained baseline, not as the central contribution. The final paper should cite the best fully evaluated Gemma run, not exploratory partial runs.</p>
+  <pre><code># Existing Gemma training scripts/configs live under slm_training.
+# Use the script that matches the target config already validated on the cluster.
+cd /scratch/$USER/npc/slm_training
+python -m src.train.run_gemma_unsloth --config configs/dialogue_gemma_unsloth.yaml
+
+# If using SLURM, submit through the existing cluster wrapper or a small custom sbatch
+# that activates /scratch/$USER/venvs/slm_env and runs the command above.</code></pre>
+
+  <h2>4. SLM Runs</h2>
+  <p>Run parameter-matched baselines before making architecture claims.</p>
+  <pre><code>cd /scratch/$USER/npc
+sbatch scripts/slurm_train.sh slm small_lm --arch gpt --seed 42 --epochs 20
+sbatch scripts/slurm_train.sh slm small_lm --arch prefix_gpt --seed 42 --epochs 20
+sbatch scripts/slurm_train.sh slm small_lm --arch mamba_like --seed 42 --epochs 20
+sbatch scripts/slurm_train.sh slm small_lm --arch moe --seed 42 --epochs 20
+
+# Repeat seeds 43 and 44 for headline claims if time allows.</code></pre>
+
+  <h2>5. Comprehensive Evaluation</h2>
+  <p>Run this after Qwen checkpoints are refreshed.</p>
+  <pre><code>cd /scratch/$USER/npc
+
+# Gold sanity + response metrics
+sbatch scripts/slurm_eval.sh llm all
+
+# After latent eval writes eval_results/predicted_zt.jsonl,
+# edit llm_finetuning/configs/eval.yaml:
+# routing_mode: predicted
+# routing_missing_predictions: error
+sbatch scripts/slurm_eval.sh llm routing
+
+# SLM eval
+sbatch scripts/slurm_eval.sh slm</code></pre>
+
+  <h2>6. Post-Eval Diagnostics</h2>
+  <pre><code>cd /scratch/$USER/npc
+source /scratch/$USER/venvs/llm_env/bin/activate
+
+python llm_finetuning/scripts/build_dpo_pairs.py \
+  --input eval_results/sample_generations.json \
+  --output data/splits/dpo_pairs.jsonl \
+  --max-length-ratio 1.5 \
+  --max-repeated-3gram 0.30
+
+python llm_finetuning/scripts/analyze_topic_coverage.py \
+  --input eval_results/sample_generations.json \
+  --output eval_results/topic_coverage.json \
+  --n-topics 12
+
+python llm_finetuning/scripts/build_human_eval_packet.py \
+  --input eval_results/sample_generations.json \
+  --output-dir eval_results/human_eval \
+  --n-items 200 \
+  --seed 42</code></pre>
+
+  <h2>7. Human Study</h2>
+  <table>
+    <tr><th>Dimension</th><th>Question</th><th>Scale</th></tr>
+    <tr><td>Fluency</td><td>Is the response grammatical and natural?</td><td>1 to 5</td></tr>
+    <tr><td>Relevance</td><td>Does it respond to the player and context?</td><td>1 to 5</td></tr>
+    <tr><td>Character consistency</td><td>Does it fit the NPC role/persona?</td><td>1 to 5</td></tr>
+    <tr><td>Social-state consistency</td><td>Does it match the visible latent state summary?</td><td>1 to 5</td></tr>
+    <tr><td>Secrecy safety</td><td>Does it avoid inappropriate secret disclosure?</td><td>1 to 5</td></tr>
+    <tr><td>Preference</td><td>Which response is better overall?</td><td>A, B, tie</td></tr>
+  </table>
+  <p>Use at least 2 annotators. For EMNLP, report agreement and confidence intervals. Do not use LLM-as-judge alone unless calibrated against human ratings.</p>
+
+  <h2>8. Paper-Ready Pass Criteria</h2>
+  <ul>
+    <li><span class="ok">Required:</span> response eval has BERTScore, length ratio, repetition, gated and ungated leakage.</li>
+    <li><span class="ok">Required:</span> predicted routing has <code>prediction_coverage=1.0</code> or an explicit missing-prediction table.</li>
+    <li><span class="ok">Required:</span> no zero-leakage claim unless gated and ungated denominators both support it.</li>
+    <li><span class="warn">Preferred:</span> 3 seeds for Track A and Qwen latent headline comparisons.</li>
+    <li><span class="warn">Preferred:</span> 200 human-eval items with 2 annotators.</li>
+    <li><span class="risk">Reject-risk:</span> claiming MoE superiority without a parameter-matched dense GPT baseline.</li>
+  </ul>
+</main>
+</body>
+</html>

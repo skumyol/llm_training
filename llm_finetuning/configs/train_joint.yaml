@@ -33,6 +33,7 @@ training:
   logging_steps: 1
   load_best_model_at_end: true
   metric_for_best_model: val/joint_score
+  focal_gamma: 1.5
 
 loss_weights:
   lambda_C: 1.0

@@ -199,9 +199,22 @@ class SFTDataset(Dataset):
         jsonl_path: str,
         tokenizer,
         max_seq_len: int = 2048,
+        mask_secret_spans: bool = False,
+        secret_strings_file: Optional[str] = None,
     ):
+        """
+        Args:
+            mask_secret_spans: If True, set labels to -100 on tokens that overlap
+                with secret spans, so the LM loss never trains on producing the
+                literal secret text. This is the upstream complement to the
+                downstream leakage evaluator.
+            secret_strings_file: Optional JSON mapping episode_id -> list[str] of
+                secret strings. If absent, only per-record `secret_spans` /
+                `secret_strings` fields are used.
+        """
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self.mask_secret_spans = bool(mask_secret_spans)
         self.records: list[dict] = []
         with open(jsonl_path, "r") as f:
             for line in f:
@@ -209,12 +222,84 @@ class SFTDataset(Dataset):
                 if line:
                     self.records.append(json.loads(line))
 
+        self._secret_strings_by_episode: dict[str, list[str]] = {}
+        if self.mask_secret_spans and secret_strings_file and Path(secret_strings_file).exists():
+            with open(secret_strings_file, "r") as f:
+                raw = json.load(f)
+            # Accept either {episode_id: [strings]} or {episode_id: {"secrets": [...]}}
+            for ep, val in raw.items():
+                if isinstance(val, dict):
+                    val = val.get("secrets") or val.get("strings") or []
+                if isinstance(val, list):
+                    self._secret_strings_by_episode[str(ep)] = [str(s) for s in val if s]
+
     def __len__(self) -> int:
         return len(self.records)
 
+    def _collect_secret_strings(self, record: dict) -> list[str]:
+        ep = str(record.get("episode_id", ""))
+        out: list[str] = []
+        out.extend(self._secret_strings_by_episode.get(ep, []))
+        rec_secrets = record.get("secret_strings") or record.get("secret_spans")
+        if isinstance(rec_secrets, list):
+            out.extend(str(s) for s in rec_secrets if s)
+        elif isinstance(rec_secrets, str):
+            out.append(rec_secrets)
+        # de-dup while preserving order
+        seen: set[str] = set()
+        return [s for s in out if (s not in seen and not seen.add(s))]
+
+    def _mask_secret_token_spans(
+        self,
+        labels: torch.Tensor,
+        full_text: str,
+        target_start_char: int,
+        secret_strings: list[str],
+    ) -> int:
+        """Set labels[i] = -100 for tokens whose character span overlaps a secret
+        substring inside the target portion of full_text. Returns count masked.
+        """
+        if not secret_strings:
+            return 0
+        try:
+            encoding = self.tokenizer(
+                full_text,
+                max_length=self.max_seq_len,
+                truncation=True,
+                return_offsets_mapping=True,
+                add_special_tokens=True,
+            )
+        except (TypeError, ValueError):
+            # Tokenizer does not support offset mapping (e.g. slow tokenizer);
+            # fall back to no-op masking. The eval-time detector still catches leaks.
+            return 0
+        offsets = encoding["offset_mapping"]
+        text_lower = full_text.lower()
+        masked = 0
+        for secret in secret_strings:
+            s = secret.strip().lower()
+            if not s or len(s) < 4:  # avoid masking 1-3 char tokens
+                continue
+            start = text_lower.find(s, target_start_char)
+            while start != -1:
+                end = start + len(s)
+                for tok_idx, (a, b) in enumerate(offsets):
+                    if tok_idx >= labels.size(0):
+                        break
+                    if a == 0 and b == 0:
+                        continue  # special tokens
+                    if b <= start or a >= end:
+                        continue
+                    if labels[tok_idx].item() != -100:
+                        labels[tok_idx] = -100
+                        masked += 1
+                start = text_lower.find(s, end)
+        return masked
+
     def __getitem__(self, idx: int) -> dict:
         record = self.records[idx]
-        full_text = record["input"] + "\n" + record["target"]
+        prompt_text = record["input"] + "\n"
+        full_text = prompt_text + record["target"]
 
         encoding = self.tokenizer(
             full_text,
@@ -228,9 +313,17 @@ class SFTDataset(Dataset):
         labels = encoding["input_ids"].clone().squeeze(0)
         labels[:min(input_len, labels.size(0))] = -100
 
+        if self.mask_secret_spans:
+            secrets = self._collect_secret_strings(record)
+            if secrets:
+                self._mask_secret_token_spans(
+                    labels=labels,
+                    full_text=full_text,
+                    target_start_char=len(prompt_text),
+                    secret_strings=secrets,
+                )
+
         # Calculate prompt length for evaluation (input + separator)
-        # We want generation to start after "input" + "\n"
-        prompt_text = record["input"] + "\n"
         prompt_ids = self.tokenizer(prompt_text, truncation=True, max_length=self.max_seq_len)["input_ids"]
         prompt_len = len(prompt_ids)
 

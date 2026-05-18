@@ -117,6 +117,15 @@ def _to_sft_record(record: dict) -> dict:
     context = _context_str(record)
     latent = _latent_state_str(record)
     full_input = context + "\n\n" + latent + "\n\nGenerate NPC response:"
+    secret_strings = []
+    for secret in record.get("W", {}).get("secrets", []):
+        secret_id = str(secret.get("secret_id", "")).strip()
+        if secret_id:
+            secret_strings.append(secret_id)
+            secret_strings.append(secret_id.replace("_", " "))
+        secret_strings.extend(str(kw).strip() for kw in secret.get("leakage_keywords", []) if kw)
+    seen = set()
+    secret_strings = [s for s in secret_strings if s and not (s in seen or seen.add(s))]
 
     return {
         "episode_id": record.get("episode_id", ""),
@@ -124,6 +133,7 @@ def _to_sft_record(record: dict) -> dict:
         "scenario_type": record.get("scenario_type", ""),
         "input": full_input,
         "target": record.get("response", ""),
+        "secret_strings": secret_strings,
         "counterfactual": record.get("counterfactual", False),
     }
 

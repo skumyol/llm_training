@@ -40,6 +40,8 @@ Training pipeline for believable NPC dialogue with structured social state.
 
    technical_paper
    technical_appendix
+   research_status
+   experiment_results_report
    model_registry
 
 .. toctree::

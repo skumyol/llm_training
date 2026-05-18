@@ -110,9 +110,9 @@ LLM Evaluation
    * - Experiment
      - ``routing_and_policy_eval``
    * - Metrics
-     - response_policy_f1, stance_delta_accuracy, secret_leakage_rate, contradiction_rate, rouge_l, routing_precision/recall/f1, false_positive_rate
+     - response_policy_f1, stance_delta_accuracy, gated/ungated secret_leakage_rate, contradiction_rate, rouge_l, BLEU, repetition, length_ratio, routing_precision/recall/f1, false_positive_rate, prediction_coverage
    * - Artifacts
-     - ``latent_eval_metrics.json``, ``response_eval_metrics.json``, ``routing_eval_metrics.json``, confusion matrices (PNG), sample generations
+     - ``latent_eval_metrics.json``, ``predicted_zt.jsonl``, ``response_eval_metrics.json``, ``routing_eval_metrics.json``, confusion matrices (PNG), sample generations
 
 SLM Training: What's Tracked
 ------------------------------

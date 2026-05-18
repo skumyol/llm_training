@@ -46,8 +46,18 @@ def train_response(config_path: str, debug: bool = False) -> None:
         model.gradient_checkpointing_enable()
 
     max_seq_len = train_cfg.get("max_seq_len", 2048)
-    train_ds = SFTDataset(cfg["data"]["train_file"], tokenizer, max_seq_len=max_seq_len)
-    val_ds   = SFTDataset(cfg["data"]["val_file"],   tokenizer, max_seq_len=max_seq_len)
+    mask_secret_spans = bool(train_cfg.get("mask_secret_spans", False))
+    secret_strings_file = cfg.get("secret_strings_file") or cfg.get("data", {}).get("secret_strings_file")
+    if mask_secret_spans:
+        print(f"Secret-span masking ENABLED  (secret_strings_file={secret_strings_file})")
+    train_ds = SFTDataset(
+        cfg["data"]["train_file"], tokenizer, max_seq_len=max_seq_len,
+        mask_secret_spans=mask_secret_spans, secret_strings_file=secret_strings_file,
+    )
+    val_ds = SFTDataset(
+        cfg["data"]["val_file"], tokenizer, max_seq_len=max_seq_len,
+        mask_secret_spans=mask_secret_spans, secret_strings_file=secret_strings_file,
+    )
 
     batch_size = train_cfg.get("batch_size", 2)
     train_loader = DataLoader(

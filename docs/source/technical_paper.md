@@ -45,7 +45,7 @@ ScenarioBank -> StateInit -> EpisodePlanner -> TurnGenerator
     -> CounterfactualAugmenter -> Packager -> Splitter
 ```
 
-The current checked-in repository contains the scenario bank and world context, but generated packaged/split JSONL artifacts are not present. The scenario bank has seven scenario families and 35 concrete templates:
+The current checked-in repository contains the scenario bank and world context, plus compact evaluation outputs under `eval_results/`. Generated packaged/split JSONL artifacts and model checkpoints are not present in this checkout. The scenario bank has seven scenario families and 35 concrete templates:
 
 | Scenario family | Templates | Core dynamics |
 |---|---:|---|
@@ -75,7 +75,7 @@ Backbone configurations documented by the registry:
 | Qwen3-1.7B | 28 | 2048 | 16 | 5504 |
 | Qwen3-4B | 36 | 2560 | 32 | 6912 |
 
-The production training configs use Qwen3-4B with 4-bit QLoRA. CPU/debug configs use Qwen3-0.6B without quantization.
+The generated registry documents Qwen3-4B as the production configuration and Qwen3-0.6B as the CPU/debug option. The checked-in manuscript and reassessment describe the current reported experimental checkpoints as Qwen3-1.7B runs. Treat model scale as an artifact-backed claim: cite the specific run summary or adapter metadata when reporting a final number.
 
 ## 5. LLM Training Objective
 
@@ -85,7 +85,7 @@ Training is staged:
 |---|---|---|---|
 | Stage 1 | `train_latent.yaml` | Predict 29 latent heads from context | Qwen/Qwen3-4B |
 | Stage 2 | `train_response.yaml` | Supervised response generation conditioned on gold latent state | Qwen/Qwen3-4B |
-| Stage 3 | `train_joint.yaml` | Joint response and latent optimization with consistency loss | Qwen/Qwen3-4B |
+| Stage 3 | `train_joint.yaml` | Joint response and latent optimization with consistency loss | Qwen/Qwen3-1.7B |
 
 Stage 1 uses weighted cross-entropy for single-label heads and BCE-with-logits for multi-label dialogue acts. The configured group weights are:
 
@@ -133,18 +133,20 @@ For the LLM path, `llm_finetuning/src/inference/interactive.py` provides interac
 
 ## 8. Evaluation
 
-Evaluation is split by function:
+Evaluation is split by function. The current checked-in artifacts are intentionally modest: `latent_eval_metrics.json`, `response_eval_metrics.json`, `routing_eval_metrics.json`, sample generations, and latent-head confusion-matrix PNGs.
 
 | Area | Metrics |
 |---|---|
 | Latent state | per-head accuracy/F1, response-policy F1, stance-delta accuracy |
-| Safety/policy | secret leakage rate, contradiction rate, router false-positive rate |
-| Response quality | ROUGE-L drop, sample generations, policy adherence |
+| Safety/policy | gated and ungated secret leakage rates, contradiction rate, router false-positive rate |
+| Response quality | ROUGE-L with confidence interval, BLEU-1/2/4, distinct-n, repetition rate, length ratio, sample generations, keyword leakage, contradiction checks |
 | SLM language modeling | validation/test perplexity, BLEU-1/2, Distinct-1/2 |
 | Personality encoder | MSE and R-squared per OCEAN trait |
 | Affect encoder | CCC, MSE, MAE, and R-squared per VAD dimension |
 
 Configured LLM thresholds are response-policy F1 >= 0.75, stance-delta accuracy >= 0.70, secret leakage <= 0.05, contradiction <= 0.08, ROUGE-L drop <= 0.05, and router false positive rate <= 0.15.
+
+The updated evaluator writes BLEU, bootstrap ROUGE-L confidence intervals, repetition and degeneration rates, prompt-artifact rate, generation/reference length ratio, and separate gated/ungated leakage denominators. These fields still need to be regenerated on the remote checkpoints before paper tables should cite them. Routing has two modes: gold-state routing is a deterministic sanity check, while predicted-state routing consumes `predicted_zt.jsonl` from latent evaluation and is the reportable generalization test. See `research_status.md` for the evidence ledger and claim guardrails.
 
 ## 9. Reproducibility Notes
 

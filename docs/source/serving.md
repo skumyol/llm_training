@@ -3,6 +3,8 @@ Model Serving & Deployment
 
 Serve trained NPC dialogue models behind an OpenAI-compatible API so you can chat with them using any ChatGPT-compatible frontend.
 
+The commands below assume trained checkpoints have been synced into the paths shown. This checkout does not include the generated split data or trained model weights.
+
 Quick Start
 -----------
 
@@ -161,7 +163,7 @@ LLM Interactive Chat
    cd llm_finetuning
    PYTHONPATH=. python src/inference/interactive.py \
        --checkpoint ../checkpoints/joint_model_best/ \
-       --base_model Qwen/Qwen3-4B \
+       --base_model Qwen/Qwen3-1.7B \
        --scenario ../data/scenario_bank/secret_extraction.yaml \
        --npc guard_captain
 

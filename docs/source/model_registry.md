@@ -3,7 +3,7 @@
 
 # Complete Model Registry: Architectures, Data & Hyperparameters
 
-> Auto-generated 2026-05-01 12:41 from configs + code.
+> Auto-generated 2026-05-17 13:20 from configs + code.
 
 
 ## Part 1: LLM Fine-Tuning
@@ -77,7 +77,7 @@
 - **LoRA:** r=32, alpha=64, dropout=0.05
 - **Learning rate:** 0.0001
 - **Epochs:** 3
-- **Max seq len:** 1024
+- **Max seq len:** 2048
 - **Batch size:** 1 × 32 grad_accum = **32** effective
 - **Weight decay:** 0.01
 - **Max grad norm:** 1.0
@@ -85,12 +85,12 @@
 
 #### Stage 3 (Joint)
 
-- **Base model:** `Qwen/Qwen3-4B`
+- **Base model:** `Qwen/Qwen3-1.7B`
 - **Quantization:** 4bit
 - **LoRA:** r=32, alpha=64, dropout=0.05
 - **Learning rate:** 5e-05
 - **Epochs:** 3
-- **Max seq len:** 1024
+- **Max seq len:** 2048
 - **Batch size:** 1 × 8 grad_accum = **8** effective
 - **Weight decay:** 0.01
 - **Max grad norm:** 1.0
@@ -174,6 +174,7 @@
 - **log_every:** 20
 - **eval_every_steps:** 200
 - **cond_dim:** 8
+- **condition_mode:** ocean_vad
 - **seed:** 42
 - **output_dir:** artifacts/small_lm
 
@@ -207,24 +208,6 @@
 ### 2.3 Data
 
 
-### 2.4 Baseline Checkpoint Registry
-
-These are the repo-local baseline checkpoints referenced by the registry-backed evaluator.
-
-| Name | Architecture | Conditioning | Path |
-|------|--------------|--------------|------|
-| `gpt_baseline` | `gpt` | none | `slm/npc_backend_scaffold/runs/gpt/gpt_best.pt` |
-| `prefix_gpt_ocean_vad` | `prefix_gpt` | `ocean_vad_8d` | `slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt` |
-| `gru_baseline` | `gru` | none | `slm/npc_backend_scaffold/runs/gru/gru_best.pt` |
-
-Related tooling:
-
-- Registry file: `slm_training/trained_models.yaml`
-- Registry eval: `slm_training/scripts/eval_registered_small_lms.py`
-- Social-state probe: `slm_training/scripts/probe_social_state.py`
-
-The registry evaluator currently targets the GPT-like checkpoints (`gpt` and `prefix_gpt`); the GRU entry is kept in the registry for completeness.
-
 
 ## Part 3: Evaluation
 
@@ -243,5 +226,5 @@ The registry evaluator currently targets the GPT-like checkpoints (`gpt` and `pr
 
 ---
 
-*Regenerated 2026-05-01T12:41:31.338128 by `scripts/gen_model_registry.py`*
+*Regenerated 2026-05-17T13:20:05.479091 by `scripts/gen_model_registry.py`*
 *Do not edit manually — run the script to update.*

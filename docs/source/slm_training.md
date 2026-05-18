@@ -248,10 +248,10 @@ TinyLlama + LoRA + Prefix
 
 ``social_state`` is wired as a text-derived proxy mode in the scratch runner, so the conditioning interface is already in place for richer labels later.
 
-Existing baselines and tooling
+External baselines and tooling
 ------------------------------
 
-- Baseline checkpoints:
+- Baseline checkpoint paths used by the registry evaluator when the external artifact bundle or local `slm/` workspace is present:
   - `slm/npc_backend_scaffold/runs/gpt/gpt_best.pt`
   - `slm/npc_backend_scaffold/runs/prefix_gpt/prefix_gpt_best.pt`
 - Registry file:

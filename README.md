@@ -354,7 +354,7 @@ scancel 123456                       # By job ID
 scp -r skumyol@hpc4.ust.hk:/scratch/skumyol/npc/slm_training/artifacts ./artifacts/
 scp -r skumyol@hpc4.ust.hk:/scratch/skumyol/logs ./slurm_logs/
 scp -r skumyol@hpc4.ust.hk:/home/skumyol/llm_training/docs ./docs/
-scp skumyol@hpc4.ust.hk:/home/skumyol/llm_training/docs/evaluation_paper.md ./
+scp skumyol@hpc4.ust.hk:/home/skumyol/llm_training/paper/main.tex ./paper/main.tex
 ```
 
 ---
@@ -380,7 +380,13 @@ scp skumyol@hpc4.ust.hk:/home/skumyol/llm_training/docs/evaluation_paper.md ./
 
 ### Paper
 
-Full technical paper: [`docs/evaluation_paper.md`](docs/evaluation_paper.md)
+Current manuscript: [`paper/main.tex`](paper/main.tex)
+
+Grounded status and evaluation caveats: [`docs/source/research_status.md`](docs/source/research_status.md)
+
+Current result reconciliation and next remote batch checklist: [`docs/source/experiment_results_report.md`](docs/source/experiment_results_report.md)
+
+Browser-readable remote runbook: [`docs/remote_experiment_plan.html`](docs/remote_experiment_plan.html)
 
 Covers: methodology, architecture stack, training configuration, results tables, discussion, limitations, and all code fixes applied.
 

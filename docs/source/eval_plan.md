@@ -125,7 +125,18 @@ Canonical metrics:
 - `bleu_1`
 - `bleu_2`
 - `bleu_4`
+- `bertscore_precision`
+- `bertscore_recall`
+- `bertscore_f1`
+- `mauve_score` when optional MAUVE evaluation is enabled
+- `sentiment_valence_accuracy`
+- `sentiment_valence_support`
 - `secret_leakage_rate`
+- `secret_leakage_gated_count`
+- `secret_leakage_gated_total`
+- `secret_leakage_rate_ungated`
+- `secret_leakage_ungated_count`
+- `secret_leakage_by_reveal_decision`
 - `contradiction_rate`
 - `distinct_1`
 - `distinct_2`
@@ -133,10 +144,18 @@ Canonical metrics:
 - `degenerate_repetition_rate`
 - `prompt_artifact_rate`
 - `avg_len`
+- `avg_ref_len`
+- `length_ratio`
 - `n_evaluated`
 
 ROUGE and BLEU are diagnostic overlap metrics, not evidence of good role-play quality.
-For EMNLP reporting, pair them with degeneration metrics, constraint-violation rates, and human or LLM-assisted preference judgments.
+BERTScore and optional MAUVE add semantic and distributional views, while sentiment/valence alignment checks whether generated affect matches the intended `A_t.valence`.
+For EMNLP reporting, pair all automatic metrics with degeneration metrics, constraint-violation rates, and human preference judgments.
+
+Additional diagnostic artifacts:
+
+- `topic_coverage.json` from `llm_finetuning/scripts/analyze_topic_coverage.py`
+- `human_eval/human_eval_items.jsonl`, `human_eval/human_eval_sheet.csv`, and `human_eval/human_eval_answer_key.json` from `llm_finetuning/scripts/build_human_eval_packet.py`
 
 ### Routing evaluation
 
@@ -146,6 +165,7 @@ Artifact files:
 
 - `routing_eval_metrics.json`
 - `routing_eval_report.md`
+- `predicted_zt.jsonl` from latent evaluation when `routing_mode: predicted`
 
 Canonical metrics:
 
@@ -155,6 +175,14 @@ Canonical metrics:
 - `false_positive_rate`
 - `slow_path_rate`
 - `n_evaluated`
+- `n_trace_records`
+- `missing_predictions`
+- `prediction_coverage`
+
+Routing supports two modes:
+
+- `routing_mode: gold` is the deterministic sanity check over gold `D_t`/`N_t`; F1 near 1.0 is expected and should not be reported as routing generalization.
+- `routing_mode: predicted` consumes `predicted_zt_file` from `eval_latent.py` and routes on predicted `value_conflict`, `secrecy_pressure`, `response_policy`, and `reveal_decision`. `routing_missing_predictions: error` is the publication-safe default because it prevents silent fallback to gold labels.
 
 ## Training Artifacts
 
@@ -217,18 +245,18 @@ The current strongest story is that structured social state is an auditable inte
 
 ### What can be improved without new training
 
-- Re-run offline latent evaluation so `latent_eval_metrics.json` contains true Cohen's kappa, balanced accuracy, and MCC instead of any post-hoc estimated agreement.
-- Re-run response evaluation so `response_eval_metrics.json` includes BLEU, bootstrap ROUGE-L confidence intervals, repetition rate, degeneration rate, and prompt-artifact rate.
+- Re-run offline latent evaluation so `latent_eval_metrics.json` contains true Cohen's kappa, balanced accuracy, and MCC instead of any post-hoc estimated agreement. The rerun also writes `predicted_zt.jsonl` for predicted-state routing.
+- Re-run response evaluation with `length_aware_max_tokens: true` so `response_eval_metrics.json` includes BLEU, bootstrap ROUGE-L confidence intervals, repetition rate, degeneration rate, length ratio, prompt-artifact rate, and both gated/ungated leakage denominators.
 - Build a 100-200 item blinded human-evaluation packet from `sample_generations.json`, stratified by scenario family and `reveal_decision`.
-- Report zero leakage as "0 detected by keyword/rule audit" with a Wilson upper confidence bound, not as a safety guarantee.
-- Re-label routing F1 as a deterministic policy sanity check unless routing is evaluated against independently annotated route decisions.
+- Reconcile aggregate `secret_leakage_rate` with per-sample `secret_leak` flags before reporting leakage. If the fixed result is zero, report it as "0 detected by keyword/rule audit" with a Wilson upper confidence bound, not as a safety guarantee.
+- Re-label gold-mode routing F1 as a deterministic policy sanity check. For the next batch, report predicted-mode routing with `routing_missing_predictions: error` or include `prediction_coverage` if skipping missing predictions.
 
 ### Next cluster runs
 
 - Multi-seed all headline comparisons: Qwen latent, joint vs separate, no-consistency, and Track A GPT/MoE. Use seeds 42/43/44 at minimum.
 - Add a parameter-matched dense GPT baseline near the MoE parameter count before making architectural claims about MoE.
 - Run an intervention/counterfactual generation evaluation: hold context fixed, change one `Z_t` field, and measure whether the response changes in the expected direction.
-- Evaluate predicted-`Z_t` conditioning separately from gold-`Z_t` conditioning. This is the causal bridge reviewers will expect.
+- Evaluate predicted-`Z_t` routing and predicted-`Z_t` conditioning separately from gold-`Z_t` modes. This is the causal bridge reviewers will expect.
 - Add an out-of-domain split by scenario family or NPC role to test whether the schema generalizes rather than memorizing the synthetic generator.
 
 ### Human evaluation protocol

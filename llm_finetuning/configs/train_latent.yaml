@@ -38,6 +38,7 @@ training:
   metric_for_best_model: val/response_policy_f1
   use_weighted_sampler: true  # Oversample minority classes
   label_smoothing: 0.1  # 0.0 to disable
+  focal_gamma: 1.5      # targets weak heads (R group / relational deltas); set 0.0 for CE baseline
 
 loss_weights:
   lambda_C: 1.0
