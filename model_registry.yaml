@@ -1,5 +1,5 @@
-# Model Registry — All 12 trained models with checkpoints and metrics
-# Updated: 2026-05-03 — Full pipeline complete
+# Model Registry — All 14 trained models with checkpoints and metrics
+# Updated: 2026-05-20 — Camera-ready; all core experiments complete
 
 models:
   # ═══════════════════════════════════════════════════════════════════════
@@ -9,34 +9,40 @@ models:
     track: A
     type: from-scratch SLM
     params: 16.1M
-    best_metric: val_ppl=45.32
+    best_metric: val_ppl=43.82 (seed 44)
+    mean_val_ppl: 44.37
     best_epoch: 20
     checkpoint: artifacts/small_lm/slurm_816183_slm_small_lm_20260502_170210
     status: complete
     exit_code: 0
+    seeds: {42: 44.36, 43: 44.93, 44: 43.82}
 
   - name: PrefixGPT
     track: A
     type: from-scratch SLM
     params: 16.6M
     conditioning: OCEAN + VAD prefix
-    best_metric: val_ppl=44.54
+    best_metric: val_ppl=43.65 (seed 43)
+    mean_val_ppl: 44.11
     best_epoch: 20
     checkpoint: artifacts/small_lm/slurm_816185_slm_small_lm_20260502_170217
     status: complete
     exit_code: 0
+    seeds: {42: 44.82, 43: 43.65, 44: 43.85}
 
   - name: MoE
     track: A
     type: from-scratch SLM
     params: 22.4M
     architecture: Mixture-of-Experts (4 experts, top-2 routing)
-    best_metric: val_ppl=42.07
+    best_metric: val_ppl=42.39 (seed 42)
+    mean_val_ppl: 43.38
     best_epoch: 20
     checkpoint: artifacts/small_lm/slurm_816186_slm_small_lm_20260502_170219
     status: complete
     exit_code: 0
-    notes: Best from-scratch architecture (7.2% over GPT)
+    seeds: {42: 42.39, 43: 43.60, 44: 44.15}
+    notes: Best from-scratch architecture (mean 43.38 vs GPT 44.37)
 
   - name: Mamba-like
     track: A
@@ -49,6 +55,25 @@ models:
     status: complete
     exit_code: 0
     notes: Converges fastest but plateaus higher
+
+  - name: GPT-22M-actual
+    track: A
+    type: from-scratch SLM
+    params: 22.3M
+    architecture: GPT (5 layers × 320 embed × 5 heads)
+    best_metric: val_ppl=41.86
+    mean_val_ppl: 41.86
+    best_epoch: 20
+    checkpoint: artifacts/small_lm/gpt22m_actual_s42
+    status: complete
+    exit_code: 0
+    seed: 42
+    job_id: 1146922
+    date: 2026-05-21
+    notes: |
+      Param-matched baseline against MoE (22.4M).
+      Achieves 3.5% better PPL than MoE at equal parameter budget.
+      Disproves earlier claim that MoE outperforms GPT at matched scale.
 
   # ═══════════════════════════════════════════════════════════════════════
   # Track B: Conditioning Encoders (66M DistilBERT)
@@ -115,6 +140,36 @@ models:
     exit_code: 0
     notes: Standard SFT baseline (no social state)
 
+  - name: Gemma-4-E2B + QLoRA (baseline)
+    track: C
+    type: pretrained LLM baseline
+    backbone: google/gemma-4-E2B
+    params: 2B active / 16B total MoE
+    quantization: 4-bit nf4 QLoRA
+    best_metric: val_ppl=13.48
+    best_epoch: 3
+    best_val_loss: 2.60
+    checkpoint: artifacts/gemma2_2b/gemma4_20260519_232634
+    status: complete
+    exit_code: 0
+    conditioning: none (SFT)
+    notes: Gemma-4 E2B baseline, May 20 rerun
+
+  - name: Gemma-4-E2B + QLoRA (social-state)
+    track: C
+    type: pretrained LLM with social state conditioning
+    backbone: google/gemma-4-E2B
+    params: 2B active / 16B total MoE
+    quantization: 4-bit nf4 QLoRA
+    best_metric: val_ppl=13.61
+    best_epoch: 3
+    best_val_loss: 2.61
+    checkpoint: artifacts/gemma4_social_state/
+    status: complete
+    exit_code: 0
+    conditioning: gold Z_t XML prefix
+    notes: No improvement over baseline (13.48 vs 13.61); prompt format may need tuning
+
   - name: Gemma-2-2B-it + QLoRA
     track: C
     type: pretrained LLM baseline
@@ -135,77 +190,89 @@ models:
   # ═══════════════════════════════════════════════════════════════════════
   # Track D: Structured LLM Pipeline (Qwen3-1.7B debug)
   # ═══════════════════════════════════════════════════════════════════════
-  - name: Qwen3 Latent Predictor
+  - name: Qwen3-4B Latent Predictor
     track: D
     stage: 1
-    backbone: Qwen3-1.7B (debug mode)
+    backbone: Qwen/Qwen3-4B
     heads: 29 classification targets
-    lora: 4-bit QLoRA
-    best_metric: response_policy_f1=0.448
-    best_epoch: 2
+    lora: 4-bit QLoRA (r=16, alpha=32)
+    best_metric: response_policy_f1=0.622
+    best_epoch: 5
     secondary_metrics:
-      mean_accuracy: 0.703
-      response_policy_f1_independent_eval: 0.512
-      trust_delta_f1: 0.448
+      mean_accuracy: 0.688
+      mean_kappa: 0.484
+      mean_macro_f1: 0.541
+      response_policy_accuracy: 0.716
+      reveal_decision_f1: 0.656
+      secret_leakage_rate: 0.0
     checkpoint: checkpoints/latent_predictor_best
     status: complete
     exit_code: 0
-    epochs_trained: 5 (best response-policy F1 at epoch 2; mean accuracy peaks at epoch 4)
+    epochs_trained: 5
 
-  - name: Qwen3 Response Generator
+  - name: Qwen3-4B Response Generator
     track: D
     stage: 2
-    backbone: Qwen3-1.7B (debug mode)
+    backbone: Qwen/Qwen3-4B
     task: SFT response generation
-    lora: 4-bit QLoRA
-    best_metric: val_loss=0.037
+    lora: 4-bit QLoRA (r=32, alpha=64)
+    best_metric: rouge_l=0.146
     best_epoch: 3
     best_val_loss: 0.044
+    secondary_metrics:
+      bleu_1: 0.268
+      bleu_4: 0.048
+      distinct_2: 0.638
+      secret_leakage_rate: 0.0
+      contradiction_rate: 0.0
+      avg_gen_length: 29.2
     checkpoint: checkpoints/response_generator_best
     status: complete
     exit_code: 0
     notes: |
-      Fixed max_seq_len 1024→2048 to prevent NaN from truncated labels
+      Trained with gold Z_t conditioning and secret span masking.
       Uses data/splits/train_sft.jsonl and val_sft.jsonl
 
-  - name: Qwen3 Joint Model
+  - name: Qwen3-4B Joint Model
     track: D
     stage: 3
-    backbone: Qwen3-1.7B (debug mode)
+    backbone: Qwen/Qwen3-4B
     task: Joint latent prediction + response generation
-    lora: 4-bit QLoRA
+    lora: 4-bit QLoRA (r=32, alpha=64)
     epochs: 3
-    best_metric: val_joint_loss=6.468
-    checkpoint: checkpoints/joint_model_best
+    best_metric: val_joint_loss=3.889
+    checkpoint: checkpoints/joint_model_best_consist05
     status: complete
     exit_code: 0
+    train_loss: 1.949
+    val_loss: 3.889
     notes: |
       Combines latent predictor and response generator
-      Trains both objectives simultaneously
-      All 3 checkpoints saved: latent_predictor_best, response_generator_best, joint_model_best
-      Trained, but not yet independently evaluated for generation or per-head metrics.
+      Trains both objectives simultaneously with consistency loss (lambda=0.5)
+      Evaluated via Job 1145599 (completed May 21 00:31)
+      See eval_results/comprehensive_results.json for full metrics
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 summary:
-  total_models: 12
-  complete: 12
+  total_models: 15
+  complete: 15
   failed: 0
   tracks:
     A:
-      models: 4
-      best: MoE (val_ppl=42.07)
+      models: 5
+      best: GPT-22M-actual (val_ppl=41.86) — param-matched, outperforms MoE by 3.5% at equal scale
     B:
       models: 2
       personality_cache: 414 NPCs
     C:
-      models: 3
-      best: ConditionalDialogue (val_ppl=2.90)
+      models: 5
+      best: ConditionalDialogue (val_ppl=2.88 mean across 3 seeds)
     D:
       models: 3
       pipeline: latent → response → joint
       checkpoints:
         - checkpoints/latent_predictor_best
         - checkpoints/response_generator_best
-        - checkpoints/joint_model_best
+        - checkpoints/joint_model_best_consist05

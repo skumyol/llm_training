@@ -1,0 +1,22 @@
+arch: gpt
+arch_params:
+  dropout: 0.1
+  max_seq_len: 256
+  n_embd: 320
+  n_head: 5
+  n_layer: 5
+batch_size: 16
+condition_mode: zero
+epochs: 20
+eval_every_steps: 200
+grad_accum: 4
+hardware_profile: m1_small
+log_every: 20
+lr: 0.0003
+output_dir: artifacts/small_lm
+seed: 42
+seq_len: 256
+train_text: data/dialogue/train.txt
+use_amp: false
+val_text: data/dialogue/val.txt
+weight_decay: 0.1
