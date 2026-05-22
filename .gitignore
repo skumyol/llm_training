@@ -17,7 +17,12 @@ mlruns/
 logs/
 *.log
 *.pid
-eval_results/
+
+# Eval results — canonical files tracked, generated artifacts ignored
+eval_results/cm_*.png
+eval_results/eval_*.csv
+eval_results/predicted_zt*.jsonl
+eval_results/comprehensive_results_*.json
 
 # Data (regeneratable)
 data/raw_episodes/
