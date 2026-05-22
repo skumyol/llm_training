@@ -1,9 +1,13 @@
-\documentclass{article}
+\documentclass[11pt]{article}
 
-% NeurIPS 2026 style (use neurips_2026.sty if available; fallback to standard)
-\usepackage[final]{neurips_2026}
-\usepackage[utf8]{inputenc}
+% ACL style (final camera-ready)
+\usepackage[final]{acl}
+\usepackage{times}
+\usepackage{latexsym}
 \usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
@@ -11,20 +15,27 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{nicefrac}
-\usepackage{microtype}
 \usepackage{xcolor}
-\usepackage{graphicx}
 \usepackage{multirow}
 \usepackage{subcaption}
 \usepackage{algorithm}
 \usepackage{algorithmic}
 \usepackage{tablefootnote}
+\usepackage{pifont}
 
 \title{Structured Social State for NPC Dialogue Generation:\\Architecture Benchmarks and Latent Conditioning}
 
-\author{%
-  Anonymous Authors\\
-  \texttt{anonymous@institution.edu}
+% TODO: Replace with real author names, affiliations, and emails before submission
+\author{First Author \\
+  Affiliation / Address line 1 \\
+  Affiliation / Address line 2 \\
+  Affiliation / Address line 3 \\
+  \texttt{email@domain} \\And
+  Second Author \\
+  Affiliation / Address line 1 \\
+  Affiliation / Address line 2 \\
+  Affiliation / Address line 3 \\
+  \texttt{email@domain}
 }
 
 \begin{document}
@@ -96,8 +107,10 @@ Concurrently, a line of work on \textit{character role-playing} emerged: Charact
 These systems demonstrate that LLMs \textit{can} adopt consistent personas, but represent character through free-text descriptions rather than formal, verifiable state.
 
 2025 has seen the first direct applications of LLMs to game NPC dialogue: Rimer et al.~\cite{rimer2025talking} compared three LLM-driven approaches (retrieval-augmented, fine-tuned, and prompt-engineered) for RPG dialogue at CoG 2025; Song~\cite{song2025llmnpc} proposed a cross-platform LLM-NPC framework; Buakhaw et al.~\cite{buakhaw2025deflanderization} addressed character consistency through ``deflanderization''---removing flattened, stereotypical speech patterns from LLM-generated NPC dialogue; and Ploug et al.~\cite{ploug2025open} found that open-ended LLM dialogue particularly benefits casual players.
-These 2025 systems confirm that LLM-based NPC dialogue is an active and accelerating research area, but---critically for our contribution---none use a structured, verifiable social-state representation.
-All condition on free-text prompts or persona strings, leaving consistency to the model's implicit understanding rather than an explicit, auditable bottleneck.
+These 2025 systems confirm that LLM-based NPC dialogue is an active and accelerating research area.
+Most condition on free-text prompts or persona strings, leaving consistency to the model's implicit understanding rather than an explicit, auditable bottleneck.
+Recent concurrent work has begun to explore structured social representations: Social World Models introduced S3AP, an explicit structured social-world representation that improves social reasoning on the SOTOPIA benchmark~\cite{zhou2024sotopia,zhou2025social}, and SAGE demonstrated future-aware state-action chains for controllable dialogue generation~\cite{sage2025steering}.
+Our contribution is not to introduce structured social state \textit{per se}, but to propose a \textbf{29-dimension schema specifically tailored to NPC dialogue generation}, to evaluate which components are recoverable from context and which are not, and to test whether predicted states improve downstream generation quality.
 
 Concurrently, structured state-tracking for dialogue has advanced: SAGE~\cite{sage2025steering} introduced explicit future-aware state-action augmentation for controllable generation, and EmoDynamiX~\cite{emodynamix2025naacl} demonstrated that decoupling strategy prediction from generation improves both modularity and downstream controllability.
 These validate our staged training design (predict $\rightarrow$ generate), but they operate on narrow task-specific state ontologies (emotional support strategies, single-task state) rather than a general social-state schema.
@@ -105,8 +118,8 @@ These validate our staged training design (predict $\rightarrow$ generate), but 
 On the evaluation side, RAIDEN~\cite{raiden2025coling} and CharacterEval~\cite{charactereval2024acl} have established multi-dimensional role-play benchmarks with measurement-driven metrics, supporting our per-head F1 reporting and trajectory-level evaluation design.
 
 \textbf{Our contribution beyond this literature:}
-Existing NPC and character-role-playing systems either lack explicit social state entirely, or represent it as unstructured persona strings that cannot be systematically verified or constrained.
-Our 29-dimension $Z_t$ schema is a \textit{different category of representation}: it is machine-readable, supports formal consistency constraints (an NPC with high secrecy pressure cannot simultaneously produce a full reveal), and is auditable at the level of individual dimensions.
+While recent work has introduced structured social representations (S3AP, state-action chains), these focus on general social reasoning or single-task controllability rather than NPC dialogue generation.
+Our 29-dimension $Z_t$ schema is a \textbf{practical NPC-oriented state abstraction} that supports auditing and task-specific gating: it is machine-readable, supports formal consistency constraints (an NPC with high secrecy pressure cannot simultaneously produce a full reveal), and is auditable at the level of individual dimensions.
 This is closer to dialogue state tracking~\cite{mrksic2017neural,feng2023dialogue,jacqmin2024dialoguestate} than to persona-based generation---we track a structured belief state that evolves turn by turn, with explicit constraints on legal transitions.
 
 \subsection{Social Simulation and Affect Modelling}
@@ -138,7 +151,7 @@ Recent work has extended this to LLMs for tool use~\cite{schick2023toolformer}, 
 Multi-head architectures for dialogue have been used for emotion recognition~\cite{li2021past} and dialogue act classification~\cite{raheja2019dialogue}, but these operate on single-turn classification rather than structured multi-turn state tracking.
 
 \textbf{Our contribution beyond this literature:}
-To our knowledge, the 29-head latent predictor is the first application of a multi-head LLM classifier to structured social-state prediction for interactive NPC dialogue.
+The 29-head latent predictor applies multi-head classification to a domain that has not previously used it: structured social-state prediction for interactive NPC dialogue.
 It differs from prior multi-head work in three ways: (1) the 29 heads span six qualitatively distinct social dimensions rather than a single task family; (2) the predicted state feeds back into generation (Stage~2) and joint training (Stage~3), making it a \textit{generative} rather than purely discriminative use of the multi-head architecture; and (3) the per-group loss weighting ($\lambda_R = \lambda_D = 2.0$) reflects the asymmetric importance of relational and decision heads for downstream behaviour---a design choice motivated by the application rather than by standard multi-task optimisation.
 
 \subsection{Self-Supervised Representation Learning for Dialogue}
@@ -328,10 +341,35 @@ A rule-based router classifies turns into \textit{fast path} (direct generation)
 We use 7,742 dialogue turns across 736 episodes spanning 7 scenario types (secret extraction, trust building, alliance negotiation, threat escalation, deception detection, rumor confrontation, apology repair).
 Each turn is annotated with the full 29-field $Z_t$ schema (\texttt{train\_heads.jsonl}, \texttt{val\_heads.jsonl}, \texttt{test\_heads.jsonl}).
 Data is split 80/10/10 into train (6,175 turns, 587 episodes), validation (683 turns, 69 episodes), and test (884 turns, 80 episodes).
-SLM training (Track~A) uses a separate corpus of 16,905 plain-text dialogue lines spanning 414 unique NPCs (\texttt{train.txt} / \texttt{val.txt} split at 95/5).
+Table~\ref{tab:scenario_dist} shows the scenario-type distribution across splits; all seven scenario types are represented in each split, with secret extraction and rumor confrontation being the most frequent.
+The mean turns per episode is 10.5 (train), 9.9 (val), and 11.1 (test); mean context length is 200, 190, and 219 words respectively.
+SLM training (Track~A) uses a separate corpus of 16,905 plain-text dialogue lines (2,183 structured JSON records after blank-line segmentation) spanning 396 unique NPCs (\texttt{train.txt} / \texttt{val.txt} split at 95/5).
+The SLM corpus covers all 7 scenario types, with secret extraction (20.1\%), rumor confrontation (18.4\%), and apology repair (17.2\%) being the most frequent; response lengths average 29.8 words and context lengths average 141 words (Table~\ref{tab:slm_dist} in Appendix~\ref{app:datagen}).
 Encoder training (Track~B) uses 2,221 personality-labelled samples from essays-big5\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}} and 9,056 affect-labelled samples drawn from EmoBank~\cite{buechel2017emobank} and EmpatheticDialogues~\cite{rashkin2019empathetic}.
 \textbf{Data provenance:} Source documentation, including which datasets are real (published corpora, human-annotated) versus synthetic (teacher LLM-generated), with sizes and merge details, is provided in Appendix~\ref{app:datagen}.
 The current public checkout contains scenario definitions and compact evaluation artifacts, but not the generated split JSONL files or model checkpoints; final camera-ready reporting should cite the external artifact bundle for those files.
+
+\begin{table}[h]
+\centering
+\caption{Scenario-type distribution across train/val/test splits (episode-stratified 80/10/10).}
+\label{tab:scenario_dist}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+\textbf{Scenario} & \textbf{Train} & \textbf{\%} & \textbf{Val} & \textbf{\%} & \textbf{Test} & \textbf{\%} \\
+\midrule
+Secret extraction    & 1,395 & 22.6 & 113 & 16.5 & 158 & 17.9 \\
+Rumor confrontation  & 1,091 & 17.7 & 128 & 18.8 & 173 & 19.6 \\
+Apology repair       & 1,143 & 18.5 &  81 & 11.9 & 145 & 16.4 \\
+Trust building       &   805 & 13.0 & 156 & 22.8 & 101 & 11.4 \\
+Alliance negotiation &   677 & 11.0 &  81 & 11.9 &  82 &  9.3 \\
+Threat escalation    &   569 &  9.2 &  49 &  7.2 &  83 &  9.4 \\
+Deception detection  &   495 &  8.0 &  75 & 11.0 & 142 & 16.1 \\
+\midrule
+\textbf{Total}       & 6,175 & 100  & 683 & 100  & 884 & 100  \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \paragraph{Hardware.}
 Table~\ref{tab:hardware} summarises the memory requirements for training and inference across all models.
@@ -399,6 +437,9 @@ Scaling a standard dense GPT from 16.1M to 22.3M parameters yields a larger perp
 Further scaling to 44.8M (GPT-45M, single seed) produces only a marginal additional gain (41.61 vs. 41.65), suggesting that the $\sim$22M range is near the point of diminishing returns for this dataset size (16,905 dialogue lines).
 PrefixGPT's modest gain ($-0.6\%$) over GPT-16M with only a 0.5M parameter increase suggests the 8D conditioning signal provides marginal but consistent benefit at this scale.
 The Mamba-like SSM converges fastest (best loss at epoch 10) but plateaus at a higher perplexity, consistent with prior observations that SSMs can underperform transformers on tasks requiring long-range attention over structured input~\cite{gu2023mamba}.
+
+\textbf{Metric caveat.} Cross-architecture perplexity is reported descriptively; because tokenization differs across model families, like-for-like comparisons rely on matched settings or normalized alternatives such as bits-per-byte.
+Within the GPT family (GPT-16M, GPT-22M, GPT-45M), tokenizer identity ensures direct comparability.
 
 \begin{figure}[t]
 \centering
@@ -577,6 +618,7 @@ The reveal\_decision head achieves macro-F1$=$0.656.
 Overall mean accuracy is 0.688 with true Cohen's $\kappa{=}0.484$ across 28 evaluated heads.
 Note that this true $\kappa$ is a conservative metric; earlier drafts reported normalized above-chance estimates of $\sim$0.611, which overstate agreement by ignoring class priors.
 Secret leakage---defined as predicting a reveal decision other than \texttt{none} when secrecy\_pressure is \texttt{high}---is zero.
+Appendix~\ref{app:prediction_examples} shows concrete prediction examples on held-out test turns.
 
 \begin{figure}[t]
 \centering
@@ -749,14 +791,6 @@ Gated secret leakage---computed only over turns where \texttt{reveal\_decision=n
 Ungated leakage across all turns is 7.6\%, reflecting keyword-based heuristic false positives that can be refined in future work.
 The zero gated leakage result establishes the latent predictor's $D_t$ output as a viable mechanism for gating information disclosure, though deployment-grade reliability requires human validation.
 
-\paragraph{Limitations.}
-\begin{enumerate}
-    \item \textbf{Data scale}: 7,742 turns is small by NLP standards; results may shift with $10\times$ data.
-    \item \textbf{Synthetic labels}: Social-state annotations are LLM-generated (not human-annotated), introducing label noise.
-    \item \textbf{Evaluation coverage}: ROUGE-L and BLEU are weak proxies for dialogue quality; human preference and task-success evaluation are needed for deployment-ready claims.
-    \item \textbf{Joint-model comparison}: The three-stage Qwen3-4B joint model has been trained with consistency loss, but paired statistical comparison against the separate-stage pipeline shows a small mean degradation ($\Delta\kappa{=}-0.024$) rather than improvement, and per-head trade-offs require formal significance testing.
-\end{enumerate}
-
 % ═══════════════════════════════════════════════════════════════════════════════
 % 7. CONCLUSION
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -787,10 +821,48 @@ The checked-in release contains code, paper sources, figures, and compact evalua
 The structured latent state $Z_t$ provides an interpretable bottleneck between perception and generation---one that is predictable, auditable, and cheap enough to evaluate in a single-GPU research setting.
 
 % ═══════════════════════════════════════════════════════════════════════════════
+% LIMITATIONS
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{enumerate}
+    \item \textbf{Data scale}: 7,742 turns is small by NLP standards; results may shift with $10\times$ data.
+    \item \textbf{Synthetic labels}: Social-state annotations are LLM-generated (not human-annotated), introducing label noise.
+    \item \textbf{Evaluation coverage}: ROUGE-L and BLEU are weak proxies for dialogue quality; human preference and task-success evaluation are needed for deployment-ready claims.
+    \item \textbf{Joint-model comparison}: The three-stage Qwen3-4B joint model has been trained with consistency loss, but paired statistical comparison against the separate-stage pipeline shows a small mean degradation ($\Delta\kappa{=}-0.024$) rather than improvement, and per-head trade-offs require formal significance testing.
+\end{enumerate}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% ETHICAL CONSIDERATIONS
+% ═══════════════════════════════════════════════════════════════════════════════
+\section*{Ethical Considerations}
+
+This work raises several ethical issues that deserve explicit discussion.
+
+\textbf{Synthetic data provenance.} All dialogue and social-state labels were generated by a teacher LLM pipeline rather than collected from human players or annotators.
+While this enables controlled experimentation at small scale, the labels reflect the teacher model's biases and may not generalise to real human social behaviour.
+We release the generation prompts and consistency rules so that others can audit the synthetic supervision chain.
+
+\textbf{Stereotype and bias risk.} The 29-head schema includes personality (OCEAN), affect (VAD), and relational dimensions that could encode demographic stereotypes if mapped to NPC profiles without care.
+Our synthetic profile generator samples from uniform distributions and does not condition on protected attributes, but downstream practitioners who reuse the schema for commercial games should validate that character traits do not correlate with harmful stereotypes.
+
+\textbf{Deception and manipulation.} The secrecy-gating mechanism is designed to withhold information from a player character, which is a form of in-game deception.
+While this is standard in narrative design, deploying such systems in open-world settings with real human interlocutors raises concerns about manipulative NPC behaviour.
+We explicitly scope the intended use to fictional game environments with clear player consent.
+
+\textbf{Privacy and consent.} The dataset contains no real human data; all turns are synthetic.
+However, the scenario templates draw on common social situations (negotiation, confession, blackmail) that could be traumatic for some players.
+Any deployment should include content warnings and opt-in mechanisms.
+
+\textbf{Environmental cost.} Training the from-scratch SLMs required approximately 20 GPU-hours on an NVIDIA A30; the pretrained-model experiments required approximately 120 GPU-hours.
+We report these budgets to support reproducibility and carbon-accounting efforts.
+
+% ═══════════════════════════════════════════════════════════════════════════════
 % REFERENCES
 % ═══════════════════════════════════════════════════════════════════════════════
 \bibliography{references}
-\bibliographystyle{plainnat}
+\bibliographystyle{acl_natbib}
 
 % ═══════════════════════════════════════════════════════════════════════════════
 % APPENDIX
@@ -850,6 +922,84 @@ secrecy\_pressure & $N_t$ & 3  & 0.587 & 0.491 & 0.176 \\
 
 \section{Sample Generations}
 \label{app:samples}
+
+\subsection{Data Examples}
+\label{app:data_examples}
+
+Table~\ref{tab:data_examples} shows two representative turns from the test split, with the full dialogue context, scene setup, and gold $Z_t$ labels.
+These illustrate the input that the latent predictor receives (concatenated scene, stance history, and player utterance) and the 29-field label vector it must predict.
+
+\begin{table}[h]
+\centering
+\caption{Representative test-set turns with full context and gold $Z_t$ labels.}
+\label{tab:data_examples}
+\scriptsize
+\begin{tabular}{@{}p{3.8cm}p{7.8cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Example 1: Secret Extraction (turn 3)} \\
+\midrule
+Episode & 005d03da, turn 3, scenario=apology\_repair \\
+Scene & Temple courtyard; NPC=priest; goals=protect\_flock, maintain\_authority; secrets=hidden\_artifact, church\_corruption \\
+Player utterance & ``I fear my eyes see more than dust, Father. I've seen the enemy within---the whispers in the dark, the hands that reach for power.'' \\
+\midrule
+\textbf{Labels} & \\
+dialogue\_act & [confess, probe] \\
+tone & confrontational \\
+risk\_type & secret-risk \\
+valence / arousal / threat / control & negative / high / medium / medium \\
+player\_intent / knowledge / credibility & probe / partial / medium \\
+affection\_level / delta & VL / 0 \\
+respect\_level / delta & VL / 0 \\
+dominance\_level / delta & H / ++ \\
+familiarity\_level / delta & N / 0 \\
+trust\_level / delta & VL / 0 \\
+obligation\_level / delta & H / ++ \\
+duty / secrecy / face pressure & high / high / medium \\
+value\_conflict & strong \\
+response\_policy / reveal\_decision / repair\_strategy & challenge / hint / redirect \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Prediction Examples}
+\label{app:prediction_examples}
+
+Table~\ref{tab:prediction_examples} shows the Qwen3-4B latent predictor's predictions on four held-out test turns, with gold labels and correctness indicated.
+These examples illustrate both the model's strengths (\texttt{value\_conflict} and \texttt{secrecy\_pressure} are often correct) and weaknesses (\texttt{response\_policy} and \texttt{reveal\_decision} are frequently confused).
+
+\begin{table}[h]
+\centering
+\caption{Latent predictor predictions on held-out test turns. \cmark=correct, \xmark=incorrect.}
+\label{tab:prediction_examples}
+\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+\textbf{Scenario} & \textbf{Field} & \textbf{Gold} & \textbf{Predicted} & \\
+\midrule
+Alliance negotiation & response\_policy  & threaten & deflect  & \xmark \\
+                   & reveal\_decision   & hint     & none     & \xmark \\
+                   & secrecy\_pressure  & high     & high     & \cmark \\
+                   & value\_conflict    & strong   & strong   & \cmark \\
+\midrule
+Apology repair     & response\_policy  & clarify  & deflect  & \xmark \\
+                   & reveal\_decision   & hint     & hint     & \cmark \\
+                   & secrecy\_pressure  & medium   & high     & \xmark \\
+                   & value\_conflict    & mild     & mild     & \cmark \\
+\midrule
+Deception detection& response\_policy  & deflect  & challenge& \xmark \\
+                   & reveal\_decision   & hint     & hint     & \cmark \\
+                   & secrecy\_pressure  & medium   & high     & \xmark \\
+                   & value\_conflict    & mild     & mild     & \cmark \\
+\midrule
+Rumor confrontation& response\_policy  & deflect  & partial  & \xmark \\
+                   & reveal\_decision   & none     & hint     & \xmark \\
+                   & secrecy\_pressure  & high     & high     & \cmark \\
+                   & value\_conflict    & strong   & strong   & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Generated Response Examples}
 
 Table~\ref{tab:samples} shows representative generated responses from the Qwen3-4B response model.
 
@@ -957,6 +1107,67 @@ The full merged corpora (70K+ turns) were used in the training environment but a
 
 \textbf{Distinction from synthetic data:} The personality (essays-big5) and affect (EmoBank, EmpatheticDialogues) labels are \textit{real human annotations} from published academic corpora.
 The dialogue text in the external corpora is also real (crowdworker-generated), in contrast to the synthetic teacher-LLM-generated SFT data used for Tracks~C and~D.
+
+\subsection{Label Class Distributions}
+
+Table~\ref{tab:label_dist} reports the class distributions for the six most actionable heads (all single-label).
+The data exhibits moderate class imbalance: \texttt{reveal\_decision} is dominated by \textit{hint} and \textit{none} (96.6\% combined), \texttt{response\_policy} is dominated by \textit{deflect} and \textit{soothe} (59.7\% combined), and \texttt{secrecy\_pressure} is heavily skewed toward \textit{high} and \textit{medium} (97.2\%).
+This imbalance motivates the focal-loss and class-weighting strategies used in Track~D training.
+Stance-level fields contain label-noise artifacts (e.g., ``H(+)'', ``VH(--)'') from early-generation labelling errors; these were cleaned in the final training split but remain in the raw distribution counts.
+
+\begin{table}[h]
+\centering
+\caption{Class distributions for key single-label heads (all 7,742 turns).}
+\label{tab:label_dist}
+\small
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+\textbf{Head} & \textbf{Most freq.} & \textbf{\%} & \textbf{2nd} & \textbf{\%} & \textbf{3rd} & \textbf{\%} & \textbf{\#Classes} \\
+\midrule
+response\_policy  & deflect   & 33.6 & soothe    & 26.1 & threaten   & 11.5 & 13 \\
+reveal\_decision   & hint      & 54.9 & none      & 40.6 & partial    &  3.6 & 5  \\
+secrecy\_pressure  & high      & 54.1 & medium    & 43.0 & (low/empty)&  2.9 & 3  \\
+duty\_pressure     & high      & 56.6 & medium    & 43.1 & low        &  0.2 & 3  \\
+player\_intent     & probe     & 58.1 & intimidate& 12.0 & seek-info  &  8.5 & 9  \\
+valence           & negative  & 58.9 & positive  & 22.2 & neutral    & 18.9 & 3  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{SLM Training Corpus Distribution}
+
+Table~\ref{tab:slm_dist} summarises the Track~A SLM training corpus (2,183 structured records from \texttt{from\_gen\_train.jsonl}).
+This corpus is drawn from the same generated episodes as Tracks~C and~D, but packaged as plain-text dialogue lines for language-model pretraining.
+
+\begin{table}[h]
+\centering
+\caption{SLM training corpus distribution (2,183 records, 396 unique NPCs).}
+\label{tab:slm_dist}
+\small
+\begin{tabular}{@{}llrlr@{}}
+\toprule
+\textbf{Attribute} & \textbf{Value} & \textbf{\%} & \textbf{Value} & \textbf{\%} \\
+\midrule
+\multicolumn{5}{l}{\textit{Scenario type}} \\
+Secret extraction    & 439 & 20.1 & Rumor confrontation & 401 & 18.4 \\
+Apology repair       & 376 & 17.2 & Trust building      & 317 & 14.5 \\
+Alliance negotiation & 253 & 11.6 & Deception detection & 227 & 10.4 \\
+Threat escalation    & 170 &  7.8 & & & \\
+\midrule
+\multicolumn{5}{l}{\textit{Response policy}} \\
+Deflect   & 811 & 37.1 & Soothe     & 441 & 20.2 \\
+Challenge & 273 & 12.5 & Threaten & 197 &  9.0 \\
+\midrule
+\multicolumn{5}{l}{\textit{Valence / Arousal}} \\
+Negative  & 1,359 & 62.3 & High     & 1,085 & 49.7 \\
+Neutral   &   419 & 19.2 & Medium   & 1,062 & 48.6 \\
+Positive  &   405 & 18.6 & Low      &    36 &  1.6 \\
+\midrule
+\multicolumn{5}{l}{\textit{Lengths (words)}} \\
+Mean response length & \multicolumn{2}{r}{29.8} & Mean context length & \multicolumn{2}{r}{141.1} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Limitation: Synthetic Labels}
 We note that all dialogue data and social-state annotations are LLM-generated, not human-annotated.
