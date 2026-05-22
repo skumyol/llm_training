@@ -54,15 +54,15 @@ dist/
 
 # SLM training artifacts
 slm_training/artifacts/
-slm_training/data/
+# slm_training/
 slm_training/models/
 slm_training/logs/
 slm_training/mlruns/
 slm_training/*.cache*
 slm_training/*.faiss
-slm_training/*.csv
-slm_training/eval_results*
-slm_training/IMPROVEMENT_PLAN.md
+# slm_training/
+# slm_training/
+# slm_training/IMPROVEMENT_PLAN.md
 
 # Archive docs
 docs/archive/

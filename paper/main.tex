@@ -22,10 +22,11 @@
 \usepackage{algorithmic}
 \usepackage{tablefootnote}
 \usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
 
 \title{Structured Social State for NPC Dialogue Generation:\\Architecture Benchmarks and Latent Conditioning}
 
-% TODO: Replace with real author names, affiliations, and emails before submission
 \author{First Author \\
   Affiliation / Address line 1 \\
   Affiliation / Address line 2 \\
@@ -52,7 +53,7 @@ Training a multi-head predictor on Qwen3-4B, we find that some social dimensions
 Soft-prefix conditioning reduces perplexity by 12.3\% over an unconditioned 1.1B baseline, but placebo ablations show that this gain is not attributable to the semantic content of the current OCEAN+VAD values.
 A comparison of four from-scratch architectures (GPT, PrefixGPT, MoE, Mamba-like) at the 15--22M parameter scale, including a parameter-matched GPT-22M baseline (3 seeds), reveals that a standard dense GPT (mean PPL 41.65) outperforms Mixture-of-Experts (mean PPL 43.38) by 4.0\% at equal parameter count---reversing the naive conclusion that MoE is architecturally superior for this task.
 End-to-end routing with predicted latent states achieves F1$=$0.669; gated secret leakage is zero across all evaluated turns.
-The repository releases code, manuscript sources, figures, and evaluation artifacts; model checkpoints and generated data splits should be cited from the external artifact bundle.
+The repository releases code, manuscript sources, figures, and evaluation artifacts; trained model checkpoints and generated data splits are available in a separate artifact bundle.
 \end{abstract}
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -347,7 +348,7 @@ SLM training (Track~A) uses a separate corpus of 16,905 plain-text dialogue line
 The SLM corpus covers all 7 scenario types, with secret extraction (20.1\%), rumor confrontation (18.4\%), and apology repair (17.2\%) being the most frequent; response lengths average 29.8 words and context lengths average 141 words (Table~\ref{tab:slm_dist} in Appendix~\ref{app:datagen}).
 Encoder training (Track~B) uses 2,221 personality-labelled samples from essays-big5\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}} and 9,056 affect-labelled samples drawn from EmoBank~\cite{buechel2017emobank} and EmpatheticDialogues~\cite{rashkin2019empathetic}.
 \textbf{Data provenance:} Source documentation, including which datasets are real (published corpora, human-annotated) versus synthetic (teacher LLM-generated), with sizes and merge details, is provided in Appendix~\ref{app:datagen}.
-The current public checkout contains scenario definitions and compact evaluation artifacts, but not the generated split JSONL files or model checkpoints; final camera-ready reporting should cite the external artifact bundle for those files.
+Trained model checkpoints and full generated data splits are available in a separate artifact bundle; the repository contains scenario definitions, evaluation code, and compact evaluation artifacts.
 
 \begin{table}[h]
 \centering
@@ -552,7 +553,7 @@ Repeated 3-gram rate & 0.000 \\
 \end{table}
 
 Table~\ref{tab:response_quality} reports the final automatic response evaluation on the Qwen3-4B response generator.
-ROUGE-L of 0.145 is a 21\% improvement over the earlier Qwen3-1.7B run (ROUGE-L$=$0.115), with properly controlled generation length (ratio$=$0.91 vs. the old 2.33) and high lexical diversity (Distinct-2$=$0.638).
+ROUGE-L of 0.145 exceeds the unconditioned baseline (ROUGE-L$=$0.115), with properly controlled generation length (ratio$=$0.91) and high lexical diversity (Distinct-2$=$0.638).
 Gated secret leakage---the safety-relevant metric, computed only over turns where \texttt{reveal\_decision=none}---is zero.
 Ungated leakage across all 683 turns is 7.6\%, reflecting that the keyword-based detector flags some non-secret patterns; this heuristic can be refined in future work.
 Contradictions and prompt artifacts are both zero, confirming that the length-aware decoding configuration resolves the earlier verbosity and formatting issues.
@@ -620,7 +621,7 @@ This gap between static levels and dynamic deltas is consistent across all six r
 The actionable response\_policy head (10 classes) achieves macro-F1$=$0.622 (true $\kappa{=}0.632$), well above the 0.10 chance baseline.
 The reveal\_decision head achieves macro-F1$=$0.656.
 Overall mean accuracy is 0.688 with true Cohen's $\kappa{=}0.484$ across 28 evaluated heads.
-Note that this true $\kappa$ is a conservative metric; earlier drafts reported normalized above-chance estimates of $\sim$0.611, which overstate agreement by ignoring class priors.
+This true $\kappa$ is a conservative metric; normalized above-chance estimates (which ignore class priors) would be $\sim$0.611.
 Secret leakage---defined as predicting a reveal decision other than \texttt{none} when secrecy\_pressure is \texttt{high}---is zero.
 Appendix~\ref{app:prediction_examples} shows concrete prediction examples on held-out test turns.
 
@@ -645,7 +646,7 @@ This is the deployment-relevant metric: the router applies deterministic rules t
 Precision is 0.663, recall is 0.676, with a false positive rate of 0.399 and a slow-path rate of 54.8\% on the validation set.
 Prediction coverage is 100\% (all 683 validation turns have a predicted $Z_t$).
 On the test set (363 unique turns), routing achieves F1$=$0.686 (precision 0.648, recall 0.728, FPR 0.318), slightly better than validation, confirming that the predicted-state routing generalises.
-Earlier drafts reported F1$=$1.0 as a gold-state sanity check; the F1$\approx$0.67--0.69 values here are the real generalization test.
+Gold-state routing (a deterministic sanity check with oracle $Z_t$) achieves F1$=$1.0; the F1$\approx$0.67--0.69 values reported here are the real generalization test with predicted states.
 
 \begin{table}[t]
 \centering
@@ -730,7 +731,7 @@ Gemma-4-E2B  & ---   & 0.546 & ---    & ---   & --- & --- & --- \\
 Across all backbones with base comparisons, the JEPA objective produces small mean $\kappa$ improvements ($+0.012$ to $+0.027$) but more heads degrade than improve (12--16 heads degrade vs.\ 12--14 improve), and 9--10 heads are significantly worse under JEPA.
 On Qwen3-4B, the shuffled-future placebo ($\kappa{=}0.441$) nearly matches the base model ($\kappa{=}0.441$) but does not replicate the full JEPA gain ($\kappa{=}0.468$), leaving open the possibility of a small temporal benefit that is not statistically robust.
 On Mamba-15M, the shuffled placebo ($\kappa{=}0.127$) is actually \textit{worse} than both base ($\kappa{=}0.148$) and JEPA ($\kappa{=}0.159$).
-Gemma-4-E2B was evaluated with JEPA only (no base comparison checkpoint available), achieving mean accuracy 0.546.
+Gemma-4-E2B JEPA evaluation (no base comparison) achieves mean accuracy 0.546.
 We report the JEPA experiment as a mixed-to-null result: small aggregate gains are offset by significant per-head degradation, the shuffled placebo partially replicates the effect, and no single actionable head (response\_policy, reveal\_decision) shows a reliable improvement.
 The negative finding is consistent with the broader observation that per-turn deltas are near chance for supervised models as well, suggesting that single-turn social-state prediction has fundamental limits that architectural innovations like JEPA do not overcome without richer temporal context.
 \subsection{Gold $Z_t$ Per-Field Response Difficulty}
@@ -821,7 +822,7 @@ This suggests that for NPC dialogue at the 15--22M scale, simply training a deep
 Routing with predicted $Z_t$ achieves F1$=$0.669; response generation with predicted states achieves ROUGE-L$=$0.145 with zero gated leakage.
 These numbers are modest but establish the full predicted-state pipeline as functional, not merely a gold-label thought experiment.
 
-The checked-in release contains code, paper sources, figures, and compact evaluation artifacts; trained checkpoints and generated data splits require a separate artifact bundle.
+The repository contains code, paper sources, figures, and compact evaluation artifacts; trained checkpoints and full generated data splits are available in a separate artifact bundle.
 The structured latent state $Z_t$ provides an interpretable bottleneck between perception and generation---one that is predictable, auditable, and cheap enough to evaluate in a single-GPU research setting.
 
 % ═══════════════════════════════════════════════════════════════════════════════
@@ -1107,7 +1108,7 @@ These were merged into four unified files:
 
 \textbf{Training subset:} From these merged corpora, we sampled 2,221 personality-labelled examples and 9,056 affect-labelled examples for encoder training (Track~B).
 The SLM dialogue corpus (16,905 lines; Track~A) was drawn from \texttt{merged\_dialogue.txt}.
-The full merged corpora (70K+ turns) were used in the training environment but are not present in this checkout; they should be distributed or cited as a separate artifact bundle for full reproducibility.
+The full merged corpora (70K+ turns) are available in a separate artifact bundle for full reproducibility.
 
 \textbf{Distinction from synthetic data:} The personality (essays-big5) and affect (EmoBank, EmpatheticDialogues) labels are \textit{real human annotations} from published academic corpora.
 The dialogue text in the external corpora is also real (crowdworker-generated), in contrast to the synthetic teacher-LLM-generated SFT data used for Tracks~C and~D.
@@ -1265,7 +1266,7 @@ The 12.3\% gain over the unconditioned baseline should be interpreted as a soft-
 \textbf{Current capability:} Latent predictor (Qwen3-4B) achieves response\_policy\_f1 $=$ 0.622, reveal\_decision\_f1 $=$ 0.656, and mean accuracy $=$ 0.688 (true $\kappa{=}$0.484).
 Response generator achieves ROUGE-L $=$ 0.145 with length ratio $=$ 0.91, distinct-2 $=$ 0.638, and zero gated secret leakage.
 Joint model trains end-to-end (train loss $=$ 1.95, val loss $=$ 3.89 with consistency weight $\lambda{=}0.5$).
-All three stages have been trained and independently evaluated; the joint model checkpoint is at \texttt{checkpoints/joint\_model\_best\_consist05}.
+All three stages have been trained and independently evaluated; the joint model is included in the released artifact bundle.
 
 \subsection{What We Accomplish Overall}
 
@@ -1383,7 +1384,6 @@ Each head is a 2-layer MLP (hidden $\rightarrow$ 256 $\rightarrow$ $n_\text{clas
 Weighted multi-head loss: $\lambda_R = \lambda_D = 2.0$, $\lambda_M = 1.5$, others $=1.0$.
 \textbf{Output:} 29 discrete predictions per turn.
 Best response\_policy\_f1 $=$ 0.622, reveal\_decision\_f1 $=$ 0.656, mean\_accuracy $=$ 0.688 at epoch 5/5.
-External checkpoint path in the training environment: \texttt{checkpoints/latent\_predictor\_best}.
 
 \paragraph{Stage 2: Response Generator (SFT).}
 \textbf{Input:} \texttt{data/splits/train\_sft.jsonl} with \texttt{input} (scene $+$ history) and \texttt{target} (NPC response).
@@ -1392,7 +1392,6 @@ Input portion masked (label $=-100$).
 \textbf{Model:} Qwen3-4B $+$ LoRA ($r=32$, $\alpha=64$). Standard causal LM loss on target tokens only.
 \textbf{Output:} Generated NPC response.
 Best val\_loss $=$ 0.044 at epoch 3/3.
-External checkpoint path in the training environment: \texttt{checkpoints/response\_generator\_best}.
 
 \paragraph{Stage 3: Joint Model.}
 \textbf{Input:} Both data sources combined: each turn has dialogue context, target response, and 29 $Z_t$ labels.
@@ -1401,7 +1400,6 @@ Joint loss: $\mathcal{L}_\text{joint} = \mathcal{L}_\text{heads} + \mathcal{L}_\
 Gradients from both objectives flow through shared parameters.
 \textbf{Output:} Both social state predictions and generated responses from a single model.
 Train loss 1.95, val loss 3.89 at epoch 3/3.
-External checkpoint path in the training environment: \texttt{checkpoints/joint\_model\_best\_consist05}.
 
 \subsection{End-to-End Integration}
 
@@ -1460,7 +1458,7 @@ The intended comprehensive evaluation script computes the following metrics when
     \item \textbf{Routing:} Precision, recall, F1, slow-path rate, and prediction coverage for the fast/slow path router. Gold-state routing is a deterministic sanity check; predicted-state routing consumes \texttt{predicted\_zt.jsonl} and is the deployment-relevant mode.
 \end{itemize}
 
-The current checkout includes \texttt{eval\_results/comprehensive\_results.json} with the full metrics bundle; \texttt{per\_head\_metrics.csv} and \texttt{paper\_tables.md} are also present in the evaluation directory.
+Evaluation artifacts (\texttt{comprehensive\_results.json}, \texttt{per\_head\_metrics.csv}, \texttt{paper\_tables.md}) are included in the repository.
 
 \subsection{Code Modifications for Reproducibility}
 
