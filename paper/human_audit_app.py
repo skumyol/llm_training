@@ -46,6 +46,7 @@ import gradio as gr
 # Config
 # ---------------------------------------------------------------------------
 _DEFAULT_DATA_PATH: str | None = None  # set by CLI --data
+_TEST_MODE: bool = False               # set by CLI --test
 
 PLACEHOLDER = "-- select --"
 
@@ -62,7 +63,7 @@ HEADS = {
 }
 
 SAMPLE_SIZE = 150
-MIN_TIME_PER_TURN = 50  # seconds
+MIN_TIME_PER_TURN = 50  # seconds (overridden to 0 in --test mode)
 
 
 def _sanitize_name(name: str) -> str:
@@ -244,15 +245,16 @@ class AuditState:
         self.turn_start_time = datetime.now()
 
     def time_remaining(self) -> int:
+        min_time = _effective_min_time()
         if self.turn_start_time is None:
-            return MIN_TIME_PER_TURN
+            return min_time
         elapsed = (datetime.now() - self.turn_start_time).total_seconds()
-        return max(0, int(MIN_TIME_PER_TURN - elapsed) + 1)
+        return max(0, int(min_time - elapsed) + 1)
 
     def can_submit(self) -> bool:
         if self.turn_start_time is None:
             return False
-        return (datetime.now() - self.turn_start_time).total_seconds() >= MIN_TIME_PER_TURN
+        return (datetime.now() - self.turn_start_time).total_seconds() >= _effective_min_time()
 
     def elapsed_this_turn(self) -> int:
         if self.turn_start_time is None:
@@ -375,7 +377,14 @@ def _make_default_selections() -> dict[str, str]:
 
 
 def _all_selected(selections: list[str]) -> bool:
+    if _TEST_MODE:
+        return True
     return all(sel != PLACEHOLDER for sel in selections)
+
+
+def _effective_min_time() -> int:
+    """Return 0 in test mode, otherwise MIN_TIME_PER_TURN."""
+    return 0 if _TEST_MODE else MIN_TIME_PER_TURN
 
 
 def _completion_code(annotator: str) -> str:
@@ -737,6 +746,13 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
     with gr.Blocks(title="NPC Social-State Human Audit") as demo:
         gr.Markdown("<h1 style='text-align:center;'>NPC Social-State Human Audit</h1>")
 
+        if _TEST_MODE:
+            gr.Markdown(
+                "<div style='background:#f6e05e;border:2px solid #d69e2e;border-radius:8px;padding:12px;text-align:center;font-weight:bold;color:#744210;'>"
+                "TEST MODE — Timer disabled, selections optional, for internal UX testing only"
+                "</div>"
+            )
+
         # Info Accordion
         with gr.Accordion("Click here for experiment instructions and info", open=True):
             gr.Markdown(EXPERIMENT_INFO)
@@ -895,10 +911,17 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="Server bind address (use 0.0.0.0 for Docker/VPS)")
     parser.add_argument("--port", type=int, default=7860, help="Gradio server port")
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
+    parser.add_argument("--test", action="store_true", help="Test mode: no timer, selections optional, for UX testing")
+    parser.add_argument("--sample-size", type=int, default=150, help="Number of turns to sample (default 150)")
     args = parser.parse_args()
 
-    global _DEFAULT_DATA_PATH
+    global _DEFAULT_DATA_PATH, _TEST_MODE, SAMPLE_SIZE
     _DEFAULT_DATA_PATH = args.data
+    _TEST_MODE = args.test
+    SAMPLE_SIZE = args.sample_size
+
+    if _TEST_MODE:
+        print("[TEST MODE] Timer disabled. Selections optional. For internal UX testing only.")
 
     demo = build_interface(args.data, args.output)
     try:

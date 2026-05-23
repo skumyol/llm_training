@@ -157,6 +157,17 @@ def test_all_selected_false_with_placeholder():
     assert _all_selected(selections) is False
 
 
+def test_all_selected_bypass_in_test_mode():
+    import human_audit_app as app_mod
+    original = app_mod._TEST_MODE
+    app_mod._TEST_MODE = True
+    try:
+        # Even with all placeholders, should pass in test mode
+        assert _all_selected([PLACEHOLDER] * 8) is True
+    finally:
+        app_mod._TEST_MODE = original
+
+
 def test_make_default_selections():
     defaults = _make_default_selections()
     assert len(defaults) == len(APP_HEADS)
@@ -201,6 +212,20 @@ def test_audit_state_timer(sample_records, temp_output_dir):
     state.turn_start_time = datetime.now() - timedelta(seconds=60)
     assert state.can_submit() is True
     assert state.time_remaining() == 0
+
+
+def test_audit_state_timer_bypass_in_test_mode(sample_records, temp_output_dir):
+    import human_audit_app as app_mod
+    original = app_mod._TEST_MODE
+    app_mod._TEST_MODE = True
+    try:
+        state = AuditState(sample_records[:3], "tester", temp_output_dir)
+        state.start_turn()
+        # In test mode, should be able to submit immediately
+        assert state.can_submit() is True
+        assert state.time_remaining() <= 1
+    finally:
+        app_mod._TEST_MODE = original
 
 
 def test_audit_state_record_and_save(sample_records, temp_output_dir):
