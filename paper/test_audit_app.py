@@ -33,6 +33,8 @@ from human_audit_app import (
     _format_turn,
     _get_teacher_label,
     _make_default_selections,
+    _sanitize_name,
+    _tick_timer,
     back_handler,
     end_session,
     init_session,
@@ -286,10 +288,10 @@ def test_init_session_success(temp_jsonl, temp_output_dir):
 
     result = init_session("alice", str(temp_output_dir), None)
     assert "Scenario:" in result[0]["value"]
-    assert app_mod._sessions["alice"] is not None
+    assert app_mod._sessions[_sanitize_name("alice")] is not None
     assert "Turn" in result[3]["value"]
     # Verify timer was started
-    state = app_mod._sessions["alice"]
+    state = app_mod._sessions[_sanitize_name("alice")]
     assert state.turn_start_time is not None
 
 
@@ -324,7 +326,7 @@ def test_submit_and_next_advances(temp_jsonl, temp_output_dir):
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
     init_session("bob", str(temp_output_dir), None)
-    state = app_mod._sessions["bob"]
+    state = app_mod._sessions[_sanitize_name("bob")]
     initial_index = state.index
 
     # Bypass timer by setting turn_start_time far in the past
@@ -344,7 +346,7 @@ def test_submit_blocks_on_timer(temp_jsonl, temp_output_dir):
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
     init_session("timer_test", str(temp_output_dir), None)
-    state = app_mod._sessions["timer_test"]
+    state = app_mod._sessions[_sanitize_name("timer_test")]
     # turn_start_time was set by init_session to now, so timer should block
 
     selections = [APP_HEADS[h][1] for h in APP_HEADS]
@@ -361,7 +363,7 @@ def test_submit_blocks_on_missing_selections(temp_jsonl, temp_output_dir):
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
     init_session("missing_test", str(temp_output_dir), None)
-    state = app_mod._sessions["missing_test"]
+    state = app_mod._sessions[_sanitize_name("missing_test")]
     state.turn_start_time = datetime.now() - timedelta(seconds=100)
 
     # Submit with some PLACEHOLDER values
@@ -380,7 +382,7 @@ def test_back_handler(temp_jsonl, temp_output_dir):
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
     init_session("carol", str(temp_output_dir), None)
-    state = app_mod._sessions["carol"]
+    state = app_mod._sessions[_sanitize_name("carol")]
     state.index = 2
     first_id_at_2 = state.current_turn["episode_id"]
 
@@ -400,7 +402,7 @@ def test_toggle_session_begin(temp_jsonl, temp_output_dir):
     assert result[0]["value"] is True
     # Second output is turn_display
     assert "Scenario:" in result[1]["value"]
-    assert app_mod._sessions["toggle_alice"] is not None
+    assert app_mod._sessions[_sanitize_name("toggle_alice")] is not None
 
 
 def test_toggle_session_end(temp_jsonl, temp_output_dir):
@@ -409,7 +411,7 @@ def test_toggle_session_end(temp_jsonl, temp_output_dir):
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
     init_session("toggle_bob", str(temp_output_dir), None)
-    state = app_mod._sessions["toggle_bob"]
+    state = app_mod._sessions[_sanitize_name("toggle_bob")]
     state.begin()
 
     # is_active=True means we should end
@@ -492,6 +494,116 @@ def test_compute_agreement_partial_overlap():
 
         results = compute_agreement(a_path, b_path, None)
         assert results[HEADS[0]]["hh_acc"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Sanitization tests
+# ---------------------------------------------------------------------------
+def test_sanitize_name_normal():
+    assert _sanitize_name("alice") == "alice"
+    assert _sanitize_name("Alice_Smith-99") == "Alice_Smith-99"
+
+
+def test_sanitize_name_special_chars():
+    assert _sanitize_name("alice@prolific.co") == "alice_prolific_co"
+    assert _sanitize_name("  spaces  ") == "spaces"
+    assert _sanitize_name("你好/世界") == "annotator"
+    assert _sanitize_name("!!!") == "annotator"
+
+
+def test_sanitize_name_truncation():
+    long_name = "a" * 100
+    assert len(_sanitize_name(long_name)) == 64
+
+
+# ---------------------------------------------------------------------------
+# Resume / reload tests
+# ---------------------------------------------------------------------------
+def test_audit_state_loads_existing_annotations(sample_records, temp_output_dir):
+    """AuditState should resume from existing JSONL file."""
+    # Pre-populate an annotation file
+    pre_path = temp_output_dir / "audit_resume_user.jsonl"
+    selections = {h: APP_HEADS[h][1] for h in APP_HEADS}
+    with open(pre_path, "w", encoding="utf-8") as f:
+        for rec in sample_records[:5]:
+            tid = rec.get("turn_id") or f"{rec.get('episode_id')}_{rec.get('turn_number')}"
+            f.write(json.dumps({
+                "turn_id": tid,
+                "labels": selections,
+            }) + "\n")
+
+    state = AuditState(sample_records[:10], "resume_user", temp_output_dir)
+    # Should have loaded 5 annotations and advanced index to turn 6
+    assert len(state.annotations) == 5
+    assert state.index == 5
+    assert state.progress() == "Turn 6 / 10"
+
+
+def test_audit_state_resume_all_done(sample_records, temp_output_dir):
+    """If all turns are already annotated, index should be at len(turns)."""
+    pre_path = temp_output_dir / "audit_done_user.jsonl"
+    selections = {h: APP_HEADS[h][1] for h in APP_HEADS}
+    with open(pre_path, "w", encoding="utf-8") as f:
+        for rec in sample_records[:5]:
+            tid = rec.get("turn_id") or f"{rec.get('episode_id')}_{rec.get('turn_number')}"
+            f.write(json.dumps({
+                "turn_id": tid,
+                "labels": selections,
+            }) + "\n")
+
+    state = AuditState(sample_records[:5], "done_user", temp_output_dir)
+    assert len(state.annotations) == 5
+    assert state.index == 5
+    assert state.is_done()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate session test
+# ---------------------------------------------------------------------------
+def test_init_session_blocks_duplicate(temp_jsonl, temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
+
+    init_session("dave", str(temp_output_dir), None)
+    assert _sanitize_name("dave") in app_mod._sessions
+
+    # Try to start again with same name
+    result = init_session("dave", str(temp_output_dir), None)
+    assert "already active" in result[0]["value"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Timer tick tests
+# ---------------------------------------------------------------------------
+def test_tick_timer_no_session():
+    assert _tick_timer("nobody") == ""
+
+
+def test_tick_timer_active_session(sample_records, temp_output_dir):
+    state = AuditState(sample_records[:3], "timer_user", temp_output_dir)
+    state.begin()
+    state.start_turn()
+
+    import human_audit_app as app_mod
+    app_mod._sessions["timer_user"] = state
+
+    label = _tick_timer("timer_user")
+    assert "Turn time:" in label
+    assert "Session time:" in label
+
+    # Clean up
+    del app_mod._sessions["timer_user"]
+
+
+# ---------------------------------------------------------------------------
+# Completion code tests
+# ---------------------------------------------------------------------------
+def test_completion_code_deterministic():
+    from human_audit_app import _completion_code
+    assert _completion_code("alice") == _completion_code("alice")
+    assert _completion_code("alice") != _completion_code("bob")
+    assert len(_completion_code("alice")) == 8
 
 
 # ---------------------------------------------------------------------------

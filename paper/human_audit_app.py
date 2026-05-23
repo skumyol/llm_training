@@ -34,6 +34,7 @@ import argparse
 import hashlib
 import json
 import random
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -62,6 +63,14 @@ HEADS = {
 
 SAMPLE_SIZE = 150
 MIN_TIME_PER_TURN = 50  # seconds
+
+
+def _sanitize_name(name: str) -> str:
+    """Sanitize annotator name for safe filesystem use. Keep A-Z, a-z, 0-9, _, -."""
+    cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", name.strip())
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned.strip("_")[:64] or "annotator"
+
 
 GUIDELINES = """### Annotation Guidelines
 
@@ -201,6 +210,32 @@ class AuditState:
         self.end_time: datetime | None = None
         self.turn_start_time: datetime | None = None
         self._ensure_dir()
+        self._load_existing()
+
+    def _load_existing(self):
+        """Load previous annotations if the user is resuming a session."""
+        out_path = self.output_dir / f"audit_{self.annotator}.jsonl"
+        if not out_path.exists():
+            return
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self.annotations.append(json.loads(line))
+        except (json.JSONDecodeError, OSError):
+            self.annotations = []
+        # Advance index to the turn after the last annotated one
+        if self.annotations:
+            turn_ids = {t.get("turn_id") or f"{t.get('episode_id')}_{t.get('turn_number', i)}" for i, t in enumerate(self.turns)}
+            annotated_ids = {a["turn_id"] for a in self.annotations}
+            for i, turn in enumerate(self.turns):
+                tid = turn.get("turn_id") or f"{turn.get('episode_id')}_{turn.get('turn_number', i)}"
+                if tid not in annotated_ids:
+                    self.index = i
+                    return
+            # All turns annotated
+            self.index = len(self.turns)
 
     def begin(self):
         self.start_time = datetime.now()
@@ -415,13 +450,52 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
             gr.update(value=""),
         )
 
+    name = _sanitize_name(annotator_name)
+
+    # Block duplicate active sessions (same sanitized name already in memory)
+    if name in _sessions:
+        return (
+            gr.update(value=f"<p style='color:red;'>Session already active for <strong>{name}</strong>. Use a different name or wait.</p>"),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
+        )
+
     turns = stratify_sample(records)
-    state = AuditState(turns, annotator_name.strip(), Path(output_dir))
+    state = AuditState(turns, name, Path(output_dir))
     state.begin()
     state.start_turn()
-    _sessions[annotator_name.strip()] = state
+    _sessions[name] = state
 
     turn = state.current_turn
+
+    # Handle resumed / completed session
+    if state.is_done():
+        code = _completion_code(state.annotator)
+        print(f"[Audit] Resumed completed session for {state.annotator}. Code: {code}")
+        return (
+            gr.update(value=(
+                f"<h2 style='color:green;'>All {len(state.turns)} turns already annotated!</h2>"
+                f"<p>Your audit has been saved.</p><hr>"
+                f"<p style='font-size:1.2rem;font-weight:bold;'>"
+                f"Prolific Completion Code: <code style='background:#edf2f7;padding:4px 8px;border-radius:4px;'>{code}</code>"
+                f"</p>"
+            )),
+            gr.update(visible=False),
+            gr.update(visible=True, value=f"Completion code: {code}"),
+            gr.update(value="Done"),
+            gr.update(value=""),
+            gr.update(value=_format_time_label(state) if state.start_time else ""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
+        )
+
     turn_html = _format_turn(turn)
     progress = state.progress()
     defaults = _make_default_selections()
@@ -441,7 +515,7 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
 
 def end_session(annotator_name: str) -> tuple:
     """Called when user clicks End Audit. Saves metadata and finalises."""
-    state = _sessions.get(annotator_name.strip())
+    state = _sessions.get(_sanitize_name(annotator_name))
     if state is None:
         return _error_state("Session not found. Please begin again.")
 
@@ -506,7 +580,7 @@ def _default_radio_update(head: str, value: str | None = None) -> gr.update:
 
 def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
     """Submit current turn and advance."""
-    state = _sessions.get(annotator_name.strip())
+    state = _sessions.get(_sanitize_name(annotator_name))
     if state is None:
         return _error_state("Session not found. Please begin again.")
 
@@ -597,7 +671,7 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
 
 def back_handler(annotator_name: str) -> tuple:
     """Go to previous turn."""
-    state = _sessions.get(annotator_name.strip())
+    state = _sessions.get(_sanitize_name(annotator_name))
     if state is None or state.index <= 0:
         return _error_state("Cannot go back. You are at the first turn.")
 
@@ -635,6 +709,14 @@ def _error_state(msg: str) -> tuple:
         *[_default_radio_update(h) for h in HEADS],
         gr.update(value=""),
     )
+
+
+def _tick_timer(annotator_name: str) -> str:
+    """Live timer refresh handler called every second."""
+    state = _sessions.get(_sanitize_name(annotator_name))
+    if state is None:
+        return ""
+    return _format_time_label(state)
 
 
 # ---------------------------------------------------------------------------
@@ -681,8 +763,9 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
             with gr.Column(scale=1):
                 toggle_btn = gr.Button("Begin Audit", variant="primary", size="lg")
 
-        # Time display
+        # Time display (refreshes every second via gr.Timer)
         time_label = gr.Markdown("", elem_classes="progress-bar")
+        timer = gr.Timer(value=1, active=True)
 
         # Fallback upload (hidden by default)
         with gr.Accordion("Advanced: upload a different .jsonl file", open=False):
@@ -790,6 +873,13 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
             fn=back_handler,
             inputs=[annotator_name],
             outputs=back_outputs,
+        )
+
+        # Live timer: refreshes time_label every second
+        timer.tick(
+            fn=_tick_timer,
+            inputs=[annotator_name],
+            outputs=[time_label],
         )
 
     return demo
