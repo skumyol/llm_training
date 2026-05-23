@@ -783,8 +783,8 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
         time_label = gr.Markdown("", elem_classes="progress-bar")
         timer = gr.Timer(value=1, active=True)
 
-        # Fallback upload (hidden by default)
-        with gr.Accordion("Advanced: upload a different .jsonl file", open=False):
+        # Fallback upload (hidden in production — only for local dev)
+        with gr.Accordion("Advanced: upload a different .jsonl file", open=False, visible=False):
             uploaded_file = gr.File(
                 label="Upload .jsonl",
                 file_types=[".jsonl"],
