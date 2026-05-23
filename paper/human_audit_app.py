@@ -31,6 +31,7 @@ Expected input format (test_heads.jsonl):
 """
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -342,6 +343,11 @@ def _all_selected(selections: list[str]) -> bool:
     return all(sel != PLACEHOLDER for sel in selections)
 
 
+def _completion_code(annotator: str) -> str:
+    """Generate a deterministic 8-char completion code from the annotator name."""
+    return hashlib.sha256(annotator.encode()).hexdigest()[:8].upper()
+
+
 def _format_time_label(state: AuditState) -> str:
     """Return a markdown string showing turn elapsed time and total session time."""
     turn_elapsed = state.elapsed_this_turn()
@@ -451,10 +457,30 @@ def end_session(annotator_name: str) -> tuple:
         secs = int((state.end_time - state.start_time).total_seconds() % 60)
         duration_str = f"<p>Total duration: {mins}m {secs}s</p>"
 
+    done = len(state.annotations) >= len(state.turns)
+    code = _completion_code(state.annotator) if done else ""
+    if done:
+        print(f"[Audit] Completion code for {state.annotator}: {code}")
+        status_value = (
+            f"<h2 style='color:green;'>Audit complete!</h2>"
+            f"<p>All {len(state.turns)} turns annotated.</p>{duration_str}"
+            f"<hr>"
+            f"<p style='font-size:1.2rem;font-weight:bold;'>"
+            f"Prolific Completion Code: <code style='background:#edf2f7;padding:4px 8px;border-radius:4px;'>{code}</code>"
+            f"</p>"
+            f"<p style='color:#718096;font-size:0.9rem;'>"
+            f"Copy this code and paste it into Prolific to receive your payment."
+            f"</p>"
+        )
+        done_msg_value = f"Completion code: {code}"
+    else:
+        status_value = f"<h2 style='color:#c53030;'>Audit ended early</h2><p>Annotated {len(state.annotations)} / {len(state.turns)} turns.</p>{duration_str}<p>You must complete all turns to receive the completion code.</p>"
+        done_msg_value = f"Saved {len(state.annotations)} / {len(state.turns)} turns."
+
     return (
-        gr.update(value=f"<h2 style='color:#c53030;'>Audit ended</h2><p>Annotated {len(state.annotations)} / {len(state.turns)} turns.</p>{duration_str}"),
+        gr.update(value=status_value),
         gr.update(visible=False),
-        gr.update(visible=True, value="Audit saved."),
+        gr.update(visible=True, value=done_msg_value),
         gr.update(value=""),
         gr.update(value=""),  # warning_msg
         gr.update(value=_format_time_label(state) if state.start_time else ""),
@@ -523,11 +549,23 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
 
     if state.is_done():
         save_path = state.output_dir / f"audit_{state.annotator}.jsonl"
+        code = _completion_code(state.annotator)
         print(f"[Audit] Completed. Saved to {save_path}")
+        print(f"[Audit] Completion code for {state.annotator}: {code}")
         return (
-            gr.update(value=f"<h2 style='color:green;'>All {len(state.turns)} turns annotated!</h2><p>Your audit has been saved.</p>"),
+            gr.update(value=(
+                f"<h2 style='color:green;'>All {len(state.turns)} turns annotated!</h2>"
+                f"<p>Your audit has been saved.</p>"
+                f"<hr>"
+                f"<p style='font-size:1.2rem;font-weight:bold;'>"
+                f"Prolific Completion Code: <code style='background:#edf2f7;padding:4px 8px;border-radius:4px;'>{code}</code>"
+                f"</p>"
+                f"<p style='color:#718096;font-size:0.9rem;'>"
+                f"Copy this code and paste it into Prolific to receive your payment."
+                f"</p>"
+            )),
             gr.update(visible=False),
-            gr.update(visible=True, value="Audit complete."),
+            gr.update(visible=True, value=f"Completion code: {code}"),
             gr.update(value="Done"),
             gr.update(value=""),  # warning_msg cleared
             gr.update(value=_format_time_label(state) if state.start_time else ""),
@@ -764,6 +802,7 @@ def main():
     parser = argparse.ArgumentParser(description="Human audit Gradio app")
     parser.add_argument("--data", default=None, help="Path to test_heads.jsonl (auto-loaded on Begin Audit)")
     parser.add_argument("--output", default="./audit_results", help="Directory to save annotations")
+    parser.add_argument("--host", default="127.0.0.1", help="Server bind address (use 0.0.0.0 for Docker/VPS)")
     parser.add_argument("--port", type=int, default=7860, help="Gradio server port")
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
     args = parser.parse_args()
@@ -773,7 +812,12 @@ def main():
 
     demo = build_interface(args.data, args.output)
     try:
-        demo.launch(server_port=args.port, share=args.share, css=_CSS)
+        demo.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            css=_CSS,
+        )
     except KeyboardInterrupt:
         print("\nServer stopped.")
         sys.exit(0)

@@ -1,0 +1,54 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdf
+*.synctex.gz
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker itself
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Audit outputs (keep source data, but not generated results)
+audit_results/
+
+# Documentation that isn't needed at runtime
+*.md
+*.tex
+*.bib
+*.sty
+*.bst
+
+# Other scripts not needed in container
+prepare_audit_data.py
+inspect_data.py
+generate_figures.py
+deepseek_factcheck.py
+test_audit_app.py
+
+# ACL submission folder
+OCEAN_MBTI_ACL_2026/
+figures/
