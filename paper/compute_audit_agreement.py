@@ -20,10 +20,10 @@ Outputs a JSON file with per-head HT and HH statistics, plus a LaTeX table snipp
 import argparse
 import json
 import sys
-from collections import defaultdict
+import warnings
 from pathlib import Path
 
-from sklearn.metrics import accuracy_score, cohen_kappa_score, confusion_matrix
+from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 
 HEADS = [
@@ -44,13 +44,23 @@ def load_jsonl(path: Path) -> list[dict]:
 
 def _safe_kappa(y_true, y_pred, labels=None):
     """Cohen's kappa that returns 1.0 when all labels are identical (no variance)."""
-    try:
-        k = cohen_kappa_score(y_true, y_pred, labels=labels)
-        if k != k:  # NaN check
-            return 1.0
-        return k
-    except Exception:
+    unique = set(y_true) | set(y_pred)
+    if len(unique) <= 1:
         return 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        try:
+            return cohen_kappa_score(y_true, y_pred, labels=labels)
+        except Exception:
+            return 1.0
+
+
+def _safe_accuracy(y_true, y_pred, labels=None):
+    """Accuracy that avoids sklearn warnings for single-class data."""
+    unique = set(y_true) | set(y_pred)
+    if len(unique) <= 1:
+        return 1.0
+    return accuracy_score(y_true, y_pred)
 
 
 def index_by_turn_id(records: list[dict]) -> dict[str, dict]:
@@ -74,9 +84,8 @@ def compute(a_path: Path, b_path: Path, teacher_path: Path | None):
         a_vals = [a_recs[tid]["labels"][head] for tid in common_ids]
         b_vals = [b_recs[tid]["labels"][head] for tid in common_ids]
 
-        all_labels = sorted(set(a_vals) | set(b_vals))
-        hh_acc = accuracy_score(a_vals, b_vals)
-        hh_kappa = _safe_kappa(a_vals, b_vals, labels=all_labels)
+        hh_acc = _safe_accuracy(a_vals, b_vals)
+        hh_kappa = _safe_kappa(a_vals, b_vals)
 
         ht_acc = None
         ht_kappa = None
@@ -88,9 +97,8 @@ def compute(a_path: Path, b_path: Path, teacher_path: Path | None):
                     teacher_vals.append(teacher_recs[tid]["labels"][head])
                     a_vals_t.append(a_recs[tid]["labels"][head])
             if teacher_vals:
-                all_labels_t = sorted(set(teacher_vals) | set(a_vals_t))
-                ht_acc = accuracy_score(teacher_vals, a_vals_t)
-                ht_kappa = _safe_kappa(teacher_vals, a_vals_t, labels=all_labels_t)
+                ht_acc = _safe_accuracy(teacher_vals, a_vals_t)
+                ht_kappa = _safe_kappa(teacher_vals, a_vals_t)
 
         results[head] = {
             "ht_acc": round(ht_acc, 3) if ht_acc is not None else None,

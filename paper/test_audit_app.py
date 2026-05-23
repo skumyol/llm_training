@@ -10,8 +10,6 @@
 Backend tests for the human audit Gradio app.
 
 Usage:
-    uv run test_audit_app.py
-    # or with pytest:
     uv run pytest test_audit_app.py -v
 """
 
@@ -19,24 +17,29 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-# Add the paper directory to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent))
 
 from compute_audit_agreement import compute as compute_agreement, HEADS
 from human_audit_app import (
+    PLACEHOLDER,
     AuditState,
     HEADS as APP_HEADS,
+    _all_selected,
     _format_turn,
     _get_teacher_label,
-    go_back,
+    _make_default_selections,
+    back_handler,
+    end_session,
+    init_session,
     load_data,
-    start_session,
     stratify_sample,
-    submit_and_next,
+    submit_handler,
+    toggle_session,
 )
 
 
@@ -45,7 +48,6 @@ from human_audit_app import (
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def sample_records():
-    """Generate 20 synthetic test records across 4 scenarios."""
     scenarios = ["secret_extraction", "trust_building", "apology_repair", "threat_escalation"]
     records = []
     for i in range(20):
@@ -74,7 +76,6 @@ def sample_records():
 
 @pytest.fixture
 def temp_jsonl(sample_records):
-    """Write sample records to a temporary JSONL file."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         for rec in sample_records:
             f.write(json.dumps(rec) + "\n")
@@ -99,26 +100,30 @@ def test_load_data(temp_jsonl, sample_records):
 
 
 def test_stratify_sample(sample_records):
-    # Sample 12 turns from 20 records, 4 scenarios
     sampled = stratify_sample(sample_records, n=12, seed=42)
     assert len(sampled) == 12
-
-    # Check stratification: 3 per scenario
     from collections import Counter
     counts = Counter(r["scenario_type"] for r in sampled)
     for scenario in ["secret_extraction", "trust_building", "apology_repair", "threat_escalation"]:
-        assert counts[scenario] == 3, f"Expected 3 turns for {scenario}, got {counts[scenario]}"
+        assert counts[scenario] == 3
 
 
 def test_stratify_sample_undersized_pool():
-    """If a scenario has fewer records than per_scenario quota, take all."""
     records = [
         {"scenario_type": "a", "episode_id": "ep1"},
         {"scenario_type": "a", "episode_id": "ep2"},
         {"scenario_type": "b", "episode_id": "ep3"},
     ]
     sampled = stratify_sample(records, n=10, seed=42)
-    assert len(sampled) == 3  # only 3 records exist total
+    assert len(sampled) == 3
+
+
+def test_stratify_sample_deterministic_across_annotators(sample_records):
+    """Every annotator must see the same turns in the same order for IAA."""
+    a = stratify_sample(sample_records, n=150, seed=42)
+    b = stratify_sample(sample_records, n=150, seed=42)
+    assert len(a) == len(b)
+    assert [r["turn_id"] for r in a] == [r["turn_id"] for r in b]
 
 
 # ---------------------------------------------------------------------------
@@ -126,16 +131,35 @@ def test_stratify_sample_undersized_pool():
 # ---------------------------------------------------------------------------
 def test_format_turn(sample_records):
     text = _format_turn(sample_records[0])
-    assert "Scene 0" in text
-    assert "Player says" in text
-    assert "NPC responds" in text
-    assert "secret_extraction" in text
+    assert "Scenario:" in text
+    assert "Player:" in text
+    assert "NPC:" in text
 
 
 def test_get_teacher_label(sample_records):
     turn = sample_records[0]
     assert _get_teacher_label(turn, "valence") == "positive"
     assert _get_teacher_label(turn, "nonexistent") == "N/A"
+
+
+# ---------------------------------------------------------------------------
+# Selection helpers
+# ---------------------------------------------------------------------------
+def test_all_selected_true():
+    selections = ["positive", "low", "medium", "none", "answer", "apologize", "VL", "L"]
+    assert _all_selected(selections) is True
+
+
+def test_all_selected_false_with_placeholder():
+    selections = [PLACEHOLDER, "low", "medium", "none", "answer", "apologize", "VL", "L"]
+    assert _all_selected(selections) is False
+
+
+def test_make_default_selections():
+    defaults = _make_default_selections()
+    assert len(defaults) == len(APP_HEADS)
+    for h in APP_HEADS:
+        assert defaults[h] == PLACEHOLDER
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +173,43 @@ def test_audit_state_initialization(sample_records, temp_output_dir):
     assert (temp_output_dir / "audit_tester.jsonl").exists()
 
 
-def test_audit_state_record_and_save(sample_records, temp_output_dir):
+def test_audit_state_begin_and_end(sample_records, temp_output_dir):
     state = AuditState(sample_records[:3], "tester", temp_output_dir)
-    selections = {h: APP_HEADS[h][0] for h in APP_HEADS}
-    state.record(selections, notes="looks fine")
+    assert state.start_time is None
+    state.begin()
+    assert state.start_time is not None
+    assert isinstance(state.start_time, datetime)
+    state.end()
+    assert state.end_time is not None
+    assert (temp_output_dir / "audit_tester_meta.json").exists()
 
-    # Check saved file
+
+def test_audit_state_timer(sample_records, temp_output_dir):
+    state = AuditState(sample_records[:3], "tester", temp_output_dir)
+    # Before start_turn, timer should require full duration
+    assert state.time_remaining() == 50
+    assert state.can_submit() is False
+
+    state.start_turn()
+    # Immediately after starting, should not be able to submit
+    assert state.can_submit() is False
+    assert state.time_remaining() > 0
+
+    # Simulate time passing
+    state.turn_start_time = datetime.now() - timedelta(seconds=60)
+    assert state.can_submit() is True
+    assert state.time_remaining() == 0
+
+
+def test_audit_state_record_and_save(sample_records, temp_output_dir):
+    import time
+    state = AuditState(sample_records[:3], "tester", temp_output_dir)
+    state.start_time = datetime.now() - timedelta(seconds=300)
+    state.start_turn()
+    time.sleep(0.1)
+    # Use real label values, not PLACEHOLDER
+    selections = {h: APP_HEADS[h][1] for h in APP_HEADS}
+    state.record(selections, notes="looks fine")
     audit_path = temp_output_dir / "audit_tester.jsonl"
     with open(audit_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -163,22 +218,36 @@ def test_audit_state_record_and_save(sample_records, temp_output_dir):
     assert saved["turn_id"] == "ep_000_turn_0"
     assert saved["annotator"] == "tester"
     assert saved["notes"] == "looks fine"
-    assert saved["labels"]["valence"] == APP_HEADS["valence"][0]
+    assert len(saved["labels"]) == len(APP_HEADS)
+    assert "recorded_at" in saved
+    assert "turn_elapsed_seconds" in saved
+    assert "session_elapsed_seconds" in saved
+    assert saved["session_elapsed_seconds"] >= 300
+    assert saved["turn_elapsed_seconds"] >= 0
 
 
-def test_audit_state_overwrite(sample_records, temp_output_dir):
-    """Re-recording the same turn should overwrite the previous annotation."""
-    state = AuditState(sample_records[:2], "tester", temp_output_dir)
-    state.record({h: APP_HEADS[h][0] for h in APP_HEADS}, notes="first")
-    state.record({h: APP_HEADS[h][1] for h in APP_HEADS}, notes="second")
-
+def test_audit_state_record_filters_placeholders(sample_records, temp_output_dir):
+    state = AuditState(sample_records[:3], "tester", temp_output_dir)
+    selections = {h: PLACEHOLDER for h in APP_HEADS}
+    state.record(selections, notes="empty")
     audit_path = temp_output_dir / "audit_tester.jsonl"
     with open(audit_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    assert len(lines) == 1  # still only 1 record
+    assert len(lines) == 1
+    saved = json.loads(lines[0])
+    assert saved["labels"] == {}
+
+
+def test_audit_state_overwrite(sample_records, temp_output_dir):
+    state = AuditState(sample_records[:2], "tester", temp_output_dir)
+    state.record({h: APP_HEADS[h][1] for h in APP_HEADS}, notes="first")
+    state.record({h: APP_HEADS[h][2] for h in APP_HEADS}, notes="second")
+    audit_path = temp_output_dir / "audit_tester.jsonl"
+    with open(audit_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    assert len(lines) == 1
     saved = json.loads(lines[0])
     assert saved["notes"] == "second"
-    assert saved["labels"]["valence"] == APP_HEADS["valence"][1]
 
 
 def test_audit_state_progress(sample_records, temp_output_dir):
@@ -197,63 +266,170 @@ def test_audit_state_navigation(sample_records, temp_output_dir):
     assert state.current_turn is None
 
 
+def test_audit_state_get_previous_annotation(sample_records, temp_output_dir):
+    state = AuditState(sample_records[:3], "tester", temp_output_dir)
+    assert state.get_previous_annotation() is None
+    selections = {h: APP_HEADS[h][1] for h in APP_HEADS}
+    state.record(selections, notes="test")
+    retrieved = state.get_previous_annotation()
+    assert retrieved is not None
+    assert retrieved["valence"] == APP_HEADS["valence"][1]
+
+
 # ---------------------------------------------------------------------------
-# Handler tests (integration level)
+# Handler tests
 # ---------------------------------------------------------------------------
-def test_start_session(temp_jsonl, temp_output_dir):
-    # We need to patch the global _sessions or work with it
+def test_init_session_success(temp_jsonl, temp_output_dir):
     import human_audit_app as app_mod
-
-    # Clear any prior sessions
     app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
-    result = start_session("alice", str(temp_jsonl), str(temp_output_dir))
-    # result is a tuple of gradio update dicts
-    turn_md = result[0]
-    # Stratified sample shuffles, so just check for valid content
-    assert "Scenario:" in turn_md["value"]
-    assert "Player:" in turn_md["value"]
+    result = init_session("alice", str(temp_output_dir), None)
+    assert "Scenario:" in result[0]["value"]
     assert app_mod._sessions["alice"] is not None
+    assert "Turn" in result[3]["value"]
+    # Verify timer was started
+    state = app_mod._sessions["alice"]
+    assert state.turn_start_time is not None
 
-    # Progress should show 1 / N
-    progress_update = result[-1]
-    assert "Turn" in progress_update["value"]
+
+def test_init_session_no_name(temp_jsonl, temp_output_dir):
+    result = init_session("", str(temp_output_dir), None)
+    assert "color:red" in result[0]["value"]
+
+
+def test_init_session_missing_file(temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._DEFAULT_DATA_PATH = None
+    result = init_session("test", str(temp_output_dir), None)
+    assert "not found" in result[0]["value"]
+
+
+def test_init_session_empty_file(temp_output_dir):
+    import human_audit_app as app_mod
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
+        f.write("")
+        path = f.name
+    try:
+        app_mod._DEFAULT_DATA_PATH = path
+        result = init_session("test", str(temp_output_dir), None)
+        assert "No records" in result[0]["value"]
+    finally:
+        os.unlink(path)
 
 
 def test_submit_and_next_advances(temp_jsonl, temp_output_dir):
     import human_audit_app as app_mod
     app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
-    start_session("bob", str(temp_jsonl), str(temp_output_dir))
+    init_session("bob", str(temp_output_dir), None)
     state = app_mod._sessions["bob"]
     initial_index = state.index
 
-    selections = {h: APP_HEADS[h][0] for h in APP_HEADS}
-    result = submit_and_next("bob", "", **selections)
+    # Bypass timer by setting turn_start_time far in the past
+    state.turn_start_time = datetime.now() - timedelta(seconds=100)
+
+    # Use real label values (index 1, skipping PLACEHOLDER at index 0)
+    selections = [APP_HEADS[h][1] for h in APP_HEADS]
+    result = submit_handler("bob", "", *selections)
     assert state.index == initial_index + 1
-    # The turn markdown should now show a different turn
-    assert state.current_turn is not None or "All turns" in result[0]["value"]
+    # Check warning is cleared on successful submit
+    assert result[4]["value"] == ""
 
 
-def test_go_back(temp_jsonl, temp_output_dir):
+def test_submit_blocks_on_timer(temp_jsonl, temp_output_dir):
     import human_audit_app as app_mod
     app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
 
-    start_session("carol", str(temp_jsonl), str(temp_output_dir))
+    init_session("timer_test", str(temp_output_dir), None)
+    state = app_mod._sessions["timer_test"]
+    # turn_start_time was set by init_session to now, so timer should block
+
+    selections = [APP_HEADS[h][1] for h in APP_HEADS]
+    result = submit_handler("timer_test", "", *selections)
+    # Index should NOT advance
+    assert state.index == 0
+    # Warning message should mention waiting
+    assert "wait" in result[4]["value"].lower()
+
+
+def test_submit_blocks_on_missing_selections(temp_jsonl, temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
+
+    init_session("missing_test", str(temp_output_dir), None)
+    state = app_mod._sessions["missing_test"]
+    state.turn_start_time = datetime.now() - timedelta(seconds=100)
+
+    # Submit with some PLACEHOLDER values
+    selections = [APP_HEADS[h][1] for h in list(APP_HEADS.keys())[:4]]
+    selections += [PLACEHOLDER] * 4
+    result = submit_handler("missing_test", "", *selections)
+    # Index should NOT advance
+    assert state.index == 0
+    # Warning should mention selecting all heads
+    assert "all 8 heads" in result[4]["value"].lower()
+
+
+def test_back_handler(temp_jsonl, temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
+
+    init_session("carol", str(temp_output_dir), None)
     state = app_mod._sessions["carol"]
     state.index = 2
     first_id_at_2 = state.current_turn["episode_id"]
 
-    go_back("carol")
+    back_handler("carol")
     assert state.index == 1
     assert state.current_turn["episode_id"] != first_id_at_2
+
+
+def test_toggle_session_begin(temp_jsonl, temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
+
+    # is_active=False means we should begin
+    result = toggle_session(False, "toggle_alice", str(temp_output_dir), None)
+    # First output is session_active state (should be True)
+    assert result[0]["value"] is True
+    # Second output is turn_display
+    assert "Scenario:" in result[1]["value"]
+    assert app_mod._sessions["toggle_alice"] is not None
+
+
+def test_toggle_session_end(temp_jsonl, temp_output_dir):
+    import human_audit_app as app_mod
+    app_mod._sessions.clear()
+    app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
+
+    init_session("toggle_bob", str(temp_output_dir), None)
+    state = app_mod._sessions["toggle_bob"]
+    state.begin()
+
+    # is_active=True means we should end
+    result = toggle_session(True, "toggle_bob", str(temp_output_dir), None)
+    # First output is session_active state (should be False)
+    assert result[0]["value"] is False
+    # Second output is turn_display with "Audit ended"
+    assert "ended" in result[1]["value"].lower()
+    assert (temp_output_dir / "audit_toggle_bob_meta.json").exists()
+
+
+def test_end_session_not_found(temp_output_dir):
+    result = end_session("nonexistent")
+    assert "not found" in result[0]["value"].lower()
 
 
 # ---------------------------------------------------------------------------
 # Agreement computation tests
 # ---------------------------------------------------------------------------
 def test_compute_agreement_perfect():
-    """If annotators agree perfectly, HH kappa = 1.0."""
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         a_path = d / "a.jsonl"
@@ -262,12 +438,8 @@ def test_compute_agreement_perfect():
 
         common = []
         for i in range(10):
-            # Use at least 2 distinct labels so sklearn kappa is well-defined
             label = "neutral" if i % 2 == 0 else "positive"
-            rec = {
-                "turn_id": f"t{i}",
-                "labels": {h: label for h in HEADS}
-            }
+            rec = {"turn_id": f"t{i}", "labels": {h: label for h in HEADS}}
             common.append(rec)
 
         for path in [a_path, b_path, t_path]:
@@ -284,7 +456,6 @@ def test_compute_agreement_perfect():
 
 
 def test_compute_agreement_chance():
-    """If annotators are independent random on 3-class, kappa should be ~0."""
     import random
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -292,32 +463,20 @@ def test_compute_agreement_chance():
         b_path = d / "b.jsonl"
 
         random.seed(42)
-        labels_a = []
-        labels_b = []
         classes = ["low", "medium", "high"]
         for i in range(200):
-            labels_a.append({
-                "turn_id": f"t{i}",
-                "labels": {h: random.choice(classes) for h in HEADS}
-            })
-            labels_b.append({
-                "turn_id": f"t{i}",
-                "labels": {h: random.choice(classes) for h in HEADS}
-            })
-
-        for path, data in [(a_path, labels_a), (b_path, labels_b)]:
-            with open(path, "w", encoding="utf-8") as f:
-                for rec in data:
-                    f.write(json.dumps(rec) + "\n")
+            for path, src in [(a_path, [random.choice(classes) for _ in HEADS]),
+                              (b_path, [random.choice(classes) for _ in HEADS])]:
+                label_dict = {h: src[j] for j, h in enumerate(HEADS)}
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"turn_id": f"t{i}", "labels": label_dict}) + "\n")
 
         results = compute_agreement(a_path, b_path, None)
-        # For independent random 3-class labels, kappa should be close to 0
         for head in HEADS:
-            assert -0.15 < results[head]["hh_kappa"] < 0.15, f"Expected near-zero kappa, got {results[head]['hh_kappa']}"
+            assert -0.15 < results[head]["hh_kappa"] < 0.15
 
 
 def test_compute_agreement_partial_overlap():
-    """If annotators share only some turn IDs, only common IDs are used."""
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         a_path = d / "a.jsonl"
@@ -332,7 +491,6 @@ def test_compute_agreement_partial_overlap():
                 f.write(json.dumps({"turn_id": f"t{i}", "labels": {h: "neutral" for h in HEADS}}) + "\n")
 
         results = compute_agreement(a_path, b_path, None)
-        # Only 5 common turns (t5..t9)
         assert results[HEADS[0]]["hh_acc"] == 1.0
 
 
@@ -350,24 +508,5 @@ def test_empty_data_file():
         os.unlink(path)
 
 
-def test_start_session_missing_file(temp_output_dir):
-    result = start_session("test", "/nonexistent/file.jsonl", str(temp_output_dir))
-    assert "not found" in result[0]["value"]
-
-
-def test_start_session_empty_file(temp_output_dir):
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
-        f.write("")
-        path = f.name
-    try:
-        result = start_session("test", path, str(temp_output_dir))
-        assert "No records" in result[0]["value"] or "Not started" not in result[0]["value"]
-    finally:
-        os.unlink(path)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

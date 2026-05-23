@@ -10,6 +10,8 @@ Human Audit Gradio Interface
 
 Usage:
     uv run human_audit_app.py --data path/to/test_heads.jsonl --output ./audit_results
+    # or without --data to enable file upload in the UI
+    uv run human_audit_app.py --output ./audit_results
 
 Expected input format (test_heads.jsonl):
     Each line is a JSON object with at least these fields:
@@ -23,18 +25,9 @@ Expected input format (test_heads.jsonl):
         "labels": {
             "valence": "negative",
             "arousal": "high",
-            "secrecy_pressure": "high",
-            "reveal_decision": "none",
-            "response_policy": "deflect",
-            "repair_strategy": "redirect",
-            "trust_level": "VL",
-            "familiarity_level": "N",
             ... other heads ...
         }
     }
-
-The app stratifies 150 turns (~21 per scenario type), presents them one by one,
-and saves annotations as JSONL with one record per turn per annotator.
 """
 
 import argparse
@@ -42,6 +35,7 @@ import json
 import random
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
@@ -49,21 +43,103 @@ import gradio as gr
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+_DEFAULT_DATA_PATH: str | None = None  # set by CLI --data
+
+PLACEHOLDER = "-- select --"
+
 HEADS = {
-    "valence":           ["positive", "neutral", "negative"],
-    "arousal":           ["low", "medium", "high"],
-    "secrecy_pressure":  ["low", "medium", "high"],
-    "reveal_decision":   ["none", "hint", "partial", "full"],
-    "response_policy":   [
-        "answer", "withhold", "deflect", "clarify", "soothe",
-        "challenge", "threaten", "negotiate", "redirect", "partial"
-    ],
-    "repair_strategy":   ["apologize", "redirect", "justify", "compensate", "silence"],
-    "trust_level":       ["VL", "L", "N", "H", "VH"],
-    "familiarity_level": ["VL", "L", "N", "H", "VH"],
+    "valence":           [PLACEHOLDER, "positive", "neutral", "negative"],
+    "arousal":           [PLACEHOLDER, "low", "medium", "high"],
+    "secrecy_pressure":  [PLACEHOLDER, "low", "medium", "high"],
+    "reveal_decision":   [PLACEHOLDER, "none", "hint", "partial", "full"],
+    "response_policy":   [PLACEHOLDER, "answer", "withhold", "deflect", "clarify", "soothe",
+                          "challenge", "threaten", "negotiate", "redirect", "partial"],
+    "repair_strategy":   [PLACEHOLDER, "apologize", "redirect", "justify", "compensate", "silence"],
+    "trust_level":       [PLACEHOLDER, "VL", "L", "N", "H", "VH"],
+    "familiarity_level": [PLACEHOLDER, "VL", "L", "N", "H", "VH"],
 }
 
 SAMPLE_SIZE = 150
+MIN_TIME_PER_TURN = 50  # seconds
+
+GUIDELINES = """### Annotation Guidelines
+
+**valence** — Emotional valence of the NPC toward the player / situation
+- positive: warm, approving, optimistic
+- neutral: flat, factual, neither warm nor cold
+- negative: cold, disapproving, hostile
+
+**arousal** — Intensity of the NPC's emotional state
+- low: calm, relaxed, indifferent
+- medium: engaged, alert, moderately tense
+- high: agitated, excited, very tense
+
+**secrecy_pressure** — How much the NPC feels pressured to keep information hidden
+- low: no secret to protect, or no pressure
+- medium: some tension around disclosure
+- high: strong pressure to withhold critical information
+
+**reveal_decision** — How much the NPC reveals in this turn
+- none: gives nothing away
+- hint: implies information without stating it
+- partial: gives some but not all relevant information
+- full: fully discloses the secret
+
+**response_policy** — The NPC's conversational strategy
+- answer: directly responds to the player's query
+- withhold: refuses to provide information
+- deflect: changes topic or evades
+- clarify: asks for clarification or rephrases
+- soothe: calms the player, reassures
+- challenge: pushes back, questions player's motives
+- threaten: warns or implies consequences
+- negotiate: offers a trade or bargain
+- redirect: guides the player elsewhere
+- partial: gives an incomplete or hedged answer
+
+**repair_strategy** — Strategy to repair social damage (if applicable)
+- apologize: expresses regret
+- redirect: shifts attention elsewhere
+- justify: explains why the action was necessary
+- compensate: offers something to make up for it
+- silence: says nothing, lets tension pass
+
+**trust_level** — NPC's current trust toward the player (ordinal)
+- VL: very low — deeply suspicious
+- L: low — cautious
+- N: neutral — neither trusting nor suspicious
+- H: high — generally trusting
+- VH: very high — fully trusting
+
+**familiarity_level** — NPC's familiarity with the player (ordinal)
+- VL: very low — stranger
+- L: low — acquaintance
+- N: neutral — known but not close
+- H: high — frequent interaction
+- VH: very high — close companion
+"""
+
+EXPERIMENT_INFO = """## Experiment Overview
+
+You are participating in a **human validation audit** for a research paper on NPC (non-player character) dialogue generation.
+
+### What you will do
+You will review 150 stratified dialogue turns from a fantasy-game dataset and label each turn on **8 social-state dimensions**. These labels will be compared against (a) another human annotator and (b) the synthetic labels generated by a teacher LLM.
+
+### Important rules
+1. **Minimum time per turn: 50 seconds.** The Submit button will be blocked until you have spent at least 50 seconds on the current turn. This prevents rushed or random labeling.
+2. Read the **Scene**, **Dialogue History**, **Player Utterance**, and **NPC Response** carefully before selecting labels.
+3. **All 8 heads must be actively selected** before you can submit. There is no default choice.
+4. Click **Submit & Next** after each turn. Your progress auto-saves.
+5. Use **Previous Turn** to go back and edit if you change your mind.
+6. **Relational delta heads (e.g., trust_delta, familiarity_delta) are NOT part of this audit.** Only static levels are validated.
+
+### Time estimate
+~2.5 hours for 150 turns (roughly 1 minute per turn).
+
+### Contact
+If you have questions about a specific label, use the **Notes** field or consult the **Annotation Guidelines** below.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +157,12 @@ def load_data(path: Path) -> list[dict]:
 
 
 def stratify_sample(records: list[dict], n: int = SAMPLE_SIZE, seed: int = 42) -> list[dict]:
-    """Stratified random sample: ~n / scenario_type turns."""
+    """Draw a deterministic stratified sample so all annotators see the same turns.
+
+    Uses a fixed random seed so that every call with the same `records` returns
+    the identical sample in the same order. This is required for human-human
+    agreement analysis.
+    """
     by_scenario: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         scenario = r.get("scenario_type", "unknown")
@@ -115,11 +196,57 @@ class AuditState:
         self.output_dir = output_dir
         self.index = 0
         self.annotations: list[dict] = []
+        self.start_time: datetime | None = None
+        self.end_time: datetime | None = None
+        self.turn_start_time: datetime | None = None
         self._ensure_dir()
+
+    def begin(self):
+        self.start_time = datetime.now()
+
+    def start_turn(self):
+        self.turn_start_time = datetime.now()
+
+    def time_remaining(self) -> int:
+        if self.turn_start_time is None:
+            return MIN_TIME_PER_TURN
+        elapsed = (datetime.now() - self.turn_start_time).total_seconds()
+        return max(0, int(MIN_TIME_PER_TURN - elapsed) + 1)
+
+    def can_submit(self) -> bool:
+        if self.turn_start_time is None:
+            return False
+        return (datetime.now() - self.turn_start_time).total_seconds() >= MIN_TIME_PER_TURN
+
+    def elapsed_this_turn(self) -> int:
+        if self.turn_start_time is None:
+            return 0
+        return int((datetime.now() - self.turn_start_time).total_seconds())
+
+    def total_elapsed(self) -> int:
+        if self.start_time is None:
+            return 0
+        return int((datetime.now() - self.start_time).total_seconds())
+
+    def end(self):
+        self.end_time = datetime.now()
+        self._save_metadata()
+
+    def _save_metadata(self):
+        meta = {
+            "annotator": self.annotator,
+            "total_turns": len(self.turns),
+            "annotated_count": len(self.annotations),
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "duration_seconds": (self.end_time - self.start_time).total_seconds() if self.start_time and self.end_time else None,
+        }
+        meta_path = self.output_dir / f"audit_{self.annotator}_meta.json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
 
     def _ensure_dir(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        # Touch the output file so it exists even before the first annotation
         out_path = self.output_dir / f"audit_{self.annotator}.jsonl"
         out_path.touch(exist_ok=True)
 
@@ -139,29 +266,46 @@ class AuditState:
         turn = self.current_turn
         if turn is None:
             return
+        now = datetime.now()
+        turn_elapsed = self.elapsed_this_turn()
+        session_elapsed = self.total_elapsed()
         record = {
             "turn_id": turn.get("turn_id") or f"{turn.get('episode_id')}_{turn.get('turn_number', self.index)}",
             "episode_id": turn.get("episode_id"),
             "scenario_type": turn.get("scenario_type"),
             "annotator": self.annotator,
-            "labels": {k: values[k] for k in HEADS},
+            "labels": {k: values[k] for k in HEADS if values[k] != PLACEHOLDER},
             "notes": notes,
+            "recorded_at": now.isoformat(),
+            "turn_elapsed_seconds": turn_elapsed,
+            "session_elapsed_seconds": session_elapsed,
         }
-        # Overwrite if we revisit
         self.annotations = [a for a in self.annotations if a["turn_id"] != record["turn_id"]]
         self.annotations.append(record)
         self.save()
 
+    def get_previous_annotation(self) -> dict | None:
+        turn = self.current_turn
+        if turn is None:
+            return None
+        tid = turn.get("turn_id") or f"{turn.get('episode_id')}_{turn.get('turn_number', self.index)}"
+        for a in self.annotations:
+            if a["turn_id"] == tid:
+                return a["labels"]
+        return None
+
     def progress(self) -> str:
         return f"Turn {self.index + 1} / {len(self.turns)}"
 
+    def is_done(self) -> bool:
+        return self.index >= len(self.turns)
 
-# Global registry of active sessions
+
 _sessions: dict[str, AuditState] = {}
 
 
 # ---------------------------------------------------------------------------
-# UI helpers
+# Formatting helpers
 # ---------------------------------------------------------------------------
 def _format_turn(turn: dict) -> str:
     scene = turn.get("scene", "")
@@ -170,16 +314,19 @@ def _format_turn(turn: dict) -> str:
     npc = turn.get("npc_response", "")
     scenario = turn.get("scenario_type", "unknown")
     episode = turn.get("episode_id", "unknown")
+    turn_num = turn.get("turn_number", "?")
 
     parts = [
-        f"**Scenario:** {scenario}  |  **Episode:** {episode}",
-        "---",
-        f"**Scene:** {scene}" if scene else "",
-        f"**Dialogue History:**\n{history}" if history else "",
-        f"**Player:** {player}",
-        f"**NPC Response:** {npc}",
+        f"<h3>Scenario: {scenario} &nbsp;|&nbsp; Episode: {episode} &nbsp;|&nbsp; Turn: {turn_num}</h3>",
+        "<hr>",
     ]
-    return "\n\n".join(p for p in parts if p)
+    if scene:
+        parts.append(f"<p><strong>Scene:</strong> {scene}</p>")
+    if history:
+        parts.append(f"<p><strong>History:</strong><br><span style='color:#555;'>{history.replace(chr(10), '<br>')}</span></p>")
+    parts.append(f"<p><strong style='color:#2b6cb0;'>Player:</strong> {player}</p>")
+    parts.append(f"<p><strong style='color:#c53030;'>NPC:</strong> {npc}</p>")
+    return "\n".join(parts)
 
 
 def _get_teacher_label(turn: dict, head: str) -> str:
@@ -187,98 +334,280 @@ def _get_teacher_label(turn: dict, head: str) -> str:
     return labels.get(head, "N/A")
 
 
+def _make_default_selections() -> dict[str, str]:
+    return {h: PLACEHOLDER for h in HEADS}
+
+
+def _all_selected(selections: list[str]) -> bool:
+    return all(sel != PLACEHOLDER for sel in selections)
+
+
+def _format_time_label(state: AuditState) -> str:
+    """Return a markdown string showing turn elapsed time and total session time."""
+    turn_elapsed = state.elapsed_this_turn()
+    turn_min = turn_elapsed // 60
+    turn_sec = turn_elapsed % 60
+    total = state.total_elapsed()
+    total_min = total // 60
+    total_sec = total % 60
+    return (
+        f"<span style='font-family:monospace;'>"
+        f"Turn time: {turn_min:02d}m {turn_sec:02d}s / {MIN_TIME_PER_TURN}s min | "
+        f"Session time: {total_min:02d}m {total_sec:02d}s"
+        f"</span>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Gradio handlers
 # ---------------------------------------------------------------------------
-def start_session(annotator_name: str, data_path: str, output_dir: str) -> tuple:
-    path = Path(data_path)
-    if not path.exists():
+def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | None) -> tuple:
+    """Called when user clicks Begin Audit. Loads data, stratifies, and shows first turn."""
+    if not annotator_name.strip():
         return (
-            gr.update(value=f"File not found: {data_path}"),
+            gr.update(value="<p style='color:red;'>Please enter your annotator name.</p>"),
             gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
+        )
+
+    path = None
+    if _DEFAULT_DATA_PATH and Path(_DEFAULT_DATA_PATH).exists():
+        path = Path(_DEFAULT_DATA_PATH)
+    elif uploaded_file is not None and hasattr(uploaded_file, 'name') and uploaded_file.name:
+        path = Path(uploaded_file.name)
+
+    if path is None or not path.exists():
+        return (
+            gr.update(value="<p style='color:red;'>Data file not found. Please provide a file via --data or upload below.</p>"),
             gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
         )
 
     records = load_data(path)
     if len(records) == 0:
         return (
-            gr.update(value="No records found in file."),
+            gr.update(value="<p style='color:red;'>No records found in data file.</p>"),
             gr.update(visible=False),
-            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
         )
 
     turns = stratify_sample(records)
-    state = AuditState(turns, annotator_name, Path(output_dir))
-    _sessions[annotator_name] = state
+    state = AuditState(turns, annotator_name.strip(), Path(output_dir))
+    state.begin()
+    state.start_turn()
+    _sessions[annotator_name.strip()] = state
 
     turn = state.current_turn
-    text = _format_turn(turn)
-    teacher_labels = {f"teacher_{h}": _get_teacher_label(turn, h) for h in HEADS}
+    turn_html = _format_turn(turn)
+    progress = state.progress()
+    defaults = _make_default_selections()
 
     return (
-        gr.update(value=text),
+        gr.update(value=turn_html),
         gr.update(visible=True),
         gr.update(visible=False),
-        *[gr.update(value=v) for v in teacher_labels.values()],
-        gr.update(value=state.progress()),
+        gr.update(value=progress),
+        gr.update(value=""),  # warning_msg
+        gr.update(value=_format_time_label(state)),
+        gr.update(value="End Audit", variant="secondary"),
+        *[_default_radio_update(h, defaults[h]) for h in HEADS],
+        gr.update(value=""),
     )
 
 
-def submit_and_next(annotator_name: str, notes: str, **selections) -> tuple:
-    state = _sessions.get(annotator_name)
+def end_session(annotator_name: str) -> tuple:
+    """Called when user clicks End Audit. Saves metadata and finalises."""
+    state = _sessions.get(annotator_name.strip())
     if state is None:
-        return (gr.update(value="Session not found. Restart."),) + (gr.update(),) * (len(HEADS) + 3)
+        return _error_state("Session not found. Please begin again.")
 
-    state.record(selections, notes)
+    state.end()
+    save_path = state.output_dir / f"audit_{state.annotator}.jsonl"
+    meta_path = state.output_dir / f"audit_{state.annotator}_meta.json"
+    print(f"[Audit] Saved to {save_path}")
+    print(f"[Audit] Metadata to {meta_path}")
+
+    duration_str = ""
+    if state.start_time and state.end_time:
+        mins = int((state.end_time - state.start_time).total_seconds() // 60)
+        secs = int((state.end_time - state.start_time).total_seconds() % 60)
+        duration_str = f"<p>Total duration: {mins}m {secs}s</p>"
+
+    return (
+        gr.update(value=f"<h2 style='color:#c53030;'>Audit ended</h2><p>Annotated {len(state.annotations)} / {len(state.turns)} turns.</p>{duration_str}"),
+        gr.update(visible=False),
+        gr.update(visible=True, value="Audit saved."),
+        gr.update(value=""),
+        gr.update(value=""),  # warning_msg
+        gr.update(value=_format_time_label(state) if state.start_time else ""),
+        gr.update(value="Begin Audit", variant="primary"),
+        *[_default_radio_update(h) for h in HEADS],
+        gr.update(value=""),
+    )
+
+
+def toggle_session(is_active: bool, annotator_name: str, output_dir: str, uploaded_file: gr.File | None) -> tuple:
+    """Routes to begin or end depending on current session state."""
+    if not is_active:
+        result = init_session(annotator_name, output_dir, uploaded_file)
+        return (gr.update(value=True),) + result
+    else:
+        result = end_session(annotator_name)
+        return (gr.update(value=False),) + result
+
+
+def _default_radio_update(head: str, value: str | None = None) -> gr.update:
+    return gr.update(value=value if value else PLACEHOLDER)
+
+
+def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
+    """Submit current turn and advance."""
+    state = _sessions.get(annotator_name.strip())
+    if state is None:
+        return _error_state("Session not found. Please begin again.")
+
+    # Check all heads are actively selected
+    if not _all_selected(selections):
+        turn = state.current_turn
+        turn_html = _format_turn(turn)
+        return (
+            gr.update(value=turn_html),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(value=state.progress()),
+            gr.update(value="<p style='color:#c53030;font-weight:bold;'>Please select a label for all 8 heads before submitting.</p>"),
+            gr.update(value=_format_time_label(state)),
+            gr.update(value="End Audit", variant="secondary"),
+            *[_default_radio_update(h, selections[i]) for i, h in enumerate(HEADS)],
+            gr.update(value=notes),
+        )
+
+    # Enforce minimum time per turn
+    if not state.can_submit():
+        remaining = state.time_remaining()
+        turn = state.current_turn
+        turn_html = _format_turn(turn)
+        return (
+            gr.update(value=turn_html),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(value=state.progress()),
+            gr.update(value=f"<p style='color:#c53030;font-weight:bold;'>Please wait {remaining} more seconds before submitting this turn.</p>"),
+            gr.update(value=_format_time_label(state)),
+            gr.update(value="End Audit", variant="secondary"),
+            *[_default_radio_update(h, selections[i]) for i, h in enumerate(HEADS)],
+            gr.update(value=notes),
+        )
+
+    sel_dict = {h: selections[i] for i, h in enumerate(HEADS)}
+    state.record(sel_dict, notes)
     state.index += 1
 
-    if state.index >= len(state.turns):
+    if state.is_done():
+        save_path = state.output_dir / f"audit_{state.annotator}.jsonl"
+        print(f"[Audit] Completed. Saved to {save_path}")
         return (
-            gr.update(value="All turns annotated. Thank you!"),
+            gr.update(value=f"<h2 style='color:green;'>All {len(state.turns)} turns annotated!</h2><p>Your audit has been saved.</p>"),
             gr.update(visible=False),
-            gr.update(visible=True, value=f"Saved to: {state.output_dir / f'audit_{annotator_name}.jsonl'}"),
-            *[gr.update(value="") for _ in HEADS],
+            gr.update(visible=True, value="Audit complete."),
             gr.update(value="Done"),
+            gr.update(value=""),  # warning_msg cleared
+            gr.update(value=_format_time_label(state) if state.start_time else ""),
+            gr.update(value="Begin Audit", variant="primary"),
+            *[_default_radio_update(h) for h in HEADS],
+            gr.update(value=""),
         )
 
     turn = state.current_turn
-    text = _format_turn(turn)
-    teacher_labels = {f"teacher_{h}": _get_teacher_label(turn, h) for h in HEADS}
+    state.start_turn()
+    turn_html = _format_turn(turn)
+    prev = state.get_previous_annotation()
+    defaults = _make_default_selections()
+    if prev:
+        defaults.update(prev)
 
     return (
-        gr.update(value=text),
+        gr.update(value=turn_html),
         gr.update(visible=True),
         gr.update(visible=False),
-        *[gr.update(value=v) for v in teacher_labels.values()],
         gr.update(value=state.progress()),
+        gr.update(value=""),  # warning_msg cleared
+        gr.update(value=_format_time_label(state)),
+        gr.update(value="End Audit", variant="secondary"),
+        *[_default_radio_update(h, defaults[h]) for h in HEADS],
+        gr.update(value=notes if prev else ""),
     )
 
 
-def go_back(annotator_name: str) -> tuple:
-    state = _sessions.get(annotator_name)
+def back_handler(annotator_name: str) -> tuple:
+    """Go to previous turn."""
+    state = _sessions.get(annotator_name.strip())
     if state is None or state.index <= 0:
-        return (gr.update(),) * (len(HEADS) + 3)
+        return _error_state("Cannot go back. You are at the first turn.")
 
     state.index -= 1
+    state.start_turn()
     turn = state.current_turn
-    text = _format_turn(turn)
-    teacher_labels = {f"teacher_{h}": _get_teacher_label(turn, h) for h in HEADS}
-
-    # Pre-fill annotator's previous choices if any
-    prev = next((a for a in state.annotations if a["turn_id"] == (turn.get("turn_id") or f"{turn.get('episode_id')}_{turn.get('turn_number', state.index)}")), None)
+    turn_html = _format_turn(turn)
+    prev = state.get_previous_annotation()
+    defaults = _make_default_selections()
     if prev:
-        user_values = [prev["labels"].get(h, HEADS[h][0]) for h in HEADS]
-    else:
-        user_values = [HEADS[h][0] for h in HEADS]
+        defaults.update(prev)
 
     return (
-        gr.update(value=text),
+        gr.update(value=turn_html),
         gr.update(visible=True),
         gr.update(visible=False),
-        *[gr.update(value=v) for v in teacher_labels.values()],
         gr.update(value=state.progress()),
-        *[gr.update(value=v) for v in user_values],
+        gr.update(value=""),  # warning_msg cleared
+        gr.update(value=_format_time_label(state)),
+        gr.update(value="End Audit", variant="secondary"),
+        *[_default_radio_update(h, defaults[h]) for h in HEADS],
+        gr.update(value=""),
     )
+
+
+def _error_state(msg: str) -> tuple:
+    return (
+        gr.update(value=f"<p style='color:red;'>{msg}</p>"),
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(value=""),
+        gr.update(value=""),  # warning_msg
+        gr.update(value=""),
+        gr.update(value="Begin Audit", variant="primary"),
+        *[_default_radio_update(h) for h in HEADS],
+        gr.update(value=""),
+    )
+
+
+# ---------------------------------------------------------------------------
+# UI CSS
+# ---------------------------------------------------------------------------
+_CSS = """
+.turn-box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; background: #f8fafc; }
+.progress-bar { font-size: 1.1rem; font-weight: bold; color: #2d3748; }
+.annotate-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.info-box { background: #edf2f7; border-left: 4px solid #4299e1; padding: 12px; }
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -286,81 +615,124 @@ def go_back(annotator_name: str) -> tuple:
 # ---------------------------------------------------------------------------
 def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
     with gr.Blocks(title="NPC Social-State Human Audit") as demo:
-        gr.Markdown("# NPC Social-State Human Audit")
-        gr.Markdown(
-            "Evaluate whether synthetic social-state labels match human judgment. "
-            "You will see 150 stratified turns. Select the label that best describes each dimension."
-        )
+        gr.Markdown("<h1 style='text-align:center;'>NPC Social-State Human Audit</h1>")
 
+        # Info Accordion
+        with gr.Accordion("Click here for experiment instructions and info", open=True):
+            gr.Markdown(EXPERIMENT_INFO)
+
+        # Guidelines Accordion
+        with gr.Accordion("Annotation Guidelines", open=False):
+            gr.Markdown(GUIDELINES)
+
+        # Session state tracker
+        session_active = gr.State(False)
+
+        # Setup panel
         with gr.Row():
-            annotator_name = gr.Textbox(label="Annotator Name", placeholder="e.g. alice")
-            data_path_box = gr.Textbox(
-                label="Path to test_heads.jsonl",
-                value=data_path or "",
-                placeholder="/path/to/test_heads.jsonl",
+            with gr.Column(scale=3):
+                annotator_name = gr.Textbox(
+                    label="Annotator Name",
+                    placeholder="e.g. alice",
+                    info="Your unique identifier for this audit session.",
+                )
+                output_dir_box = gr.Textbox(
+                    value=output_dir,
+                    visible=False,
+                )
+            with gr.Column(scale=1):
+                toggle_btn = gr.Button("Begin Audit", variant="primary", size="lg")
+
+        # Time display
+        time_label = gr.Markdown("", elem_classes="progress-bar")
+
+        # Fallback upload (hidden by default)
+        with gr.Accordion("Advanced: upload a different .jsonl file", open=False):
+            uploaded_file = gr.File(
+                label="Upload .jsonl",
+                file_types=[".jsonl"],
+                type="filepath",
             )
-            output_dir_box = gr.Textbox(label="Output Directory", value=output_dir)
 
-        start_btn = gr.Button("Start / Load Session", variant="primary")
-
-        progress_label = gr.Textbox(label="Progress", value="Not started", interactive=False)
-
-        turn_display = gr.Markdown("### Waiting to start...")
-
-        # Teacher labels (read-only, for reference)
-        with gr.Accordion("Teacher labels (reference only -- do not peek before judging!)", open=False):
-            teacher_boxes = {}
-            for head in HEADS:
-                teacher_boxes[head] = gr.Textbox(label=head, interactive=False)
-
-        # User selections
-        user_choices = {}
-        with gr.Row():
-            with gr.Column():
-                for head in HEADS:
-                    user_choices[head] = gr.Radio(
-                        label=head,
-                        choices=HEADS[head],
-                        value=HEADS[head][0],
-                    )
-
-        notes_box = gr.Textbox(label="Notes (optional)", placeholder="Ambiguity, disagreements, etc.")
-
-        with gr.Row():
-            back_btn = gr.Button("Previous Turn")
-            submit_btn = gr.Button("Submit & Next Turn", variant="primary")
-
-        done_message = gr.Textbox(
+        # Status & progress
+        status_msg = gr.Markdown("", elem_classes="info-box")
+        done_msg = gr.Textbox(
             label="Status",
             value="",
             visible=False,
             interactive=False,
         )
 
-        # Event wiring
-        start_outputs = [
+        # Turn display
+        turn_display = gr.HTML("<p style='text-align:center;color:#718096;'>Enter your name and click <strong>Begin Audit</strong> to start.</p>")
+
+        # Progress
+        progress_label = gr.Markdown("", elem_classes="progress-bar")
+
+        # Warning / timer message
+        warning_msg = gr.Markdown("", elem_classes="info-box")
+
+        # User selections
+        user_choices = {}
+        gr.Markdown("### Select labels for each dimension")
+        with gr.Row():
+            for head in list(HEADS.keys())[:4]:
+                user_choices[head] = gr.Radio(
+                    label=head.replace("_", " ").title(),
+                    choices=HEADS[head],
+                    value=PLACEHOLDER,
+                )
+        with gr.Row():
+            for head in list(HEADS.keys())[4:]:
+                user_choices[head] = gr.Radio(
+                    label=head.replace("_", " ").title(),
+                    choices=HEADS[head],
+                    value=PLACEHOLDER,
+                )
+
+        notes_box = gr.Textbox(
+            label="Notes (optional)",
+            placeholder="Ambiguity, disagreements, anything unusual...",
+            lines=2,
+        )
+
+        with gr.Row():
+            back_btn = gr.Button("Previous Turn", variant="secondary")
+            submit_btn = gr.Button("Submit & Next Turn", variant="primary")
+
+        # Wire events
+        toggle_outputs = [
+            session_active,
             turn_display,
             submit_btn,
-            done_message,
-            *teacher_boxes.values(),
+            done_msg,
             progress_label,
+            warning_msg,
+            time_label,
+            toggle_btn,
+            *[user_choices[h] for h in HEADS],
+            notes_box,
         ]
-        start_btn.click(
-            fn=start_session,
-            inputs=[annotator_name, data_path_box, output_dir_box],
-            outputs=start_outputs,
+        toggle_btn.click(
+            fn=toggle_session,
+            inputs=[session_active, annotator_name, output_dir_box, uploaded_file],
+            outputs=toggle_outputs,
         )
 
         submit_outputs = [
             turn_display,
             submit_btn,
-            done_message,
-            *teacher_boxes.values(),
+            done_msg,
             progress_label,
+            warning_msg,
+            time_label,
+            toggle_btn,
+            *[user_choices[h] for h in HEADS],
+            notes_box,
         ]
-        submit_inputs = [annotator_name, notes_box, *user_choices.values()]
+        submit_inputs = [annotator_name, notes_box, *[user_choices[h] for h in HEADS]]
         submit_btn.click(
-            fn=submit_and_next,
+            fn=submit_handler,
             inputs=submit_inputs,
             outputs=submit_outputs,
         )
@@ -368,13 +740,16 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
         back_outputs = [
             turn_display,
             submit_btn,
-            done_message,
-            *teacher_boxes.values(),
+            done_msg,
             progress_label,
-            *user_choices.values(),
+            warning_msg,
+            time_label,
+            toggle_btn,
+            *[user_choices[h] for h in HEADS],
+            notes_box,
         ]
         back_btn.click(
-            fn=go_back,
+            fn=back_handler,
             inputs=[annotator_name],
             outputs=back_outputs,
         )
@@ -387,15 +762,26 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Human audit Gradio app")
-    parser.add_argument("--data", default=None, help="Path to test_heads.jsonl")
+    parser.add_argument("--data", default=None, help="Path to test_heads.jsonl (auto-loaded on Begin Audit)")
     parser.add_argument("--output", default="./audit_results", help="Directory to save annotations")
     parser.add_argument("--port", type=int, default=7860, help="Gradio server port")
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
     args = parser.parse_args()
 
+    global _DEFAULT_DATA_PATH
+    _DEFAULT_DATA_PATH = args.data
+
     demo = build_interface(args.data, args.output)
-    demo.launch(server_port=args.port, share=args.share)
+    try:
+        demo.launch(server_port=args.port, share=args.share, css=_CSS)
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+        sys.exit(0)
