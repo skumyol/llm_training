@@ -53,6 +53,15 @@ You will read a scene description, a short dialogue history, a player utterance,
 
 We do **not** collect any personally identifiable information beyond your Prolific ID. Your annotations will be used solely for research and may be released as part of a public dataset (anonymised).
 
+## Quality Checks
+Submissions are screened automatically for careless or random responding. We check:
+- Whether you spend adequate time reading each turn (rushed responses are rejected)
+- Whether your label patterns show long streaks of identical answers (suspicious)
+- Whether you use the optional Notes field to flag ambiguity (expected occasionally)
+- Agreement with teacher labels (near-chance performance is reviewed)
+
+**Careless or randomly completed submissions will be rejected and not paid.** Please read each turn carefully.
+
 ## Ethical Approval
 This study has been reviewed and approved by [INSERT YOUR INSTITUTION]'s Institutional Review Board / Ethics Committee (reference: [INSERT REF]). Participation is voluntary and you may withdraw at any time without penalty.
 
