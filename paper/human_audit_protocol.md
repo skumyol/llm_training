@@ -11,7 +11,7 @@ Validate the synthetic 29-dim social-state labels by measuring
 on a stratified sample of 150 test-set turns.
 
 ## Population
-- Source: `test_heads.jsonl` (884 turns, 80 episodes, 7 scenario types)
+- Source: `audit_input_clean.jsonl` (356 natural, non-counterfactual turns, 78 episodes, 7 scenario types)
 - Sample: 150 turns, stratified by scenario type (~21 per type)
 - Sampling method: take the first 21 episodes from each scenario type in the test
   split, then sample 1 random turn per episode. If an episode has fewer than
@@ -47,12 +47,13 @@ A minimal JSONL viewer or spreadsheet with these columns per row:
 - Optional: `notes` free-text field for ambiguous cases
 
 ## Procedure
-1. Export the 150 stratified turns into a CSV/JSONL.
-2. Annotator A labels all 150 turns independently.
-3. Annotator B labels all 150 turns independently.
-4. Resolve conflicts by discussion; note whether the conflict was due to
+1. Build the audit packet with `uv run build_human_audit_packet.py --input audit_input.jsonl --output audit_input_clean.jsonl`.
+2. Launch the app with `uv run launcher.py --data audit_input_clean.jsonl --output ./audit_results --port 8765`.
+3. Annotator A labels all 150 turns independently.
+4. Annotator B labels all 150 turns independently.
+5. Resolve conflicts by discussion; note whether the conflict was due to
    ambiguity in the schema, ambiguity in the text, or clear teacher-label error.
-5. Compute metrics (see below).
+6. Compute metrics (see below).
 
 ## Metrics to compute
 For each head:

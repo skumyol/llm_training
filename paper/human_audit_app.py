@@ -63,8 +63,8 @@ HEADS = {
     "secrecy_pressure":  [PLACEHOLDER, "low", "medium", "high"],
     "reveal_decision":   [PLACEHOLDER, "none", "hint", "partial", "full"],
     "response_policy":   [PLACEHOLDER, "answer", "withhold", "deflect", "clarify", "soothe",
-                          "challenge", "threaten", "negotiate", "redirect", "partial"],
-    "repair_strategy":   [PLACEHOLDER, "apologize", "redirect", "justify", "compensate", "silence"],
+                          "challenge", "threaten", "negotiate", "test", "partial"],
+    "repair_strategy":   [PLACEHOLDER, "none", "soften", "apologize", "clarify", "redirect"],
     "trust_level":       [PLACEHOLDER, "VL", "L", "N", "H", "VH"],
     "familiarity_level": [PLACEHOLDER, "VL", "L", "N", "H", "VH"],
 }
@@ -117,15 +117,15 @@ GUIDELINES = """### Annotation Guidelines
 - challenge: pushes back, questions player's motives
 - threaten: warns or implies consequences
 - negotiate: offers a trade or bargain
-- redirect: guides the player elsewhere
+- test: probes the player's motives before committing
 - partial: gives an incomplete or hedged answer
 
 **repair_strategy** — Strategy to repair social damage (if applicable)
+- none: no repair move is attempted
+- soften: reduces harshness or tension
 - apologize: expresses regret
+- clarify: corrects or explains a misunderstanding
 - redirect: shifts attention elsewhere
-- justify: explains why the action was necessary
-- compensate: offers something to make up for it
-- silence: says nothing, lets tension pass
 
 **trust_level** — NPC's current trust toward the player (ordinal)
 - VL: very low — deeply suspicious

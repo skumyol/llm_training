@@ -11,7 +11,7 @@
 Dual-mode launcher: serves production app at '/' and test-mode app at '/test'.
 
 Usage (local):
-    uv run launcher.py --data audit_input.jsonl --output ./audit_results --port 8765
+    uv run launcher.py --data audit_input_clean.jsonl --output ./audit_results --port 8765
 
 Then open:
     http://127.0.0.1:8765/      ← production (timer enforced, selections required)
