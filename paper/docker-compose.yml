@@ -28,7 +28,7 @@ services:
     ports:
       # Host port 8765 mapped to container port 8765.
       # Change 8765 if you need a different external port.
-      - "8765:8765"
+      - "8768:8765"
     volumes:
       # Mount your input data file (read-only)
       - ./audit_input.jsonl:/app/data/audit_input.jsonl:ro

@@ -55,8 +55,8 @@ def main():
     test_demo = build_interface(args.data, args.output, test_mode=True)
 
     app = FastAPI()
-    app = gr.mount_gradio_app(app, production_demo, path="/")
-    app = gr.mount_gradio_app(app, test_demo, path="/test")
+    app = gr.mount_gradio_app(app, test_demo, path="/test", root_path="/test")
+    app = gr.mount_gradio_app(app, production_demo, path="/", root_path="")
 
     print(f"Starting dual-mode server on http://{args.host}:{args.port}/")
     print(f"  Production: http://{args.host}:{args.port}/")
