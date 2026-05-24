@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 SAMPLE_SIZE = 150
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "google/gemma-4-31b-it:free"
+MODEL = "google/gemma-4-31b-it"
 
 PLACEHOLDER = "-- select --"
 

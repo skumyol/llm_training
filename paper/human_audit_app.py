@@ -36,7 +36,7 @@ import json
 import random
 import re
 import sys
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +47,11 @@ import gradio as gr
 # ---------------------------------------------------------------------------
 _DEFAULT_DATA_PATH: str | None = None  # set by CLI --data
 _TEST_MODE: bool = False               # set by CLI --test
+
+# Module-level caches to avoid repeated I/O and memory bloat
+_DATA_CACHE: dict[str, list[dict]] = {}          # path -> records
+_STRATIFIED_CACHE: dict[str, list[dict]] = {}    # path -> stratified turns
+_MAX_SESSIONS = 50                               # cap in-memory sessions
 
 PLACEHOLDER = "-- select --"
 
@@ -66,9 +71,14 @@ SAMPLE_SIZE = 150
 MIN_TIME_PER_TURN = 50  # seconds (overridden to 0 in --test mode)
 
 
-def _sanitize_name(name: str) -> str:
+def _effective_name(annotator_name: str | None, prolific_pid: str | None) -> str:
+    """Return the effective identifier: Prolific PID takes precedence over annotator name."""
+    return (prolific_pid or "").strip() or (annotator_name or "").strip()
+
+
+def _sanitize_name(name: str | None) -> str:
     """Sanitize annotator name for safe filesystem use. Keep A-Z, a-z, 0-9, _, -."""
-    cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", name.strip())
+    cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", (name or "").strip())
     cleaned = re.sub(r"_+", "_", cleaned)
     return cleaned.strip("_")[:64] or "annotator"
 
@@ -149,7 +159,7 @@ You will review 150 stratified dialogue turns from a fantasy-game dataset and la
 ~2.5 hours for 150 turns (roughly 1 minute per turn).
 
 ### Contact
-If you have questions about a specific label, use the **Notes** field or consult the **Annotation Guidelines** below.
+If you have questions about a specific label, use the skumyol@hotmail.com field or consult the **Annotation Guidelines** below.
 """
 
 
@@ -157,6 +167,9 @@ If you have questions about a specific label, use the **Notes** field or consult
 # Data loading & stratification
 # ---------------------------------------------------------------------------
 def load_data(path: Path) -> list[dict]:
+    key = str(path)
+    if key in _DATA_CACHE:
+        return _DATA_CACHE[key]
     records = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -164,6 +177,7 @@ def load_data(path: Path) -> list[dict]:
             if not line:
                 continue
             records.append(json.loads(line))
+    _DATA_CACHE[key] = records
     return records
 
 
@@ -171,9 +185,13 @@ def stratify_sample(records: list[dict], n: int = SAMPLE_SIZE, seed: int = 42) -
     """Draw a deterministic stratified sample so all annotators see the same turns.
 
     Uses a fixed random seed so that every call with the same `records` returns
-    the identical sample in the same order. This is required for human-human
-    agreement analysis.
+    the identical sample in the same order. Cached at module level to avoid
+    repeated computation and memory bloat.
     """
+    cache_key = f"{id(records)}_{n}_{seed}"
+    if cache_key in _STRATIFIED_CACHE:
+        return _STRATIFIED_CACHE[cache_key]
+
     by_scenario: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         scenario = r.get("scenario_type", "unknown")
@@ -194,6 +212,7 @@ def stratify_sample(records: list[dict], n: int = SAMPLE_SIZE, seed: int = 42) -
             sampled.extend(random.sample(pool, k))
 
     random.shuffle(sampled)
+    _STRATIFIED_CACHE[cache_key] = sampled
     return sampled
 
 
@@ -201,11 +220,12 @@ def stratify_sample(records: list[dict], n: int = SAMPLE_SIZE, seed: int = 42) -
 # State management
 # ---------------------------------------------------------------------------
 class AuditState:
-    def __init__(self, turns: list[dict], annotator: str, output_dir: Path, test_mode: bool | None = None):
+    def __init__(self, turns: list[dict], annotator: str, output_dir: Path, test_mode: bool | None = None, prolific_meta: dict | None = None):
         self.turns = turns
         self.annotator = annotator
         self.output_dir = output_dir
         self.test_mode = test_mode if test_mode is not None else _TEST_MODE
+        self.prolific_meta = prolific_meta or {}
         self.index = 0
         self.annotations: list[dict] = []
         self.start_time: datetime | None = None
@@ -322,6 +342,7 @@ class AuditState:
             "recorded_at": now.isoformat(),
             "turn_elapsed_seconds": turn_elapsed,
             "session_elapsed_seconds": session_elapsed,
+            **self.prolific_meta,
         }
         self.annotations = [a for a in self.annotations if a["turn_id"] != record["turn_id"]]
         self.annotations.append(record)
@@ -344,12 +365,75 @@ class AuditState:
         return self.index >= len(self.turns)
 
 
-_sessions: dict[str, AuditState] = {}
+_sessions: OrderedDict[str, AuditState] = OrderedDict()
 
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
+
+_SCENE_KEYS = {
+    "Setting": "Setting",
+    "NPC Role": "NPC Role",
+    "Goals": "Goals",
+    "Values": "Values",
+    "Secrets": "Secrets",
+    "Persona": "Persona",
+}
+
+
+def _format_scene(scene: str) -> str:
+    """Render structured scene metadata as a clean info card."""
+    if not scene:
+        return ""
+    lines = [line.strip() for line in scene.split("\n") if line.strip()]
+    rows = []
+    for line in lines:
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            rows.append(f'<div style="margin-bottom:4px;"><span style="color:#4a5568;font-weight:600;font-size:0.92em;text-transform:uppercase;letter-spacing:0.3px;">{key}</span><span style="color:#718096;margin:0 6px;">&middot;</span><span style="color:#2d3748;font-weight:500;">{val}</span></div>')
+        else:
+            rows.append(f'<div style="color:#2d3748;">{line}</div>')
+    return (
+        '<div style="background:#f7fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px;margin-bottom:14px;">'
+        f'{"".join(rows)}'
+        '</div>'
+    )
+
+
+def _format_history(history: str) -> str:
+    """Format dialogue history as a clean conversation transcript."""
+    if not history:
+        return ""
+    parts = ['<div style="margin-bottom:14px;"><div style="font-size:0.78em;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Dialogue History</div>']
+    for line in history.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("Player:"):
+            text = line[len("Player:"):].strip()
+            parts.append(
+                f'<div style="display:flex;margin-bottom:8px;align-items:flex-start;">'
+                f'<span style="flex-shrink:0;width:52px;font-weight:700;color:#2b6cb0;font-size:0.85em;padding-top:2px;">Player</span>'
+                f'<span style="background:#ebf4ff;border-left:3px solid #4299e1;padding:6px 10px;border-radius:0 8px 8px 0;color:#2b6cb0;line-height:1.45;">{text}</span>'
+                f'</div>'
+            )
+        elif line.startswith("NPC:"):
+            text = line[len("NPC:"):].strip()
+            parts.append(
+                f'<div style="display:flex;margin-bottom:8px;align-items:flex-start;">'
+                f'<span style="flex-shrink:0;width:52px;font-weight:700;color:#c53030;font-size:0.85em;padding-top:2px;">NPC</span>'
+                f'<span style="background:#fff5f5;border-left:3px solid #fc8181;padding:6px 10px;border-radius:0 8px 8px 0;color:#c53030;line-height:1.45;">{text}</span>'
+                f'</div>'
+            )
+        else:
+            parts.append(f'<div style="color:#718096;font-size:0.88em;padding:4px 0;line-height:1.4;">{line}</div>')
+    parts.append('</div>')
+    return "\n".join(parts)
+
+
 def _format_turn(turn: dict) -> str:
     scene = turn.get("scene", "")
     history = turn.get("dialogue_history", "")
@@ -360,15 +444,28 @@ def _format_turn(turn: dict) -> str:
     turn_num = turn.get("turn_number", "?")
 
     parts = [
-        f"<h3>Scenario: {scenario} &nbsp;|&nbsp; Episode: {episode} &nbsp;|&nbsp; Turn: {turn_num}</h3>",
-        "<hr>",
+        f'<div style="font-size:0.9em;color:#4a5568;margin-bottom:10px;font-weight:600;">'
+        f'<span style="background:#edf2f7;padding:3px 10px;border-radius:20px;">{scenario}</span>'
+        f'<span style="margin:0 10px;color:#a0aec0;">&middot;</span>'
+        f'Episode {episode} &middot; Turn {turn_num}'
+        f'</div>',
     ]
     if scene:
-        parts.append(f"<p><strong>Scene:</strong> {scene}</p>")
+        parts.append(_format_scene(scene))
     if history:
-        parts.append(f"<p><strong>History:</strong><br><span style='color:#555;'>{history.replace(chr(10), '<br>')}</span></p>")
-    parts.append(f"<p><strong style='color:#2b6cb0;'>Player:</strong> {player}</p>")
-    parts.append(f"<p><strong style='color:#c53030;'>NPC:</strong> {npc}</p>")
+        parts.append(_format_history(history))
+    parts.append(
+        '<div style="margin-bottom:10px;">'
+        f'<div style="display:flex;align-items:flex-start;margin-bottom:10px;">'
+        f'<span style="flex-shrink:0;width:60px;font-weight:800;color:#2b6cb0;font-size:0.9em;padding-top:4px;">Player</span>'
+        f'<span style="background:#ebf8ff;border:1px solid #90cdf4;padding:10px 14px;border-radius:8px;color:#2c5282;font-size:1.05em;line-height:1.5;flex:1;">{player}</span>'
+        f'</div>'
+        f'<div style="display:flex;align-items:flex-start;">'
+        f'<span style="flex-shrink:0;width:60px;font-weight:800;color:#c53030;font-size:0.9em;padding-top:4px;">NPC</span>'
+        f'<span style="background:#fff5f5;border:1px solid #fc8181;padding:10px 14px;border-radius:8px;color:#9b2c2c;font-size:1.05em;line-height:1.5;flex:1;">{npc}</span>'
+        f'</div>'
+        '</div>'
+    )
     return "\n".join(parts)
 
 
@@ -412,9 +509,9 @@ def _format_time_label(state: AuditState) -> str:
 # ---------------------------------------------------------------------------
 # Gradio handlers
 # ---------------------------------------------------------------------------
-def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | None, test_mode: bool = False) -> tuple:
+def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | None, test_mode: bool = False, data_path: str | None = None, prolific_meta: dict | None = None) -> tuple:
     """Called when user clicks Begin Audit. Loads data, stratifies, and shows first turn."""
-    if not annotator_name.strip():
+    if not (annotator_name or "").strip():
         return (
             gr.update(value="<p style='color:red;'>Please enter your annotator name.</p>"),
             gr.update(visible=False),
@@ -423,12 +520,15 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
             gr.update(value=""),
             gr.update(value=""),
             gr.update(value="Begin Audit", variant="primary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h) for h in HEADS],
             gr.update(value=""),
         )
 
     path = None
-    if _DEFAULT_DATA_PATH and Path(_DEFAULT_DATA_PATH).exists():
+    if data_path and Path(data_path).exists():
+        path = Path(data_path)
+    elif _DEFAULT_DATA_PATH and Path(_DEFAULT_DATA_PATH).exists():
         path = Path(_DEFAULT_DATA_PATH)
     elif uploaded_file is not None and hasattr(uploaded_file, 'name') and uploaded_file.name:
         path = Path(uploaded_file.name)
@@ -442,6 +542,7 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
             gr.update(value=""),
             gr.update(value=""),
             gr.update(value="Begin Audit", variant="primary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h) for h in HEADS],
             gr.update(value=""),
         )
@@ -456,6 +557,7 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
             gr.update(value=""),
             gr.update(value=""),
             gr.update(value="Begin Audit", variant="primary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h) for h in HEADS],
             gr.update(value=""),
         )
@@ -465,10 +567,15 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
     if name in _sessions:
         # Resume existing in-memory session (e.g. after browser refresh)
         state = _sessions[name]
+        _sessions.move_to_end(name)
         print(f"[Audit] Resumed in-memory session for {name} at turn {state.index + 1}")
     else:
+        # Evict oldest sessions if over limit
+        while len(_sessions) >= _MAX_SESSIONS:
+            old_name, old_state = _sessions.popitem(last=False)
+            print(f"[Audit] Evicted old session {old_name} to free memory")
         turns = stratify_sample(records)
-        state = AuditState(turns, name, Path(output_dir), test_mode=test_mode)
+        state = AuditState(turns, name, Path(output_dir), test_mode=test_mode, prolific_meta=prolific_meta)
         state.begin()
         state.start_turn()
         _sessions[name] = state
@@ -493,6 +600,7 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
             gr.update(value=""),
             gr.update(value=_format_time_label(state) if state.start_time else ""),
             gr.update(value="Begin Audit", variant="primary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h) for h in HEADS],
             gr.update(value=""),
         )
@@ -509,6 +617,7 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
         gr.update(value=""),  # warning_msg
         gr.update(value=_format_time_label(state)),
         gr.update(value="End Audit", variant="secondary"),
+        gr.update(value=""),  # welcome_banner cleared
         *[_default_radio_update(h, defaults[h]) for h in HEADS],
         gr.update(value=""),
     )
@@ -560,6 +669,7 @@ def end_session(annotator_name: str) -> tuple:
         gr.update(value=""),  # warning_msg
         gr.update(value=_format_time_label(state) if state.start_time else ""),
         gr.update(value="Begin Audit", variant="primary"),
+        gr.update(value=""),  # welcome_banner cleared
         *[_default_radio_update(h) for h in HEADS],
         gr.update(value=""),
     )
@@ -579,9 +689,10 @@ def _default_radio_update(head: str, value: str | None = None) -> gr.update:
     return gr.update(value=value if value else PLACEHOLDER)
 
 
-def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
+def submit_handler(annotator_name: str, prolific_pid_box_val: str, notes: str, *selections) -> tuple:
     """Submit current turn and advance."""
-    state = _sessions.get(_sanitize_name(annotator_name))
+    effective_name = _effective_name(annotator_name, prolific_pid_box_val)
+    state = _sessions.get(_sanitize_name(effective_name))
     if state is None:
         return _error_state("Session not found. Please begin again.")
 
@@ -597,6 +708,7 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
             gr.update(value="<p style='color:#c53030;font-weight:bold;'>Please select a label for all 8 heads before submitting.</p>"),
             gr.update(value=_format_time_label(state)),
             gr.update(value="End Audit", variant="secondary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h, selections[i]) for i, h in enumerate(HEADS)],
             gr.update(value=notes),
         )
@@ -614,6 +726,7 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
             gr.update(value=f"<p style='color:#c53030;font-weight:bold;'>Please wait {remaining} more seconds before submitting this turn.</p>"),
             gr.update(value=_format_time_label(state)),
             gr.update(value="End Audit", variant="secondary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h, selections[i]) for i, h in enumerate(HEADS)],
             gr.update(value=notes),
         )
@@ -645,6 +758,7 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
             gr.update(value=""),  # warning_msg cleared
             gr.update(value=_format_time_label(state) if state.start_time else ""),
             gr.update(value="Begin Audit", variant="primary"),
+            gr.update(value=""),  # welcome_banner cleared
             *[_default_radio_update(h) for h in HEADS],
             gr.update(value=""),
         )
@@ -665,14 +779,16 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
         gr.update(value=""),  # warning_msg cleared
         gr.update(value=_format_time_label(state)),
         gr.update(value="End Audit", variant="secondary"),
+        gr.update(value=""),  # welcome_banner cleared
         *[_default_radio_update(h, defaults[h]) for h in HEADS],
         gr.update(value=notes if prev else ""),
     )
 
 
-def back_handler(annotator_name: str) -> tuple:
+def back_handler(annotator_name: str, prolific_pid_box_val: str) -> tuple:
     """Go to previous turn."""
-    state = _sessions.get(_sanitize_name(annotator_name))
+    effective_name = _effective_name(annotator_name, prolific_pid_box_val)
+    state = _sessions.get(_sanitize_name(effective_name))
     if state is None or state.index <= 0:
         return _error_state("Cannot go back. You are at the first turn.")
 
@@ -693,6 +809,7 @@ def back_handler(annotator_name: str) -> tuple:
         gr.update(value=""),  # warning_msg cleared
         gr.update(value=_format_time_label(state)),
         gr.update(value="End Audit", variant="secondary"),
+        gr.update(value=""),  # welcome_banner cleared
         *[_default_radio_update(h, defaults[h]) for h in HEADS],
         gr.update(value=""),
     )
@@ -707,17 +824,14 @@ def _error_state(msg: str) -> tuple:
         gr.update(value=""),  # warning_msg
         gr.update(value=""),
         gr.update(value="Begin Audit", variant="primary"),
+        gr.update(value=""),  # welcome_banner cleared
         *[_default_radio_update(h) for h in HEADS],
         gr.update(value=""),
     )
 
 
-def _tick_timer(annotator_name: str) -> str:
-    """Live timer refresh handler called every second."""
-    state = _sessions.get(_sanitize_name(annotator_name))
-    if state is None:
-        return ""
-    return _format_time_label(state)
+# Timer removed — time_label is computed on-demand during user actions
+# to eliminate continuous SSE polling that causes memory/connection bloat.
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +851,8 @@ _CSS = """
 def build_interface(data_path: str | None, output_dir: str, test_mode: bool | None = None) -> gr.Blocks:
     """Build the Gradio interface. If test_mode is None, falls back to global _TEST_MODE."""
     is_test = test_mode if test_mode is not None else _TEST_MODE
-    with gr.Blocks(title="NPC Social-State Human Audit") as demo:
+    with gr.Blocks(title="NPC Social-State Human Audit", css=_CSS) as demo:
+        demo.queue(max_size=20)
         gr.Markdown("<h1 style='text-align:center;'>NPC Social-State Human Audit</h1>")
 
         if is_test:
@@ -758,42 +873,22 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
         # Session state tracker
         session_active = gr.State(False)
 
-        # Auto-fill Prolific ID from URL params
-        gr.HTML("""
-<script>
-(function() {
-    function fillName() {
-        const params = new URLSearchParams(window.location.search);
-        const pid = params.get('PROLIFIC_PID');
-        if (!pid) return;
-        // Find the annotator name textbox by traversing DOM
-        const labels = document.querySelectorAll('label');
-        for (const lbl of labels) {
-            if (lbl.textContent.includes('Annotator Name')) {
-                const wrap = lbl.closest('[data-testid="textbox"]') || lbl.parentElement;
-                const input = wrap.querySelector('input');
-                if (input) {
-                    input.value = pid;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    // Show welcome banner
-                    const banner = document.createElement('div');
-                    banner.style.cssText = 'background:#e6fffa;border:2px solid #38b2ac;border-radius:8px;padding:12px;text-align:center;margin-bottom:12px;';
-                    banner.innerHTML = '<strong>Welcome, Prolific participant ' + pid + '</strong><br><span style="font-size:0.9rem;color:#2c5282;">Click <strong>Begin Audit</strong> to start.</span>';
-                    const md = document.querySelector('h1');
-                    if (md) md.parentElement.insertBefore(banner, md.nextSibling);
-                }
-                break;
-            }
-        }
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', fillName);
-    } else {
-        setTimeout(fillName, 500);
-    }
-})();
-</script>
-        """)
+        # Hidden states for Prolific metadata
+        prolific_pid_state = gr.State("")
+        prolific_study_state = gr.State("")
+        prolific_session_state = gr.State("")
+
+        # Welcome banner (updated server-side on page load)
+        welcome_banner = gr.HTML("")
+
+        # Prolific participant ID (used as annotator name + saved to metadata)
+        prolific_pid_box = gr.Textbox(
+            label="Prolific Participant ID",
+            placeholder="Paste your Prolific ID here (e.g. 65abc123)",
+            info="From your Prolific invitation URL. Used for your audit filename.",
+            elem_id="prolific_pid_box",
+            value="",
+        )
 
         # Setup panel
         with gr.Row():
@@ -801,7 +896,7 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
                 annotator_name = gr.Textbox(
                     label="Annotator Name",
                     placeholder="e.g. alice",
-                    info="Your unique identifier for this audit session.",
+                    info="Your unique identifier for this audit session. Auto-filled from Prolific link.",
                     elem_id="annotator_name",
                 )
                 output_dir_box = gr.Textbox(
@@ -811,9 +906,53 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             with gr.Column(scale=1):
                 toggle_btn = gr.Button("Begin Audit", variant="primary", size="lg")
 
-        # Time display (refreshes every second via gr.Timer)
+        # Time display (computed on-demand during actions — no continuous timer)
         time_label = gr.Markdown("", elem_classes="progress-bar")
-        timer = gr.Timer(value=1, active=True)
+
+        # Auto-fill Prolific ID from URL query params via injected script in <head>
+        gr.HTML(
+            value="",
+            head="""
+<script>
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    var pid = params.get('PROLIFIC_PID');
+    if (!pid) return;
+    function setValue(el, val) {
+        var d = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value') ||
+                Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (d && d.set) { d.set.call(el, val); } else { el.value = val; }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    var attempts = 0;
+    var maxAttempts = 50;
+    var interval = setInterval(function() {
+        attempts++;
+        var inputs = document.querySelectorAll('textarea, input[type="text"]');
+        var prolificFilled = false;
+        var nameFilled = false;
+        for (var i = 0; i < inputs.length; i++) {
+            var ph = inputs[i].placeholder || '';
+            if (!prolificFilled && (ph.indexOf('Prolific') !== -1 || ph.indexOf('65abc') !== -1)) {
+                setValue(inputs[i], pid);
+                prolificFilled = true;
+            }
+            if (!nameFilled && ph.indexOf('alice') !== -1) {
+                setValue(inputs[i], pid);
+                nameFilled = true;
+            }
+        }
+        if (prolificFilled && nameFilled) {
+            clearInterval(interval);
+        }
+        if (attempts >= maxAttempts) {
+            clearInterval(interval);
+        }
+    }, 200);
+})();
+</script>
+            """,
+        )
 
         # Fallback upload (hidden in production — only for local dev)
         with gr.Accordion("Advanced: upload a different .jsonl file", open=False, visible=False):
@@ -870,12 +1009,23 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             submit_btn = gr.Button("Submit & Next Turn", variant="primary")
 
         # Local event handlers that capture the test_mode setting for this app instance
-        def _toggle_local(is_active, annotator_name, output_dir_box, uploaded_file):
+        def _toggle_local(is_active, annotator_name, output_dir_box, uploaded_file, pid_st, study_st, sess_st, prolific_pid_box_val):
+            effective_name = _effective_name(annotator_name, prolific_pid_box_val)
             if not is_active:
-                result = init_session(annotator_name, output_dir_box, uploaded_file, is_test)
+                pmeta = {}
+                if pid_st:
+                    pmeta["prolific_pid"] = pid_st
+                if study_st:
+                    pmeta["study_id"] = study_st
+                if sess_st:
+                    pmeta["session_id"] = sess_st
+                # Also capture the Prolific ID box value as prolific_pid if not already set
+                if (prolific_pid_box_val or "").strip() and not pmeta.get("prolific_pid"):
+                    pmeta["prolific_pid"] = (prolific_pid_box_val or "").strip()
+                result = init_session(effective_name, output_dir_box, uploaded_file, is_test, data_path, pmeta)
                 return (gr.update(value=True),) + result
             else:
-                result = end_session(annotator_name)
+                result = end_session(effective_name)
                 return (gr.update(value=False),) + result
 
         # Wire events
@@ -888,12 +1038,13 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             warning_msg,
             time_label,
             toggle_btn,
+            welcome_banner,
             *[user_choices[h] for h in HEADS],
             notes_box,
         ]
         toggle_btn.click(
             fn=_toggle_local,
-            inputs=[session_active, annotator_name, output_dir_box, uploaded_file],
+            inputs=[session_active, annotator_name, output_dir_box, uploaded_file, prolific_pid_state, prolific_study_state, prolific_session_state, prolific_pid_box],
             outputs=toggle_outputs,
         )
 
@@ -905,10 +1056,11 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             warning_msg,
             time_label,
             toggle_btn,
+            welcome_banner,
             *[user_choices[h] for h in HEADS],
             notes_box,
         ]
-        submit_inputs = [annotator_name, notes_box, *[user_choices[h] for h in HEADS]]
+        submit_inputs = [annotator_name, prolific_pid_box, notes_box, *[user_choices[h] for h in HEADS]]
         submit_btn.click(
             fn=submit_handler,
             inputs=submit_inputs,
@@ -923,20 +1075,14 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             warning_msg,
             time_label,
             toggle_btn,
+            welcome_banner,
             *[user_choices[h] for h in HEADS],
             notes_box,
         ]
         back_btn.click(
             fn=back_handler,
-            inputs=[annotator_name],
+            inputs=[annotator_name, prolific_pid_box],
             outputs=back_outputs,
-        )
-
-        # Live timer: refreshes time_label every second
-        timer.tick(
-            fn=_tick_timer,
-            inputs=[annotator_name],
-            outputs=[time_label],
         )
 
     return demo
