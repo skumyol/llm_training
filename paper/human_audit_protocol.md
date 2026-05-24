@@ -7,8 +7,8 @@ Appendix~\ref{app:human_audit} of `main.tex` with real results before submission
 
 ## Goal
 Validate the synthetic 29-dim social-state labels by measuring
-(1) Human--Teacher agreement and (2) Human--Human inter-annotator agreement
-on a stratified sample of 150 test-set turns.
+(1) Human--Teacher agreement, (2) Human--Human inter-annotator agreement,
+and (3) AI-validator agreement on a stratified sample of 150 test-set turns.
 
 ## Population
 - Source: `audit_input_clean.jsonl` (356 natural, non-counterfactual turns, 78 episodes, 7 scenario types)
@@ -22,6 +22,9 @@ on a stratified sample of 150 test-set turns.
 - Each annotator works independently; no model predictions shown during judgement.
 - Briefing: read the schema description (Table~\ref{tab:schema}) and the
   class definitions in `configs/schema.yaml` before starting.
+- Optional third validator: run `ai_audit.py` on the same cleaned packet to
+  produce `audit_ai_validator.jsonl`. Treat this as a model-based validator,
+  not as a replacement for human--human agreement.
 
 ## Heads to validate (8 heads only)
 Do not annotate all 29. Focus on the most actionable / subjective subset:
@@ -51,9 +54,11 @@ A minimal JSONL viewer or spreadsheet with these columns per row:
 2. Launch the app with `uv run launcher.py --data audit_input_clean.jsonl --output ./audit_results --port 8765`.
 3. Annotator A labels all 150 turns independently.
 4. Annotator B labels all 150 turns independently.
-5. Resolve conflicts by discussion; note whether the conflict was due to
+5. Run the AI validator with `uv run ai_audit.py --data audit_input_clean.jsonl --output ./audit_results --resume`.
+6. Resolve conflicts by discussion; note whether the conflict was due to
    ambiguity in the schema, ambiguity in the text, or clear teacher-label error.
-6. Compute metrics (see below).
+7. Compute metrics with:
+   `uv run generate_audit_results.py --human-a ./audit_results/audit_ANNOTATOR_A.jsonl --human-b ./audit_results/audit_ANNOTATOR_B.jsonl --ai ./audit_results/audit_ai_validator.jsonl --teacher ./audit_input_clean.jsonl --output ./audit_results/audit_agreement_final.json --latex-output ./audit_results/audit_table_rows.tex`.
 
 ## Metrics to compute
 For each head:
