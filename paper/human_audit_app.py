@@ -201,10 +201,11 @@ def stratify_sample(records: list[dict], n: int = SAMPLE_SIZE, seed: int = 42) -
 # State management
 # ---------------------------------------------------------------------------
 class AuditState:
-    def __init__(self, turns: list[dict], annotator: str, output_dir: Path):
+    def __init__(self, turns: list[dict], annotator: str, output_dir: Path, test_mode: bool | None = None):
         self.turns = turns
         self.annotator = annotator
         self.output_dir = output_dir
+        self.test_mode = test_mode if test_mode is not None else _TEST_MODE
         self.index = 0
         self.annotations: list[dict] = []
         self.start_time: datetime | None = None
@@ -244,8 +245,12 @@ class AuditState:
     def start_turn(self):
         self.turn_start_time = datetime.now()
 
+    def _effective_min_time(self) -> int:
+        """Return 0 in test mode, otherwise MIN_TIME_PER_TURN."""
+        return 0 if self.test_mode else MIN_TIME_PER_TURN
+
     def time_remaining(self) -> int:
-        min_time = _effective_min_time()
+        min_time = self._effective_min_time()
         if self.turn_start_time is None:
             return min_time
         elapsed = (datetime.now() - self.turn_start_time).total_seconds()
@@ -254,7 +259,7 @@ class AuditState:
     def can_submit(self) -> bool:
         if self.turn_start_time is None:
             return False
-        return (datetime.now() - self.turn_start_time).total_seconds() >= _effective_min_time()
+        return (datetime.now() - self.turn_start_time).total_seconds() >= self._effective_min_time()
 
     def elapsed_this_turn(self) -> int:
         if self.turn_start_time is None:
@@ -376,20 +381,16 @@ def _make_default_selections() -> dict[str, str]:
     return {h: PLACEHOLDER for h in HEADS}
 
 
-def _all_selected(selections: list[str]) -> bool:
-    if _TEST_MODE:
+def _all_selected(selections: list[str], test_mode: bool | None = None) -> bool:
+    is_test = test_mode if test_mode is not None else _TEST_MODE
+    if is_test:
         return True
     return all(sel != PLACEHOLDER for sel in selections)
 
 
-def _effective_min_time() -> int:
-    """Return 0 in test mode, otherwise MIN_TIME_PER_TURN."""
-    return 0 if _TEST_MODE else MIN_TIME_PER_TURN
-
-
 def _completion_code(annotator: str) -> str:
-    """Generate a deterministic 8-char completion code from the annotator name."""
-    return hashlib.sha256(annotator.encode()).hexdigest()[:8].upper()
+    """Return the fixed Prolific completion code."""
+    return "C1E0GRFO"
 
 
 def _format_time_label(state: AuditState) -> str:
@@ -411,7 +412,7 @@ def _format_time_label(state: AuditState) -> str:
 # ---------------------------------------------------------------------------
 # Gradio handlers
 # ---------------------------------------------------------------------------
-def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | None) -> tuple:
+def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | None, test_mode: bool = False) -> tuple:
     """Called when user clicks Begin Audit. Loads data, stratifies, and shows first turn."""
     if not annotator_name.strip():
         return (
@@ -461,25 +462,16 @@ def init_session(annotator_name: str, output_dir: str, uploaded_file: gr.File | 
 
     name = _sanitize_name(annotator_name)
 
-    # Block duplicate active sessions (same sanitized name already in memory)
     if name in _sessions:
-        return (
-            gr.update(value=f"<p style='color:red;'>Session already active for <strong>{name}</strong>. Use a different name or wait.</p>"),
-            gr.update(visible=False),
-            gr.update(visible=True),
-            gr.update(value=""),
-            gr.update(value=""),
-            gr.update(value=""),
-            gr.update(value="Begin Audit", variant="primary"),
-            *[_default_radio_update(h) for h in HEADS],
-            gr.update(value=""),
-        )
-
-    turns = stratify_sample(records)
-    state = AuditState(turns, name, Path(output_dir))
-    state.begin()
-    state.start_turn()
-    _sessions[name] = state
+        # Resume existing in-memory session (e.g. after browser refresh)
+        state = _sessions[name]
+        print(f"[Audit] Resumed in-memory session for {name} at turn {state.index + 1}")
+    else:
+        turns = stratify_sample(records)
+        state = AuditState(turns, name, Path(output_dir), test_mode=test_mode)
+        state.begin()
+        state.start_turn()
+        _sessions[name] = state
 
     turn = state.current_turn
 
@@ -593,8 +585,8 @@ def submit_handler(annotator_name: str, notes: str, *selections) -> tuple:
     if state is None:
         return _error_state("Session not found. Please begin again.")
 
-    # Check all heads are actively selected
-    if not _all_selected(selections):
+    # Check all heads are actively selected (bypassed in test mode)
+    if not _all_selected(selections, state.test_mode):
         turn = state.current_turn
         turn_html = _format_turn(turn)
         return (
@@ -742,11 +734,13 @@ _CSS = """
 # ---------------------------------------------------------------------------
 # Build interface
 # ---------------------------------------------------------------------------
-def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
+def build_interface(data_path: str | None, output_dir: str, test_mode: bool | None = None) -> gr.Blocks:
+    """Build the Gradio interface. If test_mode is None, falls back to global _TEST_MODE."""
+    is_test = test_mode if test_mode is not None else _TEST_MODE
     with gr.Blocks(title="NPC Social-State Human Audit") as demo:
         gr.Markdown("<h1 style='text-align:center;'>NPC Social-State Human Audit</h1>")
 
-        if _TEST_MODE:
+        if is_test:
             gr.Markdown(
                 "<div style='background:#f6e05e;border:2px solid #d69e2e;border-radius:8px;padding:12px;text-align:center;font-weight:bold;color:#744210;'>"
                 "TEST MODE — Timer disabled, selections optional, for internal UX testing only"
@@ -764,6 +758,43 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
         # Session state tracker
         session_active = gr.State(False)
 
+        # Auto-fill Prolific ID from URL params
+        gr.HTML("""
+<script>
+(function() {
+    function fillName() {
+        const params = new URLSearchParams(window.location.search);
+        const pid = params.get('PROLIFIC_PID');
+        if (!pid) return;
+        // Find the annotator name textbox by traversing DOM
+        const labels = document.querySelectorAll('label');
+        for (const lbl of labels) {
+            if (lbl.textContent.includes('Annotator Name')) {
+                const wrap = lbl.closest('[data-testid="textbox"]') || lbl.parentElement;
+                const input = wrap.querySelector('input');
+                if (input) {
+                    input.value = pid;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    // Show welcome banner
+                    const banner = document.createElement('div');
+                    banner.style.cssText = 'background:#e6fffa;border:2px solid #38b2ac;border-radius:8px;padding:12px;text-align:center;margin-bottom:12px;';
+                    banner.innerHTML = '<strong>Welcome, Prolific participant ' + pid + '</strong><br><span style="font-size:0.9rem;color:#2c5282;">Click <strong>Begin Audit</strong> to start.</span>';
+                    const md = document.querySelector('h1');
+                    if (md) md.parentElement.insertBefore(banner, md.nextSibling);
+                }
+                break;
+            }
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fillName);
+    } else {
+        setTimeout(fillName, 500);
+    }
+})();
+</script>
+        """)
+
         # Setup panel
         with gr.Row():
             with gr.Column(scale=3):
@@ -771,6 +802,7 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
                     label="Annotator Name",
                     placeholder="e.g. alice",
                     info="Your unique identifier for this audit session.",
+                    elem_id="annotator_name",
                 )
                 output_dir_box = gr.Textbox(
                     value=output_dir,
@@ -837,6 +869,15 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
             back_btn = gr.Button("Previous Turn", variant="secondary")
             submit_btn = gr.Button("Submit & Next Turn", variant="primary")
 
+        # Local event handlers that capture the test_mode setting for this app instance
+        def _toggle_local(is_active, annotator_name, output_dir_box, uploaded_file):
+            if not is_active:
+                result = init_session(annotator_name, output_dir_box, uploaded_file, is_test)
+                return (gr.update(value=True),) + result
+            else:
+                result = end_session(annotator_name)
+                return (gr.update(value=False),) + result
+
         # Wire events
         toggle_outputs = [
             session_active,
@@ -851,7 +892,7 @@ def build_interface(data_path: str | None, output_dir: str) -> gr.Blocks:
             notes_box,
         ]
         toggle_btn.click(
-            fn=toggle_session,
+            fn=_toggle_local,
             inputs=[session_active, annotator_name, output_dir_box, uploaded_file],
             outputs=toggle_outputs,
         )
@@ -923,7 +964,7 @@ def main():
     if _TEST_MODE:
         print("[TEST MODE] Timer disabled. Selections optional. For internal UX testing only.")
 
-    demo = build_interface(args.data, args.output)
+    demo = build_interface(args.data, args.output, test_mode=_TEST_MODE)
     try:
         demo.launch(
             server_name=args.host,

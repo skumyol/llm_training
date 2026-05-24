@@ -15,14 +15,22 @@ You will read a scene description, a short dialogue history, a player utterance,
 **No special knowledge is required.** Native or fluent English is sufficient.
 
 ## What You'll Do
-1. Open a web-based annotation interface (Gradio app).
-2. Enter your Prolific ID as your annotator name.
-3. Read each dialogue turn carefully.
-4. Select one label for each of 8 heads from dropdown menus.
-5. Click **Submit & Next** after each turn.
-6. Continue until all 150 turns are complete.
+1. Click the study link below. Your Prolific ID will be pre-filled automatically.
+2. Read each dialogue turn carefully.
+3. Select one label for each of 8 heads from dropdown menus.
+4. Click **Submit & Next** after each turn.
+5. Continue until all 150 turns are complete.
 
 **You can take breaks.** Your progress auto-saves. Use the **Previous Turn** button if you want to revise an earlier answer. The interface includes detailed guidelines with definitions and examples.
+
+## Study Link (redirect URL)
+Set this as your Prolific study URL:
+
+```
+https://audit.skumyol.com/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+```
+
+The app will read your Prolific ID automatically from the URL and use it as your annotator name. You do **not** need to type it manually.
 
 ## Time & Compensation
 - **Estimated time:** 2.5 hours (150 turns x ~1 minute each)
@@ -72,6 +80,8 @@ For questions about the study, contact [INSERT EMAIL].
 ---
 
 ## Completion Code
-After finishing all 150 turns, the interface will display an **completion message**. Enter the completion code shown on screen into Prolific to receive payment.
+After finishing all 150 turns, the interface will display the completion code. Enter it into Prolific to receive payment.
 
-**The completion code is generated from your Prolific ID.** Do not share it with others.
+**Completion code: C1E0GRFO**
+
+Copy this code once you finish. Do not share it with others.

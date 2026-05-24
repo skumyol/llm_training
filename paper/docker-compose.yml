@@ -3,9 +3,10 @@
 # Quick start:
 #   1. Place your audit_input.jsonl in the same directory as this file.
 #   2. Run: docker compose up -d
-#   3. Access the app at http://YOUR_VPS_IP:8765
+#   3. Access the app at http://YOUR_VPS_IP:8765/
+#   4. Test mode is at http://YOUR_VPS_IP:8765/test
 #
-# To change the host port, edit the "8765:7860" mapping below.
+# To change the host port, edit the "8765:8765" mapping below.
 #
 # Logs:
 #   docker compose logs -f
@@ -25,22 +26,19 @@ services:
     container_name: human-audit
     restart: unless-stopped
     ports:
-      # Host port 8765 mapped to container port 7860.
+      # Host port 8765 mapped to container port 8765.
       # Change 8765 if you need a different external port.
-      - "8767:7860"
+      - "8765:8765"
     volumes:
       # Mount your input data file (read-only)
       - ./audit_input.jsonl:/app/data/audit_input.jsonl:ro
       # Mount a directory for persistent annotation output
       - ./audit_results:/app/audit_results
-    environment:
-      # Optional: override the Gradio server name inside the container
-      - GRADIO_SERVER_NAME=0.0.0.0
     command:
       - --host
       - 0.0.0.0
       - --port
-      - "7860"
+      - "8765"
       - --data
       - /app/data/audit_input.jsonl
       - --output

@@ -583,9 +583,10 @@ def test_audit_state_resume_all_done(sample_records, temp_output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Duplicate session test
+# Duplicate / resume session test
 # ---------------------------------------------------------------------------
-def test_init_session_blocks_duplicate(temp_jsonl, temp_output_dir):
+def test_init_session_resumes_duplicate(temp_jsonl, temp_output_dir):
+    """Refreshing with the same name should resume the existing session."""
     import human_audit_app as app_mod
     app_mod._sessions.clear()
     app_mod._DEFAULT_DATA_PATH = str(temp_jsonl)
@@ -593,9 +594,14 @@ def test_init_session_blocks_duplicate(temp_jsonl, temp_output_dir):
     init_session("dave", str(temp_output_dir), None)
     assert _sanitize_name("dave") in app_mod._sessions
 
-    # Try to start again with same name
+    # Advance one turn
+    state = app_mod._sessions[_sanitize_name("dave")]
+    state.index = 1
+
+    # Re-enter same name — should resume at turn 2, not block
     result = init_session("dave", str(temp_output_dir), None)
-    assert "already active" in result[0]["value"].lower()
+    assert "Scenario:" in result[0]["value"]  # turn display HTML
+    assert "Turn 2 /" in result[3]["value"]     # progress label
 
 
 # ---------------------------------------------------------------------------
@@ -624,11 +630,11 @@ def test_tick_timer_active_session(sample_records, temp_output_dir):
 # ---------------------------------------------------------------------------
 # Completion code tests
 # ---------------------------------------------------------------------------
-def test_completion_code_deterministic():
+def test_completion_code_fixed():
     from human_audit_app import _completion_code
-    assert _completion_code("alice") == _completion_code("alice")
-    assert _completion_code("alice") != _completion_code("bob")
-    assert len(_completion_code("alice")) == 8
+    assert _completion_code("alice") == "C1E0GRFO"
+    assert _completion_code("bob") == "C1E0GRFO"
+    assert _completion_code("") == "C1E0GRFO"
 
 
 # ---------------------------------------------------------------------------
