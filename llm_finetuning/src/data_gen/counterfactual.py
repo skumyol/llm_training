@@ -31,9 +31,14 @@ class CounterfactualAugmenter:
     def augment(self, episode: list[dict], arc: dict) -> list[list[dict]]:
         dims = self.rng.sample(COUNTERFACTUAL_DIMS, min(self.n_variants, len(COUNTERFACTUAL_DIMS)))
         variants = []
+        seen = set()
         for dim_spec in dims:
             variant = self._apply_flip(episode, arc, dim_spec)
             if variant:
+                fingerprint = self._episode_fingerprint(variant)
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
                 variants.append(variant)
         return variants
 
@@ -63,8 +68,11 @@ class CounterfactualAugmenter:
             return None
 
         new_episode = []
+        history: list[dict] = []
+        current_R_t = self._initial_R_t(episode[0])
         for turn in episode:
             new_turn = copy.deepcopy(turn)
+            new_turn["dialogue_history"] = copy.deepcopy(history)
             
             # Per-turn flip: only flip if this turn's value matches a source
             current_val = self._get_val(turn, group, var)
@@ -99,8 +107,8 @@ class CounterfactualAugmenter:
                     arc=arc,
                     arc_phase=turn["arc_phase"],
                     required_shifts=[],
-                    prior_R_t=new_turn["R_t"],
-                    history=turn["dialogue_history"],
+                    prior_R_t=current_R_t,
+                    history=new_turn["dialogue_history"],
                 )
 
                 response = self.labeler.generate_response(
@@ -112,7 +120,8 @@ class CounterfactualAugmenter:
                     N_t=N_t,
                     D_t=D_t,
                     npc_profile=npc_profile,
-                    history=turn["dialogue_history"],
+                    history=new_turn["dialogue_history"],
+                    scenario={"scenario_type": turn["scenario_type"], "setting": turn["setting"], "stakes": turn["stakes"]},
                 )
 
                 new_turn["R_t"] = R_t
@@ -136,8 +145,31 @@ class CounterfactualAugmenter:
                 new_turn["flip_from"] = current_val
 
             new_episode.append(new_turn)
+            history.append({
+                "turn_idx": new_turn["turn_idx"],
+                "player_utterance": new_turn["input"],
+                "response": new_turn.get("response", ""),
+            })
+            current_R_t = copy.deepcopy(new_turn.get("R_t", current_R_t))
 
         return new_episode
+
+    @staticmethod
+    def _episode_fingerprint(episode: list[dict]) -> str:
+        comparable = []
+        for turn in episode:
+            comparable.append({
+                "turn_idx": turn.get("turn_idx"),
+                "input": turn.get("input"),
+                "response": turn.get("response"),
+                "C_t": turn.get("C_t"),
+                "A_t": turn.get("A_t"),
+                "M_t": turn.get("M_t"),
+                "R_t": turn.get("R_t"),
+                "N_t": turn.get("N_t"),
+                "D_t": turn.get("D_t"),
+            })
+        return repr(comparable)
 
     @staticmethod
     def _get_val(turn: dict, group: str, var: str) -> Optional[str]:
@@ -147,3 +179,11 @@ class CounterfactualAugmenter:
     def _set_val(turn: dict, group: str, var: str, value: str) -> None:
         if group in turn and isinstance(turn[group], dict):
             turn[group][var] = value
+
+    @staticmethod
+    def _initial_R_t(turn: dict) -> dict:
+        initial = turn.get("W", {}).get("initial_stance", {})
+        return {
+            dim: {"level": initial.get(dim, "N"), "delta": "0"}
+            for dim in ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
+        }

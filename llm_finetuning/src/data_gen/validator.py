@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from src.data_gen.labeler import normalize_labels, _normalize_stance_entry, STANCE_DIMS as _NORM_STANCE_DIMS
@@ -66,7 +67,7 @@ class Validator:
         errors.extend(self._check_R_t(record.get("R_t", {}), prior_R_t))
         errors.extend(self._check_N_t(record.get("N_t", {})))
         errors.extend(self._check_D_t(record.get("D_t", {}), record.get("N_t", {}), arc))
-        errors.extend(self._check_response(record.get("response", "")))
+        errors.extend(self._check_response(record.get("response", ""), record.get("input", "")))
         errors.extend(self._check_secret_leakage(record))
 
         return len(errors) == 0, errors
@@ -180,17 +181,25 @@ class Validator:
 
         return errors
 
-    def _check_response(self, response: str) -> list[str]:
+    def _check_response(self, response: str, player_utterance: str = "") -> list[str]:
         errors = []
         if not response or not response.strip():
             errors.append("response is empty")
             return errors
+        if player_utterance and self._normalize_text(response) == self._normalize_text(player_utterance):
+            errors.append("response exactly echoes player_utterance")
         token_count = len(response.split())
         if token_count < self.min_response_tokens:
             errors.append(f"response too short: {token_count} tokens")
         if token_count > self.max_response_tokens:
             errors.append(f"response too long: {token_count} tokens")
         return errors
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        text = text.strip().lower()
+        text = re.sub(r"\s+", " ", text)
+        return text.strip("\"' ")
 
     def _check_secret_leakage(self, record: dict) -> list[str]:
         """Check for secret leakage using both secret_id and semantic keywords.

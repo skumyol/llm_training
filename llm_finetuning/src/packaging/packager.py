@@ -104,6 +104,7 @@ def _to_head_record(record: dict) -> dict:
     labels["repair_strategy"] = D_t.get("repair_strategy", "")
 
     return {
+        "record_id": record.get("record_id", ""),
         "episode_id": record.get("episode_id", ""),
         "turn_idx": record.get("turn_idx", 0),
         "scenario_type": record.get("scenario_type", ""),
@@ -128,6 +129,7 @@ def _to_sft_record(record: dict) -> dict:
     secret_strings = [s for s in secret_strings if s and not (s in seen or seen.add(s))]
 
     return {
+        "record_id": record.get("record_id", ""),
         "episode_id": record.get("episode_id", ""),
         "turn_idx": record.get("turn_idx", 0),
         "scenario_type": record.get("scenario_type", ""),
@@ -153,8 +155,10 @@ class Packager:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def build_all(self) -> dict:
-        records = self._load_validated_turns()
+        records, duplicate_count = self._load_validated_turns()
         print(f"Loaded {len(records)} validated turn records.")
+        if duplicate_count:
+            print(f"Skipped {duplicate_count} exact duplicate turn records.")
 
         trace_path = self.output_dir / "full_trace.jsonl"
         heads_path = self.output_dir / "head_supervision.jsonl"
@@ -173,6 +177,7 @@ class Packager:
             "n_episodes": len({r["episode_id"] for r in records}),
             "scenario_type_counts": self._count_scenario_types(records),
             "counterfactual_count": sum(1 for r in records if r.get("counterfactual")),
+            "duplicate_records_skipped": duplicate_count,
             "trace_hash": _file_hash(trace_path),
             "heads_hash": _file_hash(heads_path),
             "sft_hash": _file_hash(sft_path),
@@ -188,15 +193,28 @@ class Packager:
         print(f"Packaged artifacts to {self.output_dir}")
         return manifest
 
-    def _load_validated_turns(self) -> list[dict]:
+    def _load_validated_turns(self) -> tuple[list[dict], int]:
         records = []
+        seen = set()
+        duplicate_count = 0
         for jsonl_file in sorted(self.validated_turns_dir.glob("*.jsonl")):
+            source_id = jsonl_file.stem
             with open(jsonl_file, "r") as f:
-                for line in f:
+                for line_idx, line in enumerate(f, 1):
                     line = line.strip()
                     if line:
-                        records.append(json.loads(line))
-        return records
+                        record = json.loads(line)
+                        fingerprint = json.dumps(record, sort_keys=True)
+                        if fingerprint in seen:
+                            duplicate_count += 1
+                            continue
+                        seen.add(fingerprint)
+                        record.setdefault(
+                            "record_id",
+                            f"{record.get('episode_id', '')}:{record.get('turn_idx', 0)}:{source_id}:{line_idx}",
+                        )
+                        records.append(record)
+        return records, duplicate_count
 
     @staticmethod
     def _count_scenario_types(records: list[dict]) -> dict:

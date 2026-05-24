@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import json
+import sys
 import re
 from pathlib import Path
 
@@ -69,24 +70,29 @@ def main():
     heads_records = load_jsonl(args.heads)
     sft_records = load_jsonl(args.sft)
 
-    # Build lookup from (episode_id, turn_idx) -> NPC response
-    response_lookup: dict[tuple[str, int], str] = {}
-    for rec in sft_records:
-        key = (rec["episode_id"], rec["turn_idx"])
-        response_lookup[key] = rec["target"]
+    if len(heads_records) != len(sft_records):
+        raise ValueError(
+            f"heads/sft length mismatch: {len(heads_records)} heads vs {len(sft_records)} sft"
+        )
 
     output_records = []
-    for rec in heads_records:
+    seen_records: set[str] = set()
+    duplicate_count = 0
+    for rec, sft_rec in zip(heads_records, sft_records):
         key = (rec["episode_id"], rec["turn_idx"])
-        npc_response = response_lookup.get(key, "")
+        sft_key = (sft_rec["episode_id"], sft_rec["turn_idx"])
+        if key != sft_key:
+            raise ValueError(f"heads/sft alignment mismatch: heads={key} sft={sft_key}")
+
+        npc_response = sft_rec.get("target", "")
         if not npc_response:
-            print(f"Warning: no NPC response found for {key}", file=argparse.sys.stderr)
+            print(f"Warning: empty NPC response for {key}", file=sys.stderr)
 
         parsed = parse_context(rec["context"])
 
         out_rec = {
             "episode_id": rec["episode_id"],
-            "turn_id": f"{rec['episode_id']}_{rec['turn_idx']}",
+            "turn_id": rec.get("record_id", f"{rec['episode_id']}_{rec['turn_idx']}_{len(output_records)}"),
             "turn_number": rec["turn_idx"],
             "scenario_type": rec["scenario_type"],
             "scene": parsed["scene"],
@@ -96,6 +102,13 @@ def main():
             "labels": rec["labels"],
             "counterfactual": rec.get("counterfactual", False),
         }
+        fingerprint_rec = dict(out_rec)
+        fingerprint_rec.pop("turn_id", None)
+        fingerprint = json.dumps(fingerprint_rec, sort_keys=True, ensure_ascii=False)
+        if fingerprint in seen_records:
+            duplicate_count += 1
+            continue
+        seen_records.add(fingerprint)
         output_records.append(out_rec)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +117,8 @@ def main():
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     print(f"Wrote {len(output_records)} records to {args.output}")
+    if duplicate_count:
+        print(f"Skipped {duplicate_count} exact duplicate records", file=sys.stderr)
 
 
 if __name__ == "__main__":
