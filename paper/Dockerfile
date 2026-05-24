@@ -18,7 +18,7 @@ WORKDIR /app
 
 # Install dependencies
 RUN pip install --no-cache-dir \
-    gradio>=5.0 \
+    "gradio>=5.0,<6.0" \
     scikit-learn>=1.3 \
     fastapi>=0.100 \
     uvicorn>=0.23
