@@ -68,7 +68,7 @@ HEADS = {
 }
 
 SAMPLE_SIZE = 150
-MIN_TIME_PER_TURN = 50  # seconds (overridden to 0 in --test mode)
+MIN_TIME_PER_TURN = 40  # seconds (overridden to 0 in --test mode)
 
 
 def _effective_name(annotator_name: str | None, prolific_pid: str | None) -> str:
@@ -491,16 +491,37 @@ def _completion_code(annotator: str) -> str:
 
 
 def _format_time_label(state: AuditState) -> str:
-    """Return a markdown string showing turn elapsed time and total session time."""
+    """Return HTML showing live turn countdown and total session time.
+
+    Embeds data-turn-start (ISO) and data-min-time (seconds) so a client-side
+    JavaScript can drive a live countdown without SSE polling.
+    """
+    min_time = state._effective_min_time()
     turn_elapsed = state.elapsed_this_turn()
-    turn_min = turn_elapsed // 60
-    turn_sec = turn_elapsed % 60
+    remaining = state.time_remaining()
     total = state.total_elapsed()
     total_min = total // 60
     total_sec = total % 60
+
+    if min_time == 0 or state.turn_start_time is None:
+        # No live countdown needed (test mode or no active turn)
+        turn_min = turn_elapsed // 60
+        turn_sec = turn_elapsed % 60
+        return (
+            f"<span style='font-family:monospace;'>"
+            f"Turn time: {turn_min:02d}m {turn_sec:02d}s | "
+            f"Session time: {total_min:02d}m {total_sec:02d}s"
+            f"</span>"
+        )
+
+    turn_start_iso = state.turn_start_time.isoformat()
+    session_start_iso = state.start_time.isoformat() if state.start_time else ""
     return (
-        f"<span style='font-family:monospace;'>"
-        f"Turn time: {turn_min:02d}m {turn_sec:02d}s / {MIN_TIME_PER_TURN}s min | "
+        f"<span id='live-timer' style='font-family:monospace;' "
+        f"data-turn-start='{turn_start_iso}' data-min-time='{min_time}' "
+        f"data-session-start='{session_start_iso}'>"
+        f"Turn time: {turn_elapsed}s / {min_time}s min | "
+        f"Remaining: {remaining}s | "
         f"Session time: {total_min:02d}m {total_sec:02d}s"
         f"</span>"
     )
@@ -906,8 +927,9 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             with gr.Column(scale=1):
                 toggle_btn = gr.Button("Begin Audit", variant="primary", size="lg")
 
-        # Time display (computed on-demand during actions — no continuous timer)
-        time_label = gr.Markdown("", elem_classes="progress-bar")
+        # Time display — server provides initial values + data attributes;
+        # client-side JavaScript drives a live countdown (no SSE polling).
+        time_label = gr.HTML("", elem_id="time_label", elem_classes="progress-bar")
 
         # Auto-fill Prolific ID from URL query params via injected script in <head>
         gr.HTML(
@@ -949,6 +971,88 @@ def build_interface(data_path: str | None, output_dir: str, test_mode: bool | No
             clearInterval(interval);
         }
     }, 200);
+})();
+</script>
+<script>
+// Live countdown timer — reads data attributes from the #live-timer span
+// (rendered server-side) and updates the display every second without SSE.
+(function() {
+    var timerInterval = null;
+
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    function updateDisplay() {
+        var el = document.getElementById('live-timer');
+        if (!el) {
+            // Element removed (session ended or page changed) — stop polling
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+            return;
+        }
+
+        var turnStart = el.getAttribute('data-turn-start');
+        var minTime = parseInt(el.getAttribute('data-min-time')) || 0;
+        var sessionStart = el.getAttribute('data-session-start');
+
+        if (!turnStart || minTime === 0) {
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+            return;
+        }
+
+        var now = new Date();
+        var start = new Date(turnStart);
+        var elapsed = Math.floor((now - start) / 1000);
+        var remaining = Math.max(0, minTime - elapsed);
+
+        // Total session time
+        var totalElapsed = 0;
+        if (sessionStart) {
+            totalElapsed = Math.floor((now - new Date(sessionStart)) / 1000);
+        }
+        var totalMin = Math.floor(totalElapsed / 60);
+        var totalSec = totalElapsed % 60;
+
+        el.textContent =
+            'Turn time: ' + elapsed + 's / ' + minTime + 's min | ' +
+            'Remaining: ' + remaining + 's | ' +
+            'Session time: ' + pad(totalMin) + 'm ' + pad(totalSec) + 's';
+
+        if (remaining <= 0) {
+            el.textContent =
+                'Turn time: ' + elapsed + 's / ' + minTime + 's min | ' +
+                'Ready to submit | ' +
+                'Session time: ' + pad(totalMin) + 'm ' + pad(totalSec) + 's';
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        }
+    }
+
+    // Watch for the #live-timer element to appear (Gradio re-renders on events)
+    var observer = new MutationObserver(function() {
+        if (document.getElementById('live-timer')) {
+            updateDisplay();
+            if (!timerInterval) {
+                timerInterval = setInterval(updateDisplay, 1000);
+            }
+        } else {
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        }
+    });
+
+    // Observe the time_label container for DOM changes
+    var container = document.getElementById('time_label');
+    if (container) {
+        observer.observe(container, { childList: true, subtree: true });
+    } else {
+        // Container might not exist yet — retry
+        var retries = 0;
+        var findContainer = setInterval(function() {
+            container = document.getElementById('time_label');
+            if (container) {
+                observer.observe(container, { childList: true, subtree: true });
+                clearInterval(findContainer);
+            }
+            if (++retries > 50) clearInterval(findContainer);
+        }, 200);
+    }
 })();
 </script>
             """,
