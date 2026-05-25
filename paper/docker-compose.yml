@@ -3,9 +3,9 @@
 # Quick start:
 #   1. Place your audit_input_clean.jsonl in the same directory as this file.
 #   2. Run: docker compose up -d
-#   3. Access the app at http://YOUR_VPS_IP:3017/
+#   3. Access the app at http://YOUR_VPS_IP:3018/
 #
-# To change the host port, edit the "3017:3017" mapping below.
+# To change the host port, edit the "3018:3018" mapping below.
 #
 # Logs:
 #   docker compose logs -f
@@ -24,8 +24,10 @@ services:
     image: human-audit:latest
     container_name: human-audit
     restart: unless-stopped
+    stdin_open: true
+    tty: true
     ports:
-      - "3017:3017"
+      - "3018:3018"
     volumes:
       - ./audit_input_clean.jsonl:/app/data/audit_input_clean.jsonl:ro
       - ./audit_results:/app/audit_results
@@ -35,7 +37,7 @@ services:
       - BACKEND_HOST=0.0.0.0
       - BACKEND_PORT=8000
       - FRONTEND_HOST=0.0.0.0
-      - FRONTEND_PORT=3017
+      - FRONTEND_PORT=3018
     deploy:
       resources:
         limits:

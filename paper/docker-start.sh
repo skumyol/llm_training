@@ -7,7 +7,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-/app/audit_results}"
 BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
-FRONTEND_PORT="${FRONTEND_PORT:-3017}"
+FRONTEND_PORT="${FRONTEND_PORT:-3018}"
 TEST_MODE="${TEST_MODE:-false}"
 
 echo "========================================"

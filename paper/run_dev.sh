@@ -15,8 +15,8 @@ if [ "$1" = "--check" ]; then
     echo "Backend NOT running"
   fi
 
-  if curl -s http://127.0.0.1:3017 >/dev/null 2>&1; then
-    echo "Frontend running on http://127.0.0.1:3017"
+  if curl -s http://127.0.0.1:3018 >/dev/null 2>&1; then
+    echo "Frontend running on http://127.0.0.1:3018"
     FRONTEND_OK=true
   else
     echo "Frontend NOT running"
@@ -56,9 +56,9 @@ pnpm dev &
 FRONTEND_PID=$!
 cd ..
 
-echo "Frontend started on http://127.0.0.1:3017 (PID: $FRONTEND_PID)"
+echo "Frontend started on http://127.0.0.1:3018 (PID: $FRONTEND_PID)"
 echo ""
-echo "Open http://localhost:3017 in your browser"
+echo "Open http://localhost:3018 in your browser"
 echo "Press Ctrl+C to stop both servers"
 
 wait
