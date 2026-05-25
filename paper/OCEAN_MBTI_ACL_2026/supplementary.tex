@@ -1,0 +1,376 @@
+\documentclass[11pt]{article}
+
+% ACL style (review submission)
+\usepackage[review]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+
+% Additional packages for this paper
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{tablefootnote}
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+\setlength\titlebox{6cm}
+
+\title{Supplementary Material: Structured Social State for Auditable NPC Dialogue Generation}
+
+\author{Anonymous \\ Affiliation / Address line 1 \\ Affiliation / Address line 2 \\ Affiliation / Address line 3 \\ \texttt{email@domain} \\And Anonymous \\ Affiliation / Address line 1 \\ Affiliation / Address line 2 \\ Affiliation / Address line 3 \\ \texttt{email@domain} \\}
+
+\begin{document}
+
+\maketitle
+
+\appendix
+
+\section{Real-World Use Cases and Practical Accomplishments}
+\label{app:usecases}
+
+This appendix addresses the natural question: \textit{what can someone actually do with these models?}
+We describe concrete deployment scenarios for each track and the practical capabilities the trained models provide.
+
+\subsection{Track A: From-Scratch SLMs}
+
+\textbf{What they are:} Six small language models (15--45M parameters) trained entirely from random initialization on 16,905 lines of NPC dialogue.
+\textbf{What they accomplish:} They learn to generate domain-appropriate NPC speech---guards sound like guards, merchants sound like merchants---without requiring any pretrained model, cloud API, or internet connection.
+
+\textbf{Real-world use cases:}
+\begin{enumerate}
+    \item \textbf{Embedded game engines.} A 16M-parameter model is approximately 60MB on disk and runs at interactive speeds on a CPU.
+    This means you can ship NPC dialogue generation inside a game binary with no external dependencies.
+    No GPU, no network, no API costs---just a compiled model running locally.
+    \item \textbf{Privacy-preserving applications.} Because these models are trained from scratch on in-domain data, they never see internet text, user conversations, or any external data.
+    For healthcare training simulations or corporate role-play scenarios where data must never leave the device, from-scratch SLMs provide a fully offline, inspectable solution.
+    \item \textbf{Architecture research platform.} The 15--16M parameter scale makes these models cheap to train (20 epochs in under 5 minutes on an A30) and easy to modify.
+    Researchers can test new architectures (new attention mechanisms, new SSM variants, new expert-routing strategies) within hours rather than weeks; statistical claims still require multi-seed reruns.
+\end{enumerate}
+
+\textbf{Current capability:} The MoE model achieves mean val\_ppl $=$ 43.38 across three seeds (best seed 42.39) on held-out dialogue.
+This is not yet human-quality, but it demonstrates that domain-specific, small-scale models can capture NPC speaking patterns without pretraining.
+\textbf{Inference cost:} CPU-only, $\approx$60\,MB on disk, no GPU required.
+With more data and a few architectural improvements, this track could produce production-quality embedded dialogue models.
+
+\subsection{Track B: Personality and Affect Encoders}
+
+\textbf{What they are:} Two DistilBERT-based regression models that predict personality traits (OCEAN) from NPC profile text and emotional state (VAD) from dialogue context.
+\textbf{What they accomplish:} They provide a computational \textit{theory of mind} for NPCs---a machine-readable estimate of who a character is and how they feel at any moment.
+
+\textbf{Real-world use cases:}
+\begin{enumerate}
+    \item \textbf{Automated NPC authoring.} Game writers define NPCs with short text descriptions (``a paranoid guard who values duty over mercy'').
+    The personality encoder converts this to a 5-dimensional OCEAN vector that downstream systems can use to modulate dialogue style, decision-making, and animation parameters (e.g., extraverted NPCs gesticulate more; neurotic NPCs have wider eye movement).
+    \item \textbf{Live social perception.} As a conversation unfolds, the affect encoder tracks the NPC's emotional trajectory in real time.
+    A sudden spike in arousal or drop in valence can trigger gameplay events: the NPC might become aggressive, flee, or call for backup.
+    \item \textbf{Player modelling.} The same encoder architecture, applied to player dialogue, could estimate the player's emotional state and adjust game difficulty, narrative branching, or NPC behaviour accordingly.
+\end{enumerate}
+
+\textbf{Current capability:} Personality encoder achieves val\_f1 $=$ 0.678; affect encoder achieves val\_ccc $=$ 0.559.
+A 414-NPC personality cache is precomputed and available for instant lookup.
+The encoders run in under 10ms per inference on CPU.
+
+\subsection{Track C: Response Generation Models}
+
+\textbf{What they are:} Three fine-tuned language models that generate NPC dialogue responses, ranging from a conditioned 1.1B-parameter model (ConditionalDialogue) to a 5.1B-parameter mixture-of-experts (Gemma 4 E2B).
+\textbf{What they accomplish:} They produce fluent, character-consistent NPC responses that respect the NPC's personality and emotional state.
+
+\textbf{Real-world use cases:}
+\begin{enumerate}
+    \item \textbf{Dynamic NPC dialogue in games.} Instead of pre-writing every possible NPC response, a game can generate responses on the fly conditioned on who the NPC is (OCEAN cache) and how they currently feel (VAD encoder).
+    This enables NPCs that react differently to the same player query depending on context---a capability that hand-authored dialogue trees struggle to provide at scale.
+    \item \textbf{Social-state-aware chatbots.} Beyond games, any conversational agent that needs to maintain a consistent persona can benefit from explicit personality and affect conditioning.
+    Customer service bots, therapeutic agents, and educational tutors all have personas that should remain stable across interactions.
+    \item \textbf{Baseline for stronger models.} TinyLlama SFT (val\_ppl $=$ 3.30) provides a clean baseline: ``this is how well a pretrained 1.1B model does without any social state.''
+    The 12.3\% improvement from adding conditioning quantifies the value of the prefix mechanism, while placebo controls show that OCEAN/VAD values should not be treated as the causal signal.
+    \item \textbf{Gemma as an engineering baseline.} The Gemma-2-2B-it run provides the corrected scientific baseline in this draft, while the Gemma 4 E2B run demonstrates that sparse MoE architectures can be fine-tuned on a single 24\,GB GPU for training.
+    Inference requires 12--16\,GB VRAM with 4-bit quantisation---well within reach of a consumer RTX 4080 or cloud T4 instance.
+    For applications that can afford a larger inference budget, Gemma-family models remain useful baselines, but the current Gemma runs do not outperform the task-specific conditional model on this validation split.
+\end{enumerate}
+
+\textbf{Current capability:} ConditionalDialogue achieves mean val\_ppl $=$ 2.88 across three seeds, with zero gated leakage in the Qwen3-4B pipeline.
+The 12.3\% gain over the unconditioned baseline should be interpreted as a soft-prefix capacity effect because placebo controls reach the same PPL range.
+
+\subsection{Track D: Structured LLM Pipeline}
+
+\textbf{What it is:} A three-stage Qwen3-4B pipeline that (1) predicts the full 29-dimension social state from dialogue context, (2) generates responses, and (3) jointly trains both objectives with a consistency loss.
+\textbf{What it accomplishes:} It provides an end-to-end system where a single model can both \textit{understand} the social dynamics of a conversation and \textit{act} on that understanding.
+
+\textbf{Real-world use cases:}
+\begin{enumerate}
+    \item \textbf{Socially-aware NPC AI prototype.} This is the closest component in the project to an integrated NPC social-reasoning loop.
+    Given conversation history, the latent predictor estimates the NPC's full social state---what they think of the player, whether they are under pressure to keep secrets, what their strategic intent is.
+    The response generator then produces dialogue that is consistent with that state.
+    If the state says ``secrecy\_pressure $=$ high, reveal\_decision $=$ none,'' the system can route or constrain generation through an inspectable disclosure policy.
+    \item \textbf{Game master AI.} The 29-head predictor could serve as a ``social radar'' for a game master AI that tracks the social state of every NPC in a scene and decides when to trigger narrative events, introduce new characters, or escalate conflicts.
+    \item \textbf{Explainable NPC behaviour.} Because the latent state is a discrete, human-readable vector (not a hidden embedding), game designers can inspect why an NPC behaved a certain way.
+    ``The NPC refused to answer because secrecy\_pressure was high'' is a debuggable explanation that an embedding vector cannot provide.
+    \item \textbf{Fast/slow routing in production.} The rule-based router (Section~5.3 of the main paper) classifies each turn as ``fast path'' (simple responses, no social complexity) or ``slow path'' (requires full $Z_t$ inference).
+    In a game with hundreds of NPCs, most interactions are fast-path (a shopkeeper saying ``That'll be 10 gold''), reserving the expensive latent predictor for socially complex encounters.
+\end{enumerate}
+
+\textbf{Current capability:} Latent predictor (Qwen3-4B) achieves response\_policy\_f1 $=$ 0.622, reveal\_decision\_f1 $=$ 0.656, and mean accuracy $=$ 0.688 (true $\kappa{=}$0.484).
+Response generator achieves ROUGE-L $=$ 0.145 with length ratio $=$ 0.91, distinct-2 $=$ 0.638, and zero gated secret leakage under the heuristic detector.
+Joint model trains end-to-end (train loss $=$ 1.95, val loss $=$ 3.89 with consistency weight $\lambda{=}0.5$).
+All three stages have been trained and independently evaluated; the joint model will be released upon acceptance.
+
+\subsection{What We Accomplish Overall}
+
+Table~\ref{tab:accomplish} (below) summarises the concrete capabilities delivered by this work.
+
+\begin{table}[h]
+\centering
+\caption{Concrete accomplishments of the trained models.}
+\label{tab:accomplish}
+\small
+\begin{tabular}{@{}p{0.18\linewidth}p{0.35\linewidth}p{0.35\linewidth}@{}}
+\toprule
+\textbf{Capability} & \textbf{How We Demonstrate It} & \textbf{Who Benefits} \\
+\midrule
+Offline NPC dialogue (no pretrained model, no API, 60MB on disk)
+    & Track A: 4 from-scratch SLMs trained on 16,905 lines; MoE mean PPL $=$ 43.38 (3 seeds)
+    & Game developers evaluating embedded dialogue; privacy-critical applications \\
+\midrule
+Computational theory of mind (personality $+$ affect from text)
+    & Track B: OCEAN encoder (f1 $=$ 0.678) $+$ VAD encoder (ccc $=$ 0.559); 414-NPC cache
+    & Game writers doing automated NPC authoring; live social perception systems \\
+\midrule
+Soft-prefix dialogue with 12.3\% PPL improvement
+    & Track C: ConditionalDialogue (mean ppl $=$ 2.88, 3 seeds) vs. TinyLlama SFT (ppl $=$ 3.30); placebo controls show the gain is prefix-capacity rather than OCEAN/VAD semantics
+    & Any conversational agent needing consistent persona and information control \\
+\midrule
+End-to-end social perception $+$ generation in one model
+    & Track D: 3-stage Qwen3 pipeline; joint model trains both objectives simultaneously
+    & Production NPC AI; game master systems; explainable AI for games \\
+\midrule
+Practical deployability across hardware tiers
+    & Tracks A/B: CPU-only inference (60\,MB on disk, {$<$}10\,ms). Tracks C/D: 4--16\,GB VRAM inference with 4-bit quantisation. Training: 8--24\,GB depending on model.
+    & Independent researchers, small studios; incrementally deployable from CPU to single consumer GPU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In summary, this work delivers not just a set of benchmark numbers, but a practical toolkit spanning the full hardware spectrum: CPU-only models for embedded deployment (Track~A, {$<$}60\,MB), lightweight encoders for social perception (Track~B, {$<$}10\,ms on CPU), conditioned generators for character-consistent dialogue (Track~C, 4--16\,GB inference), and a full pipeline for integrated social-state-aware NPC AI (Track~D).
+Each component can be used independently or composed into larger systems.
+Training requires at most a single 24\,GB GPU; inference requirements are substantially lower, with Tracks~A and~B requiring no GPU at all.
+
+\section{System Data Flow}
+\label{app:dataflow}
+
+This appendix documents the input $\rightarrow$ model $\rightarrow$ output flow for each architectural component in the benchmark.
+All dimensions and data paths correspond to the actual training configuration used in the main paper.
+
+\subsection{Track A: From-Scratch Small Language Models}
+
+\paragraph{GPT, MoE, Mamba-like (unconditioned).}
+\textbf{Input:} Plain-text dialogue from \texttt{data/dialogue/train.txt} (16,905 lines, 414 unique NPCs).
+Each line is tokenised with the GPT-2 tokeniser (vocabulary size 50,257), truncated or padded to sequence length 256.
+\textbf{Model:} Architecture-specific backbone (GPT: 6-layer transformer decoder, MoE: 4-experts with top-2 routing, Mamba-like: selective-scan SSM), embedding dimension 512, 8 attention heads where applicable.
+\textbf{Output:} Next-token logits over vocabulary; training loss is cross-entropy.
+Evaluation metric: validation perplexity (Table~3 in the main paper).
+
+\paragraph{PrefixGPT (conditioned).}
+\textbf{Input:} Same dialogue text as above, plus an 8-dimensional conditioning vector $c_t = [\text{OCEAN}_5, \text{VAD}_3]$ concatenated from the personality and affect encoders.
+\textbf{Model:} 6-layer GPT with a soft-prefix module: a 2-layer MLP projects $c_t \in \mathbb{R}^8$ to $\ell \cdot d$ prefix embeddings ($\ell=4$ prefix tokens, $d=512$ hidden), which are prepended to the input sequence.
+\textbf{Output:} Next-token logits; val\_ppl $=$ 44.11 (mean, 3 seeds).
+
+\subsection{Track B: Conditioning Encoders}
+
+\paragraph{Personality Encoder (OCEAN).}
+\textbf{Input:} NPC profile text from \texttt{data/npc\_profiles.csv} (414 entries, e.g., ``A formal guard who values duty and secrecy'').
+Tokenised with \texttt{distilbert-base-uncased}, max length 512.
+\textbf{Model:} DistilBERT (66M) $\rightarrow$ mean-pooled hidden state $\rightarrow$ Linear(768, 5).
+MSE loss over 5 OCEAN dimensions.
+Best epoch 4/15.
+\textbf{Output:} 5-dim OCEAN vector per NPC, cached to \texttt{artifacts/personality\_cache.jsonl}.
+Validation: val\_f1 $=$ 0.678, val\_mse $=$ 0.248.
+
+\paragraph{Affect Encoder (VAD).}
+\textbf{Input:} Dialogue context text from \texttt{data/affect/train.csv} (500 synthetic samples).
+\textbf{Model:} DistilBERT (66M) $\rightarrow$ mean-pooled hidden state $\rightarrow$ Linear(768, 3).
+Combined MSE $+$ CCC loss over 3 VAD dimensions.
+Best epoch 13/15.
+\textbf{Output:} 3-dim VAD vector per dialogue turn.
+Validation: val\_ccc $=$ 0.559, val\_mse $=$ 0.005.
+
+\subsection{Track C: Response Generation}
+
+\paragraph{ConditionalDialogue (OCEAN + VAD conditioned).}
+\textbf{Input:} Dialogue history $+$ OCEAN vector (from cache) $+$ VAD vector (live from affect encoder) $\rightarrow$ 8-dim $c_t$.
+\textbf{Model:} TinyLlama-1.1B with LoRA ($r=8$, $\alpha=16$) $+$ ConditionalSoftPrefix: $c_t$ projected to 4 soft-prefix tokens via 2-layer MLP, prepended to input embeddings.
+The prefix encoder and LoRA adapter are trained jointly.
+\textbf{Output:} Generated NPC response.
+Best val\_ppl $=$ 2.88 (mean across seeds 42--44) at epoch 5/5.
+
+\paragraph{TinyLlama SFT (baseline).}
+\textbf{Input:} Dialogue history only (no personality or affect conditioning).
+\textbf{Model:} TinyLlama-1.1B with LoRA ($r=16$, $\alpha=32$). Standard supervised fine-tuning: input $\rightarrow$ target response, with input tokens masked (label $=-100$).
+\textbf{Output:} Generated NPC response.
+Best val\_ppl $=$ 3.30 at epoch 1/3.
+Conditioning gain $=$ 12.3\%.
+
+\paragraph{Gemma 4 E2B + QLoRA.}
+\textbf{Input:} Structured dialogue records from \texttt{from\_gen\_train.jsonl}, each containing \texttt{npc\_id}, \texttt{npc\_profile}, \texttt{dialogue\_context}, and \texttt{target\_response}.
+Formatted via the Gemma chat template: \texttt{<start\_of\_turn>user\textbackslash n[NPC profile]\textbackslash n\textbackslash n[player query]<end\_of\_turn>}.
+\textbf{Model:} Gemma 4 E2B (16B total, 2B active MoE) with 4-bit nf4 QLoRA, LoRA $r=16$, $\alpha=16$, 37.9M trainable parameters (0.74\% of total).
+Uses \texttt{target\_modules="all-linear"} to handle \texttt{Gemma4ClippableLinear} layers.
+Memory: \texttt{PYTORCH\_CUDA\_ALLOC\_CONF=expandable\_segments:True} needed for evaluation on 24\,GB GPUs; training fits without tuning.
+Inference: 12--16\,GB VRAM with 4-bit quantisation.
+Training via \texttt{SFTTrainer} with \texttt{formatting\_func} and \texttt{processing\_class} (trl $\geq$ 1.3.0 API).
+\textbf{Output:} Generated NPC response.
+Best val\_ppl $=$ 16.24 at epoch 1/2 (exploratory 1-epoch run; rereun at 3 epochs achieves 13.48, see Table~4 in the main paper).
+
+\subsection{Track D: Structured LLM Pipeline}
+
+\paragraph{Stage 1: Latent State Predictor.}
+\textbf{Input:} Dialogue context from \texttt{data/splits/train.jsonl} with full 29-field $Z_t$ labels.
+Context includes scene description and conversation history, tokenised to max 1,024 tokens.
+\textbf{Model:} Qwen3-4B backbone $+$ LoRA $+$ 29 parallel classification heads.
+Each head is a 2-layer MLP (hidden $\rightarrow$ 256 $\rightarrow$ $n_\text{classes}$) applied to the last-token hidden state.
+Weighted multi-head loss: $\lambda_R = \lambda_D = 2.0$, $\lambda_M = 1.5$, others $=1.0$.
+\textbf{Output:} 29 discrete predictions per turn.
+Best response\_policy\_f1 $=$ 0.622, reveal\_decision\_f1 $=$ 0.656, mean\_accuracy $=$ 0.688 at epoch 5/5.
+
+\paragraph{Stage 2: Response Generator (SFT).}
+\textbf{Input:} \texttt{data/splits/train\_sft.jsonl} with \texttt{input} (scene $+$ history) and \texttt{target} (NPC response).
+Tokenised as \texttt{input $+$ "\textbackslash n" $+$ target}, max length 2,048.
+Input portion masked (label $=-100$).
+\textbf{Model:} Qwen3-4B $+$ LoRA ($r=32$, $\alpha=64$). Standard causal LM loss on target tokens only.
+\textbf{Output:} Generated NPC response.
+Best val\_loss $=$ 0.044 at epoch 3/3.
+
+\paragraph{Stage 3: Joint Model.}
+\textbf{Input:} Both data sources combined: each turn has dialogue context, target response, and 29 $Z_t$ labels.
+\textbf{Model:} Shared Qwen3-4B backbone with both the 29-head predictor and the LM head active simultaneously.
+Joint loss: $\mathcal{L}_\text{joint} = \mathcal{L}_\text{heads} + \mathcal{L}_\text{LM}$.
+Gradients from both objectives flow through shared parameters.
+\textbf{Output:} Both social state predictions and generated responses from a single model.
+Train loss 1.95, val loss 3.89 at epoch 3/3.
+
+\subsection{End-to-End Integration}
+
+Figure~2 in the main paper shows the complete flow from scenario generation through training to evaluation.
+The conditioning path (Track B $\rightarrow$ Track C) operates as: NPC profile $\rightarrow$ Personality encoder $\rightarrow$ OCEAN cache $\rightarrow$ concatenated with live VAD from Affect encoder $\rightarrow$ 8-dim $c_t$ $\rightarrow$ ConditionalSoftPrefix $\rightarrow$ TinyLlama with LoRA $\rightarrow$ response.
+The structured LLM path (Track D) operates as: dialogue history $\rightarrow$ Qwen3-4B latent predictor $\rightarrow$ 29-dim $\hat{Z}_t$ $\rightarrow$ Qwen3-4B response generator $\rightarrow$ response.
+In the joint model, both prediction and generation share a single backbone forward pass, producing $\hat{Z}_t$ and the response simultaneously.
+
+\section{Training Pipeline Infrastructure \& Code Modifications}
+\label{app:infrastructure}
+
+Training 12 models across four tracks with three deep learning frameworks (transformers, trl, peft) and two separate Python virtual environments required substantial infrastructure development and debugging.
+We document the key modifications here for reproducibility.
+
+\subsection{Slurm Job Management}
+
+All training ran on an HPC cluster with NVIDIA A30 (24GB) and NVIDIA L20 (48GB) nodes managed by Slurm.
+We developed eight Slurm scripts:
+
+\begin{itemize}
+    \item \texttt{slurm\_train.sh}: Single-model training for any SLM or LLM stage. Accepts \texttt{\{slm,llm\}} and stage parameters. Includes environment activation, CUDA module loading, and working directory management.
+    \item \texttt{slurm\_array.sh}: Job arrays for multi-architecture, multi-seed hyperparameter sweeps.
+    \item \texttt{slurm\_eval.sh}: Standalone evaluation with metrics bundle generation.
+    \item \texttt{slurm\_train\_eval.sh}: Combined training $+$ auto-evaluation in a single job.
+    \item \texttt{resume\_training.sh}: Full pipeline orchestrator with pre-flight verification (1-epoch GPT test before full training).
+    \item \texttt{submit\_test\_jobs.sh}: Submits 12 lightweight test jobs (1 epoch, 15 min each) covering every training task.
+    \item \texttt{submit\_missing.sh}: Auto-detects incomplete runs via checkpoint inspection and submits only pending jobs.
+    \item \texttt{gpu\_test.sh}: Interactive GPU session for environment verification.
+\end{itemize}
+
+Cluster-specific conventions: \texttt{--gpus-per-node=N} (not \texttt{--gres=gpu}), \texttt{--ntasks-per-node=1}.
+The codebase uses symlinks to fast NVMe scratch storage for I/O on compute nodes.
+
+\subsection{LLM Training Configuration (Qwen3)}
+
+The three-stage Qwen3 pipeline uses the following config structure (\texttt{llm\_finetuning/configs/}):
+
+\begin{itemize}
+    \item \texttt{train\_latent.yaml}: Qwen3-4B. 4-bit QLoRA, \texttt{nf4} quantisation, \texttt{bfloat16} compute dtype. 29 classification heads. Focal loss enabled via \texttt{focal\_gamma} for weak heads.
+    \item \texttt{train\_response.yaml}: Qwen3-4B SFT on dialogue data. \texttt{max\_seq\_len: 2048} (increased from 1024 to prevent NaN loss from truncated labels). LoRA $r=32$, $\alpha=64$. Secret-span masking uses per-record \texttt{secret\_strings} from packaged SFT split.
+    \item \texttt{train\_joint.yaml}: Joint training combining latent prediction and response generation losses.
+    \item \texttt{eval.yaml}: Length-aware response generation, dual leakage accounting, and gold/predicted routing modes. Predicted routing requires \texttt{predicted\_zt.jsonl} from latent evaluation.
+\end{itemize}
+
+\subsection{Evaluation Framework}
+
+The intended comprehensive evaluation script computes the following metrics when generated predictions and labels are available:
+
+\begin{itemize}
+    \item \textbf{Per-head metrics:} Accuracy, true Cohen's $\kappa$, macro-F1, MCC for all 28 single-label heads.
+    \item \textbf{Per-group aggregation:} Mean $\pm$ standard deviation across $C_t$, $A_t$, $M_t$, $R_t$, $N_t$, $D_t$ groups.
+    \item \textbf{Response quality:} ROUGE-L with bootstrap 95\% CI ($n=1{,}000$ resamples), BLEU-1/2/4, Distinct-1/2/3, 3-gram and 5-gram repetition rates, generation-to-reference length ratio.
+    \item \textbf{Policy consistency:} Keyword-based checks for withhold, reveal, and soothe adherence.
+    \item \textbf{Secret leakage:} Regular expression matching against known secret patterns from scenario definitions, reported both as gated leakage over \texttt{reveal\_decision=none} turns and ungated leakage across all sampled turns.
+    \item \textbf{Contradiction detection:} Checks for contradictory statements within single generated responses.
+    \item \textbf{Routing:} Precision, recall, F1, slow-path rate, and prediction coverage for the fast/slow path router. Gold-state routing is a deterministic sanity check; predicted-state routing consumes \texttt{predicted\_zt.jsonl} and is the deployment-relevant mode.
+\end{itemize}
+
+Evaluation artifacts (\texttt{comprehensive\_results.json}, \texttt{per\_head\_metrics.csv}, \texttt{paper\_tables.md}) are included in the repository.
+
+\subsection{Code Modifications for Reproducibility}
+
+Table~\ref{tab:codefixes} (below) documents the 16 code modifications required to train all 15 models.
+These represent real infrastructure challenges that future researchers working with similar multi-framework, multi-model pipelines will likely encounter.
+
+\begin{table*}[t]
+\centering
+\caption{Code modifications required for the complete training pipeline.}
+\label{tab:codefixes}
+\scriptsize
+\begin{tabular}{@{}p{0.28\linewidth}p{0.70\linewidth}@{}}
+\toprule
+\textbf{Issue} & \textbf{Resolution} \\
+\midrule
+\texttt{build\_personality\_cache} missing in \texttt{build\_caches.py} & Used \texttt{encode\_profiles} in \texttt{smoke\_test.py} \\
+\midrule
+Tokenizer path returned \texttt{NoneType} on affect encoder load & Hardcoded \texttt{distilbert-base-uncased} tokenizer \\
+\midrule
+\texttt{torch.cuda.amp.GradScaler} deprecated (PyTorch 2.6) & Migrated to \texttt{torch.amp.GradScaler('cuda', ...)} \\
+\midrule
+\texttt{get\_sentence\_embedding\_dimension} renamed in \texttt{sentence-transformers} & Added fallback to \texttt{get\_embedding\_dimension} in \texttt{memory\_store.py} \\
+\midrule
+\texttt{faiss} not installed in SLM virtual environment & \texttt{pip install faiss-cpu} \\
+\midrule
+SLM training looked for data in wrong directory & Added \texttt{cd slm\_training/} in \texttt{slurm\_train.sh} \\
+\midrule
+Condition vectors (float32) vs. embeddings (BFloat16) dtype mismatch & Cast prefix embeddings to model dtype \\
+\midrule
+\texttt{token\_type\_ids} passed to DistilBERT (rejected) & Filtered \texttt{token\_type\_ids} from input dict \\
+\midrule
+Dialogue model required personality cache (none existed) & Built 414-NPC cache from training data \\
+\midrule
+\texttt{src/data/datasets.py} shadowed HF \texttt{datasets} library & Renamed to \texttt{dialogue\_data.py}; updated 7 imports \\
+\midrule
+\texttt{max\_seq\_len=1024} caused all labels $-100$ (NaN loss) & Increased to 2048 in response/joint configs \\
+\midrule
+\texttt{best\_dir} missing at save time (\texttt{FileNotFoundError}) & Added \texttt{mkdir(parents=True, exist\_ok=True)} \\
+\midrule
+\texttt{Gemma4ClippableLinear} layers rejected by PEFT & Changed \texttt{target\_modules} to \texttt{"all-linear"} \\
+\midrule
+Gemma 4 tokenizer lacks default \texttt{chat\_template} & Set Gemma template with \texttt{<start\_of\_turn>} markers \\
+\midrule
+Gemma 4 eval OOM on 24\,GB A30 & Set \texttt{PYTORCH\_CUDA\_ALLOC\_CONF=expandable\_segments:True} \\
+\midrule
+trl 1.3.0 renamed three SFTTrainer parameters & Migrated \texttt{tokenizer}, \texttt{dataset\_text\_field}, \texttt{max\_seq\_length} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\end{document}

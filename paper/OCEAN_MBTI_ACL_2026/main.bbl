@@ -1,4 +1,4 @@
-\begin{thebibliography}{52}
+\begin{thebibliography}{43}
 \providecommand{\natexlab}[1]{#1}
 
 \bibitem[{Assran et~al.(2023)Assran, Duval, Misra, Bojanowski, Vincent, Rabbat,
@@ -9,25 +9,6 @@ Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bojanowski, Pascal Vincent,
   predictive architecture.
 \newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision
   and Pattern Recognition}.
-
-\bibitem[{Bai et~al.(2022)Bai, Jones, Ndousse, Askell, Chen, DasSarma, Drain,
-  Fort, Ganguli, Henighan, Joseph, Kadavath, Kernion, Conerly, El-Showk,
-  Elhage, Hatfield-Dodds, Hernandez, Hume, Johnston, Kravec, Lovitt, Nanda,
-  Olsson, Amodei, Brown, Clark, McCandlish, Olah, Mann, and
-  Kaplan}]{bai2022training}
-Yuntao Bai, Andy Jones, Kamal Ndousse, Amanda Askell, Anna Chen, Nova DasSarma,
-  Dawn Drain, Stanislav Fort, Deep Ganguli, Tom Henighan, Nicholas Joseph,
-  Saurav Kadavath, Jackson Kernion, Tom Conerly, Sheer El-Showk, Nelson Elhage,
-  Zac Hatfield-Dodds, Danny Hernandez, Tristan Hume, and 12 others. 2022.
-\newblock Training a helpful and harmless assistant with reinforcement learning
-  from human feedback.
-\newblock \emph{arXiv preprint arXiv:2204.05862}.
-
-\bibitem[{Bardes et~al.(2022)Bardes, Ponce, and LeCun}]{bardes2022vicreg}
-Adrien Bardes, Jean Ponce, and Yann LeCun. 2022.
-\newblock {VICReg}: Variance-invariance-covariance regularization for
-  self-supervised learning.
-\newblock In \emph{International Conference on Learning Representations}.
 
 \bibitem[{Bordes et~al.(2017)Bordes, Boureau, and Weston}]{bordes2017learning}
 Antoine Bordes, Y-Lan Boureau, and Jason Weston. 2017.
@@ -80,12 +61,6 @@ Yue Feng, Aldo Lipani, Fanghua Ye, Qiang Zhang, and Emine Yilmaz. 2023.
   augmentation.
 \newblock In \emph{Findings of the Association for Computational Linguistics:
   EMNLP 2023}.
-
-\bibitem[{Goel and Zhu(2025)}]{lifelong2025sotopia}
-Hitesh Goel and Hao Zhu. 2025.
-\newblock {LIFELONG-SOTOPIA}: Evaluating social intelligence of language agents
-  over lifelong social interactions.
-\newblock \emph{arXiv preprint arXiv:2506.12666}.
 
 \bibitem[{Gosmar and Dahl(2022)}]{gosmar2022pippa}
 Dan Gosmar and Deborah Dahl. 2022.
@@ -208,14 +183,6 @@ Mikkel Ploug, Oliver Rimer, and Sebastian Petersen. 2025.
   {LLM}-driven dialogue systems}.
 \newblock In \emph{Proceedings of the IEEE Conference on Games (CoG)}.
 
-\bibitem[{Raffel et~al.(2020)Raffel, Shazeer, Roberts, Lee, Narang, Matena,
-  Zhou, Li, and Liu}]{raffel2020exploring}
-Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael
-  Matena, Yanqi Zhou, Wei Li, and Peter~J Liu. 2020.
-\newblock Exploring the limits of transfer learning with a unified text-to-text
-  transformer.
-\newblock \emph{Journal of Machine Learning Research}, 21(140):1--67.
-
 \bibitem[{Raheja and Tetreault(2019)}]{raheja2019dialogue}
 Vipul Raheja and Joel Tetreault. 2019.
 \newblock Dialogue act classification with context-aware self-attention.
@@ -242,13 +209,6 @@ James~A Russell. 1980.
 \newblock \emph{Journal of Personality and Social Psychology},
   39(6):1161--1178.
 
-\bibitem[{Schick et~al.(2023)Schick, Dwivedi-Yu, Dess{\`i}, Raileanu, Lomeli,
-  Zettlemoyer, Cancedda, and Scialom}]{schick2023toolformer}
-Timo Schick, Jane Dwivedi-Yu, Roberto Dess{\`i}, Roberta Raileanu, Maria
-  Lomeli, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom. 2023.
-\newblock Toolformer: Language models can teach themselves to use tools.
-\newblock \emph{arXiv preprint arXiv:2302.04761}.
-
 \bibitem[{Shao et~al.(2023)Shao, Li, Dai, and Qiu}]{shao2023character}
 Yunfan Shao, Linyang Li, Junqi Dai, and Xipeng Qiu. 2023.
 \newblock Character-{LLM}: A trainable agent for role-playing.
@@ -266,15 +226,6 @@ Helen Spencer-Oatey. 2004.
 \newblock \emph{The Handbook of Applied Linguistics}, pages 220--240.
 \newblock Eds. A. Davies and C. Elder.
 
-\bibitem[{Tu et~al.(2024)Tu, Fan, Tian, Shen, Shang, Gao, and
-  Yan}]{charactereval2024acl}
-Quan Tu, Shilong Fan, Zihang Tian, Tianhao Shen, Shuo Shang, Xin Gao, and Rui
-  Yan. 2024.
-\newblock {CharacterEval}: A {Chinese} benchmark for role-playing
-  conversational agent evaluation.
-\newblock In \emph{Proceedings of the 62nd Annual Meeting of the Association
-  for Computational Linguistics (Volume 1: Long Papers)}, pages 6774--6793.
-
 \bibitem[{Urbanek et~al.(2019)Urbanek, Fan, Karamcheti, Jain, Humeau, Dinan,
   Rockt{\"a}schel, Kiela, Szlam, and Weston}]{urbanek2019learning}
 Jack Urbanek, Angela Fan, Siddharth Karamcheti, Saachi Jain, Samuel Humeau,
@@ -289,14 +240,6 @@ Marilyn~A Walker, Owen Rambow, and Monica Rogati. 2006.
 \newblock Individual and domain adaptation in sentence planning for dialogue.
 \newblock In \emph{Journal of Artificial Intelligence Research}, volume~30,
   pages 413--456.
-
-\bibitem[{Wan et~al.(2025)Wan, Labeau, and Clavel}]{emodynamix2025naacl}
-Chenwei Wan, Matthieu Labeau, and Chlo{\'e} Clavel. 2025.
-\newblock {EmoDynamiX}: Emotional support dialogue strategy prediction by
-  modelling {MiXed} emotions and discourse dynamics.
-\newblock In \emph{Proceedings of the 2025 Conference of the North American
-  Chapter of the Association for Computational Linguistics: Human Language
-  Technologies (Volume 1: Long Papers)}, pages 1678--1695.
 
 \bibitem[{Wang et~al.(2023)Wang, Xie, Jiang, Mandlekar, Xiao, Zhu, Fan, and
   Anandkumar}]{wang2023voyager}
@@ -315,20 +258,6 @@ Zekun~Moore Wang, Zhongyuan Peng, Haoran Que, Jiaheng Liu, Wangchunshu Zhou,
   abilities of large language models.
 \newblock In \emph{Findings of the Association for Computational Linguistics:
   ACL 2024}, pages 14729--14755.
-
-\bibitem[{Wei et~al.(2022)Wei, Bosma, Zhao, Guu, Yu, Lester, Du, Dai, and
-  Le}]{wei2022finetuned}
-Jason Wei, Maarten Bosma, Vincent~Y Zhao, Kelvin Guu, Adams~Wei Yu, Brian
-  Lester, Nan Du, Andrew~M Dai, and Quoc~V Le. 2022.
-\newblock Finetuned language models are zero-shot learners.
-\newblock \emph{arXiv preprint arXiv:2109.01652}.
-
-\bibitem[{Wu et~al.(2025)Wu, Sun, Bai, Li, and Wang}]{raiden2025coling}
-Bowen Wu, Kaili Sun, Ziwei Bai, Ying Li, and Baoxun Wang. 2025.
-\newblock {RAIDEN} benchmark: Evaluating role-playing conversational agents
-  with measurement-driven custom dialogues.
-\newblock In \emph{Proceedings of the 31st International Conference on
-  Computational Linguistics}, pages 11086--11106.
 
 \bibitem[{Zhang et~al.(2018)Zhang, Dinan, Urbanek, Szlam, Kiela, and
   Weston}]{zhang2018personalizing}
