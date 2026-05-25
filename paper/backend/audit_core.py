@@ -341,6 +341,7 @@ def get_or_create_session(
     data_path: str | None,
     test_mode: bool = False,
     prolific_meta: dict | None = None,
+    sample_size: int | None = None,
 ) -> AuditState:
     name = _sanitize_name(annotator_name)
     with _sessions_lock:
@@ -364,7 +365,8 @@ def get_or_create_session(
             old_name, old_state = _sessions.popitem(last=False)
             old_state.end()
 
-        turns = stratify_sample(records)
+        n = sample_size if sample_size is not None else SAMPLE_SIZE
+        turns = stratify_sample(records, n=n)
         state = AuditState(turns, name, Path(output_dir), test_mode=test_mode, prolific_meta=prolific_meta)
         state.begin()
         state.start_turn()

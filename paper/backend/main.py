@@ -65,6 +65,7 @@ class BeginRequest(BaseModel):
     output_dir: str | None = None
     data_path: str | None = None
     test_mode: bool | None = None
+    sample_size: int | None = None
 
 
 class SubmitRequest(BaseModel):
@@ -151,6 +152,7 @@ def begin_session(req: BeginRequest):
             data_path,
             test_mode=test_mode,
             prolific_meta=pmeta,
+            sample_size=req.sample_size,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
