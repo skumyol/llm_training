@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import TurnDisplay from './TurnDisplay';
 import LabelSelector from './LabelSelector';
 import Guidelines from './Guidelines';
@@ -250,7 +251,7 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
     <div className="flex gap-6 px-4 py-6 max-w-screen-2xl mx-auto">
       {/* Left sidebar — Guidelines always visible */}
       {guidelines.length > 0 && (
-        <aside className="w-80 shrink-0 hidden lg:block">
+        <aside className="w-80 shrink-0">
           <div className="sticky top-6">
             <Guidelines guidelines={guidelines} />
           </div>
@@ -278,8 +279,8 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
           </button>
           {infoOpen && (
             <div className="px-4 pb-4 border-t border-slate-100">
-              <div className="prose prose-slate max-w-none text-sm text-slate-700 mt-3 whitespace-pre-line">
-                {infoText}
+              <div className="prose prose-slate max-w-none text-sm mt-3">
+                <ReactMarkdown>{infoText}</ReactMarkdown>
               </div>
             </div>
           )}
