@@ -62,6 +62,8 @@ _TEST_MODE: bool = False
 class BeginRequest(BaseModel):
     annotator_name: str
     prolific_pid: str = ""
+    study_id: str = ""
+    session_id: str = ""
     output_dir: str | None = None
     data_path: str | None = None
     test_mode: bool | None = None
@@ -144,6 +146,10 @@ def begin_session(req: BeginRequest):
     pmeta = {}
     if req.prolific_pid.strip():
         pmeta["prolific_pid"] = req.prolific_pid.strip()
+    if req.study_id.strip():
+        pmeta["study_id"] = req.study_id.strip()
+    if req.session_id.strip():
+        pmeta["session_id"] = req.session_id.strip()
 
     try:
         state = get_or_create_session(

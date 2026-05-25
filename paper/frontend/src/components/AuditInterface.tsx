@@ -38,11 +38,16 @@ interface SessionState {
 interface AuditInterfaceProps {
   initialTestMode?: boolean;
   showDevControls?: boolean;
+  initialProlificPid?: string;
+  initialStudyId?: string;
+  initialSessionId?: string;
 }
 
-export default function AuditInterface({ initialTestMode = false, showDevControls = false }: AuditInterfaceProps) {
-  const [annotatorName, setAnnotatorName] = useState('');
-  const [prolificPid, setProlificPid] = useState('');
+export default function AuditInterface({ initialTestMode = false, showDevControls = false, initialProlificPid = '', initialStudyId = '', initialSessionId = '' }: AuditInterfaceProps) {
+  const [annotatorName, setAnnotatorName] = useState(initialProlificPid);
+  const [prolificPid, setProlificPid] = useState(initialProlificPid);
+  const [studyId, setStudyId] = useState(initialStudyId);
+  const [sessionId, setSessionId] = useState(initialSessionId);
   const [testMode, setTestMode] = useState(initialTestMode);
   const [sampleSize, setSampleSize] = useState(150);
   const [session, setSession] = useState<SessionState | null>(null);
@@ -55,8 +60,9 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
   const [infoOpen, setInfoOpen] = useState(true);
   const [infoText, setInfoText] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const handleBeginRef = useRef<() => void>(() => {});
 
-  // Load guidelines and info on mount
+  // Load guidelines and info on mount, auto-start if URL params present
   useEffect(() => {
     fetch(`${API_BASE}/guidelines`)
       .then((r) => r.json())
@@ -64,6 +70,11 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
     fetch(`${API_BASE}/info`)
       .then((r) => r.json())
       .then((data) => setInfoText(data.info || ''));
+    // Auto-start session if Prolific params are in the URL
+    if (initialProlificPid) {
+      setInfoOpen(false);
+      handleBeginRef.current();
+    }
   }, []);
 
   // Local timer tick (updates elapsed time every second)
@@ -111,6 +122,8 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
         body: JSON.stringify({
           annotator_name: annotatorName,
           prolific_pid: prolificPid,
+          study_id: studyId,
+          session_id: sessionId,
           test_mode: testMode,
           sample_size: sampleSize,
         }),
@@ -133,6 +146,7 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
       setLoading(false);
     }
   };
+  handleBeginRef.current = handleBegin;
 
   const handleEnd = async () => {
     if (!session) return;
@@ -261,7 +275,8 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
         )}
       </div>
 
-      {/* Setup panel */}
+      {/* Setup panel — hidden when Prolific URL params are present */}
+      {!initialProlificPid && (
       <div className="bg-white border border-slate-200 rounded-lg p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div>
@@ -339,6 +354,7 @@ export default function AuditInterface({ initialTestMode = false, showDevControl
           </div>
         )}
       </div>
+      )}
 
       {/* Timer */}
       {session && (
