@@ -238,11 +238,17 @@ def pairwise_agreement(a_recs: dict, b_recs: dict, label_a: str, label_b: str):
 
     results = {}
     for head in HEADS:
-        a_vals = [a_recs[tid]["labels"][head] for tid in common_ids]
-        b_vals = [b_recs[tid]["labels"][head] for tid in common_ids]
-        acc = accuracy(a_vals, b_vals)
-        kappa = cohen_kappa(a_vals, b_vals)
-        results[head] = {"acc": round(acc, 3), "kappa": round(kappa, 3), "n": len(common_ids)}
+        a_vals = [a_recs[tid]["labels"].get(head) for tid in common_ids]
+        b_vals = [b_recs[tid]["labels"].get(head) for tid in common_ids]
+        # Filter out None values (missing labels)
+        pairs = [(a, b) for a, b in zip(a_vals, b_vals) if a is not None and b is not None]
+        if not pairs:
+            results[head] = {"acc": None, "kappa": None, "n": 0}
+            continue
+        a_vals_f, b_vals_f = zip(*pairs)
+        acc = accuracy(a_vals_f, b_vals_f)
+        kappa = cohen_kappa(a_vals_f, b_vals_f)
+        results[head] = {"acc": round(acc, 3), "kappa": round(kappa, 3), "n": len(pairs)}
 
     return results, None
 
@@ -394,11 +400,20 @@ def main():
                 print(f"\n{pid_a}  vs  {pid_b}  (common turns: {common_n})")
                 print(f"{'Head':22s}  {'HH_acc':>7s}  {'HH_kappa':>9s}")
                 print("-" * 42)
+                acc_vals = []
+                kappa_vals = []
                 for head, vals in results.items():
-                    print(f"{head:22s}  {vals['acc']:>7.3f}  {vals['kappa']:>9.3f}")
+                    acc_str = f"{vals['acc']:>7.3f}" if vals['acc'] is not None else "    --"
+                    kappa_str = f"{vals['kappa']:>9.3f}" if vals['kappa'] is not None else "      --"
+                    print(f"{head:22s}  {acc_str}  {kappa_str}")
+                    if vals['acc'] is not None:
+                        acc_vals.append(vals['acc'])
+                    if vals['kappa'] is not None:
+                        kappa_vals.append(vals['kappa'])
 
-                avg_acc = sum(v["acc"] for v in results.values()) / len(results)
-                avg_kappa = sum(v["kappa"] for v in results.values()) / len(results)
+                # Average across heads
+                avg_acc = sum(acc_vals) / len(acc_vals) if acc_vals else 0.0
+                avg_kappa = sum(kappa_vals) / len(kappa_vals) if kappa_vals else 0.0
                 print("-" * 42)
                 print(f"{'AVERAGE':22s}  {avg_acc:>7.3f}  {avg_kappa:>9.3f}")
                 hh_pairs.append((pid_a, pid_b, avg_acc, avg_kappa, common_n))

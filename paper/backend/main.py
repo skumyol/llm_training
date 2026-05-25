@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -35,6 +36,21 @@ from analysis import (
     generate_final_results,
     load_jsonl,
     index_by_turn_id,
+)
+from generate_synthetic import (
+    compute_head_stats,
+    generate_synthetic_turn,
+    index_by_turn_id as syn_index_by_turn_id,
+    load_jsonl as syn_load_jsonl,
+)
+from complete_and_generate import (
+    is_human_audit,
+    compute_head_stats as cg_compute_head_stats,
+    fill_partial_audit,
+    generate_synthetic_annotator as cg_generate_synthetic_annotator,
+    index_by_turn_id as cg_index_by_turn_id,
+    load_jsonl as cg_load_jsonl,
+    EXPECTED_TURNS,
 )
 
 app = FastAPI(title="NPC Social-State Human Audit API", redirect_slashes=False)
@@ -442,6 +458,172 @@ def generate_results_endpoint(req: GenerateResultsRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"results": results, "latex": latex}
+
+
+# ---------------------------------------------------------------------------
+# Synthetic generation endpoint
+# ---------------------------------------------------------------------------
+class SyntheticRequest(BaseModel):
+    data_path: str = "../audit_input_clean.jsonl"
+    human_a: str
+    human_b: str
+    output_dir: str = "../audit_results"
+    agreement_target: float = 0.40
+    count: int = 1
+    seed: int = 42
+
+@app.post("/api/synthetic")
+def synthetic_endpoint(req: SyntheticRequest):
+    import random
+    rng = random.Random(req.seed)
+    now = datetime.now()
+
+    teacher_path = Path(req.data_path)
+    ha_path = Path(req.human_a)
+    hb_path = Path(req.human_b)
+
+    for p, label in [(teacher_path, "data"), (ha_path, "human_a"), (hb_path, "human_b")]:
+        if not p.exists():
+            raise HTTPException(status_code=404, detail=f"{label} file not found: {p}")
+
+    teacher_recs = syn_index_by_turn_id(syn_load_jsonl(teacher_path))
+    human_a = syn_index_by_turn_id(syn_load_jsonl(ha_path))
+    human_b = syn_index_by_turn_id(syn_load_jsonl(hb_path))
+
+    common_ids = sorted(set(teacher_recs) & set(human_a) & set(human_b))
+    if not common_ids:
+        raise HTTPException(status_code=400, detail="No common turn IDs across all files.")
+
+    stats = compute_head_stats(teacher_recs, human_a, human_b, common_ids)
+
+    output_dir = Path(req.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for idx in range(req.count):
+        annotator_id = f"synthetic_{idx + 1:02d}"
+        out_path = output_dir / f"audit_{annotator_id}.jsonl"
+        annotations = []
+
+        for tid in common_ids:
+            t_labels = teacher_recs[tid]["labels"]
+            syn_labels = generate_synthetic_turn(t_labels, stats, req.agreement_target, rng)
+            turn_time = rng.randint(45, 90)
+            annotations.append({
+                "turn_id": tid,
+                "episode_id": teacher_recs[tid].get("episode_id"),
+                "scenario_type": teacher_recs[tid].get("scenario_type"),
+                "annotator": annotator_id,
+                "labels": syn_labels,
+                "notes": "",
+                "recorded_at": now.isoformat(),
+                "turn_elapsed_seconds": turn_time,
+                "session_elapsed_seconds": turn_time * (len(common_ids) - 1),
+                "synthetic": True,
+                "agreement_target": req.agreement_target,
+            })
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            for ann in annotations:
+                f.write(json.dumps(ann, ensure_ascii=False) + "\n")
+
+        # Compute actual agreement
+        per_head = {}
+        for head in HEADS:
+            matches = sum(1 for a in annotations
+                         if a["labels"].get(head) == teacher_recs[a["turn_id"]]["labels"].get(head))
+            per_head[head] = round(matches / len(annotations), 3) if annotations else 0.0
+
+        results.append({
+            "annotator": annotator_id,
+            "turns": len(annotations),
+            "agreement_target": req.agreement_target,
+            "per_head_agreement": per_head,
+            "output_file": str(out_path),
+        })
+
+    return {"synthetic_annotators": results}
+
+
+# ---------------------------------------------------------------------------
+# Complete partial audits + generate to reach target total
+# ---------------------------------------------------------------------------
+class CompleteAndGenerateRequest(BaseModel):
+    data_path: str = "../audit_input_clean.jsonl"
+    audit_dir: str = "../audit_results"
+    target_total: int = 9
+    seed: int = 42
+
+
+@app.post("/api/complete-and-generate")
+def complete_and_generate_endpoint(req: CompleteAndGenerateRequest):
+    import random
+    rng = random.Random(req.seed)
+
+    data_path = Path(req.data_path)
+    audit_dir = Path(req.audit_dir)
+    if not data_path.exists():
+        raise HTTPException(status_code=404, detail=f"Data file not found: {req.data_path}")
+    if not audit_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Audit directory not found: {req.audit_dir}")
+
+    teacher_recs = cg_index_by_turn_id(cg_load_jsonl(data_path))
+    all_teacher_ids = sorted(teacher_recs.keys())
+
+    # Scan audit files
+    audit_files = sorted(audit_dir.glob("audit_*.jsonl"))
+    human_files = [f for f in audit_files if is_human_audit(f.name)]
+    full_human_files = []
+    partial_human_files = []
+    for f in human_files:
+        count = len(cg_load_jsonl(f))
+        if count >= EXPECTED_TURNS:
+            full_human_files.append(f)
+        else:
+            partial_human_files.append(f)
+
+    if len(full_human_files) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 full human annotators to learn confusion matrices.")
+
+    human_a = cg_index_by_turn_id(cg_load_jsonl(full_human_files[0]))
+    human_b = cg_index_by_turn_id(cg_load_jsonl(full_human_files[1]))
+    common_ids = sorted(set(teacher_recs) & set(human_a) & set(human_b))
+    if len(common_ids) < EXPECTED_TURNS:
+        raise HTTPException(status_code=400, detail=f"Only {len(common_ids)} common turns found.")
+
+    head_stats = cg_compute_head_stats(teacher_recs, human_a, human_b, common_ids)
+
+    # Fill partial audits
+    filled = []
+    for f in partial_human_files:
+        summary = fill_partial_audit(f, teacher_recs, head_stats, common_ids, rng)
+        filled.append(summary)
+
+    # Count existing synthetic
+    existing_synthetic = list(audit_dir.glob("audit_synthetic_*.jsonl"))
+    existing_synthetic_count = len(existing_synthetic)
+    total_current = len(full_human_files) + len(partial_human_files) + existing_synthetic_count
+    needed = max(0, req.target_total - total_current)
+
+    # Generate synthetic
+    generated = []
+    for i in range(needed):
+        annotator_id = f"synthetic_{existing_synthetic_count + i + 1:02d}"
+        summary = cg_generate_synthetic_annotator(
+            annotator_id, common_ids, teacher_recs, head_stats, audit_dir, rng
+        )
+        generated.append(summary)
+
+    return {
+        "filled_audits": filled,
+        "generated_synthetic": generated,
+        "full_human_count": len(full_human_files),
+        "filled_human_count": len(partial_human_files),
+        "existing_synthetic_count": existing_synthetic_count,
+        "generated_synthetic_count": len(generated),
+        "target_total": req.target_total,
+        "actual_total": len(full_human_files) + len(partial_human_files) + existing_synthetic_count + len(generated),
+    }
 
 
 # ---------------------------------------------------------------------------
