@@ -35,10 +35,15 @@ interface SessionState {
   completion_code: string;
 }
 
-export default function AuditInterface() {
+interface AuditInterfaceProps {
+  initialTestMode?: boolean;
+  showDevControls?: boolean;
+}
+
+export default function AuditInterface({ initialTestMode = false, showDevControls = false }: AuditInterfaceProps) {
   const [annotatorName, setAnnotatorName] = useState('');
   const [prolificPid, setProlificPid] = useState('');
-  const [testMode, setTestMode] = useState(false);
+  const [testMode, setTestMode] = useState(initialTestMode);
   const [sampleSize, setSampleSize] = useState(150);
   const [session, setSession] = useState<SessionState | null>(null);
   const [isActive, setIsActive] = useState(false);
@@ -304,33 +309,35 @@ export default function AuditInterface() {
           </div>
         </div>
 
-        {/* Test mode + sample size row */}
-        <div className="flex flex-wrap items-center gap-4 pt-3 border-t border-slate-100">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={testMode}
-              onChange={(e) => setTestMode(e.target.checked)}
-              disabled={isActive}
-              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 disabled:opacity-50"
-            />
-            <span className="text-sm font-medium text-slate-700">Test Mode</span>
-            <span className="text-xs text-slate-500">(no timer, selections optional)</span>
-          </label>
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-slate-700">Sample Size</label>
-            <input
-              type="number"
-              min={1}
-              max={1000}
-              value={sampleSize}
-              onChange={(e) => setSampleSize(Number(e.target.value))}
-              disabled={isActive}
-              className="w-20 border border-slate-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
-            />
-            <span className="text-xs text-slate-500">turns</span>
+        {/* Dev controls (only shown on /test route) */}
+        {showDevControls && (
+          <div className="flex flex-wrap items-center gap-4 pt-3 border-t border-slate-100">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={testMode}
+                onChange={(e) => setTestMode(e.target.checked)}
+                disabled={isActive}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 disabled:opacity-50"
+              />
+              <span className="text-sm font-medium text-slate-700">Test Mode</span>
+              <span className="text-xs text-slate-500">(no timer, selections optional)</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-slate-700">Sample Size</label>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={sampleSize}
+                onChange={(e) => setSampleSize(Number(e.target.value))}
+                disabled={isActive}
+                className="w-20 border border-slate-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+              />
+              <span className="text-xs text-slate-500">turns</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Timer */}
