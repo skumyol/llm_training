@@ -5,7 +5,7 @@
 #
 # Run:
 #   docker run -d \
-#     -p 3000:3000 \
+#     -p 3017:3017 \
 #     -v $(pwd)/audit_input_clean.jsonl:/app/data/audit_input_clean.jsonl:ro \
 #     -v $(pwd)/audit_results:/app/audit_results \
 #     human-audit
@@ -59,6 +59,6 @@ COPY docker-start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 # Expose frontend port (backend is internal via rewrite proxy)
-EXPOSE 3000
+EXPOSE 3017
 
 ENTRYPOINT ["/app/start.sh"]
