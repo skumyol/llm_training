@@ -1,37 +1,64 @@
-# Human Audit Gradio App — Docker image for VPS deployment
+# NPC Audit App — Next.js + FastAPI (replaces Gradio)
 #
 # Build:
 #   docker build -t human-audit .
 #
-# Run (experiment mode — human_audit_app.py directly):
+# Run:
 #   docker run -d \
-#     -p 8765:8765 \
+#     -p 3000:3000 \
 #     -v $(pwd)/audit_input_clean.jsonl:/app/data/audit_input_clean.jsonl:ro \
 #     -v $(pwd)/audit_results:/app/audit_results \
 #     human-audit
 #
 # Or use docker-compose.yml for one-command deployment.
 
+# ---------------------------------------------------------------------------
+# Stage 1: Build Next.js frontend
+# ---------------------------------------------------------------------------
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+# Install dependencies and build
+COPY frontend/package.json ./
+RUN npm install
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 2: Python runtime + run both backend and frontend
+# ---------------------------------------------------------------------------
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN pip install --no-cache-dir \
-    "gradio>=5.0,<6.0" \
-    scikit-learn>=1.3 \
-    fastapi>=0.100 \
-    uvicorn>=0.23
+# Install Node.js (needed to run the Next.js standalone server)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
-COPY human_audit_app.py compute_audit_agreement.py audit_quality_control.py launcher.py ./
+# Install Python backend dependencies
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# Copy backend source
+COPY backend/ ./backend/
+
+# Copy built frontend (standalone output)
+COPY --from=frontend-builder /app/frontend/.next/standalone ./frontend/
+COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
 
 # Create directories for data and outputs
 RUN mkdir -p /app/data /app/audit_results
 
-# Expose Gradio port
-EXPOSE 8765
+# Copy startup script
+COPY docker-start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
-# Run human_audit_app.py directly for the experiment
-ENTRYPOINT ["python", "human_audit_app.py"]
-CMD ["--host", "0.0.0.0", "--port", "8765", "--data", "/app/data/audit_input_clean.jsonl", "--output", "/app/audit_results"]
+# Expose frontend port (backend is internal via rewrite proxy)
+EXPOSE 3000
+
+ENTRYPOINT ["/app/start.sh"]

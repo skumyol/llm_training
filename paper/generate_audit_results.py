@@ -163,6 +163,7 @@ def compute(human_a: Path, human_b: Path, ai: Path | None, teacher: Path) -> tup
     latex_rows = []
 
     for head in HEADS:
+        latex_head = head.replace("_", "\\_")
         ht_a = compare(teacher_recs, a, common_human_ids, head)
         ht_b = compare(teacher_recs, b, common_human_ids, head)
         hh = compare(a, b, common_human_ids, head)
@@ -194,7 +195,7 @@ def compute(human_a: Path, human_b: Path, ai: Path | None, teacher: Path) -> tup
         }
 
         latex_rows.append(
-            f"{head.replace('_', '\\_'):20s} & "
+            f"{latex_head:20s} & "
             f"{fmt(ht_acc):>4s} & {fmt(ht_kappa):>4s} & "
             f"{fmt(hh.get('acc')):>4s} & {fmt(hh.get('kappa')):>4s} & "
             f"{fmt(ai_teacher.get('acc') if ai_teacher else None):>4s} & "

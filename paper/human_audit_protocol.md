@@ -80,9 +80,11 @@ Report mean and std across annotators for HT metrics.
 ## Updating the paper
 Replace the placeholder table in `main.tex` Appendix~\ref{app:human_audit}
 (`tab:human_audit`) with your real numbers.
-Also update the abstract sentence:
-> "A stratified human audit of 150 test-set turns confirms moderate agreement
-> with synthetic labels for the most actionable heads."
+Also update the abstract sentence to reflect the observed agreement levels. With
+the current completed audit, the supported claim is:
+> "A stratified audit of 150 natural test-set turns shows low human--human
+> agreement across most audited heads, while an AI validator aligns more strongly
+> with the teacher on response policy and valence."
 
 If your results differ materially from the placeholders, also update the
 Limitations paragraph to reflect the actual agreement levels.
