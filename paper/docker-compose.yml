@@ -28,6 +28,7 @@ services:
     tty: true
     ports:
       - "3018:3018"
+      - "8000:8000"
     volumes:
       - ./audit_input_clean.jsonl:/app/data/audit_input_clean.jsonl:ro
       - ./audit_results:/app/audit_results
