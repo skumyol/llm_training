@@ -37,7 +37,7 @@ from analysis import (
     index_by_turn_id,
 )
 
-app = FastAPI(title="NPC Social-State Human Audit API")
+app = FastAPI(title="NPC Social-State Human Audit API", redirect_slashes=False)
 
 # CORS: allow the Next.js dev server and any deployed origin
 app.add_middleware(
