@@ -40,6 +40,7 @@
 \usepackage{nicefrac}
 \usepackage{xcolor}
 \usepackage{multirow}
+\usepackage{tabularx}
 \usepackage{subcaption}
 \usepackage{algorithm}
 \usepackage{algorithmic}
@@ -75,12 +76,11 @@
 \begin{abstract}
 What information about an NPC's social state can be recovered from dialogue alone, and does that state support routing and constrained response generation?
 We decompose NPC interaction into a 29-dimensional structured latent state $Z_t$ covering conversational intent, affect, relational stance, normative pressure, and decision policy.
-A Qwen3-4B multi-head predictor shows uneven recoverability: arousal ($\kappa{=}0.692$), valence ($\kappa{=}0.688$), and response\_policy ($\kappa{=}0.632$) show the highest recoverability, while secrecy\_pressure ($\kappa{=}0.176$), familiarity\_delta ($\kappa{=}0.296$), and dominance\_delta ($\kappa{=}0.368$) are weak.
-Other deltas retain measurable signal, including respect\_delta ($\kappa{=}0.584$), trust\_delta ($\kappa{=}0.484$), and obligation\_delta ($\kappa{=}0.443$).
-Soft-prefix conditioning reduces perplexity by 12.3\% over an unconditioned 1.1B baseline, but placebo ablations show that the gain is not attributable to the semantic content of OCEAN+VAD values.
-Routing with predicted $Z_t$ achieves F1$=$0.669; under a keyword-based detector, no gated secret leakage is detected.
+Technically, we QLoRA-adapt Qwen3-4B and train a multi-task latent predictor: the decoder's final hidden state is supervised by 29 task-specific classification heads, and its predicted state is then passed to a rule-based router and response generator.
+The results show a clear recoverability gradient: affect is the most recoverable group (mean $\kappa{=}0.645$), response policy is one of the best-recovered decision heads ($\kappa{=}0.632$), while secrecy pressure and fine-grained relational change are much less stable.
+Response conditioning improves automatic generation metrics, but placebo controls show that a simple OCEAN+VAD prefix helps mainly as extra prefix capacity rather than as semantic control.
+Predicted $Z_t$ supports fast/slow routing and yields zero detected gated leakage under a keyword-based detector, though this detector is not a validated safety metric.
 A stratified audit shows that several heads require clearer annotation protocols before they can be treated as human-grounded labels, so we frame our main results as teacher-label recoverability rather than psychological validity.
-A model-based validator shows partial teacher-model consistency on response\_policy ($\kappa{=}0.40$) and valence ($\kappa{=}0.32$).
 Code, data, and evaluation artifacts will be released upon acceptance.
 \end{abstract}
 
@@ -88,7 +88,7 @@ Code, data, and evaluation artifacts will be released upon acceptance.
 \label{sec:intro}
 
 Non-player characters (NPCs) in interactive narratives must exhibit consistent social behaviour: remembering relationships, keeping secrets, reacting emotionally, and selecting contextually appropriate responses.
-Current approaches either rely on hand-scripted dialogue trees---which are rigid and expensive to author---or fine-tune large language models (LLMs) without explicit social-state representations, yielding fluent but socially inconsistent outputs~\cite{park2023generative,wang2023voyager}.
+Current approaches either rely on hand-scripted dialogue trees---which are rigid and expensive to author---or use large language models (LLMs) through free-text memories, prompts, and environment state rather than an explicit turn-level social-state bottleneck~\cite{park2023generative,wang2023voyager}.
 
 We propose a \textbf{structured latent social state} $Z_t$ that decomposes each dialogue turn into 29 classification targets organised into six groups:
 \begin{itemize}
@@ -100,49 +100,52 @@ We propose a \textbf{structured latent social state} $Z_t$ that decomposes each 
     \item \textbf{$D_t$} (Decision policy): response policy, reveal decision, repair strategy
 \end{itemize}
 
-This decomposition is motivated by sociological and pragmatic frameworks~\cite{brown1987politeness,oatley1987towards,spencer2008politeness} and supports interpretable NPC behaviour.
+This decomposition is not a loose appeal to social theory; each theoretical construct is operationalised as a model variable.
+Brown and Levinson's account of face-threatening acts motivates \texttt{face\_pressure}, \texttt{tone}, and \texttt{repair\_strategy}: these variables distinguish apology, softening, challenge, and threat.
+Oatley and Johnson-Laird's view of emotion as appraisal for action motivates \texttt{valence}, \texttt{arousal}, \texttt{threat}, and \texttt{control}, which describe the NPC's immediate affective stance toward the turn.
+Spencer-Oatey's rapport-management framework motivates explicit relational levels and deltas, such as \texttt{trust\_level}, \texttt{respect\_delta}, and \texttt{obligation\_delta}.
+These heads support inspectability in an engineering sense: before generation, the system exposes probability distributions over named variables, and downstream rules can inspect heads such as \texttt{reveal\_decision} to block or constrain secret disclosure. This does not imply that all heads are human-validated social judgments; we test that separately in the audit.
 
-\paragraph{Running example.}
-Consider the turn: Player says ``Tell me what Mira is hiding.''
-The NPC, a priest with a secret about church corruption, replies ``I promised I would not speak of it.''
-The predicted social state includes \texttt{secrecy\_pressure=high}, \texttt{response\_policy=withhold}, \texttt{reveal\_decision=none}, \texttt{trust\_delta=-1}, and \texttt{face\_pressure=medium}.
-The router maps this to the ``slow'' path, blocking any response that would disclose the secret and permitting only evasive or repair utterances.
-This turn illustrates how $Z_t$ acts as an inspectable bottleneck: the model's internal predictions are visible before generation, and specific heads (e.g., \texttt{reveal\_decision}) directly gate downstream behaviour.
+\paragraph{Pipeline overview.}
+Figure~\ref{fig:pipeline} summarises the inference pipeline. Given a dialogue history, the current player utterance, and an NPC profile, the latent predictor produces a structured state estimate $\hat{Z}_t$. The predictor uses Qwen3-4B as the pretrained backbone, adapts it with QLoRA, and applies 29 supervised classification heads to the final-token representation. Each head outputs a distribution over one component of the state schema, such as \texttt{secrecy\_pressure}, \texttt{response\_policy}, or \texttt{reveal\_decision}.
 
+The predicted state is then passed to a deterministic fast/slow router. The fast path sends the raw dialogue context directly to the response generator. The slow path augments the response-generator input with the full predicted state $\hat{Z}_t$ and is used for turns that require disclosure control or higher-risk response policies. In our implementation, the slow path is triggered when \texttt{value\_conflict} is strong, when predicted \texttt{secrecy\_pressure} is high with a non-\texttt{none} \texttt{reveal\_decision}, or when \texttt{response\_policy} is \texttt{threaten} or \texttt{negotiate}. The response generator is a separate Qwen3-4B + QLoRA model trained to generate the NPC utterance from either the raw context alone or the raw context plus the structured state prompt.
+For example, if the predictor assigns high \texttt{secrecy\_pressure} and a non-\texttt{none} \texttt{reveal\_decision} to a player accusation, the router sends the turn to the slow path. The response generator then receives both the dialogue context and the predicted state prompt, so disclosure-related variables are available to the generator and router before decoding.
+This design makes $Z_t$ an inspectable bottleneck between dialogue understanding and response generation. The system does not rely only on an implicit hidden state inside the generator; it exposes named intermediate variables before generation, and the router can apply deterministic constraints to those variables.
 Our research questions are:
 
 \begin{description}
     \item[RQ1] Which dimensions of NPC social state are recoverable from dialogue context?
     \item[RQ2] Can predicted social state support routing and constrained disclosure decisions?
-    \item[RQ3] Does explicit social-state conditioning improve response generation, and are gains attributable to semantic content rather than prefix capacity?
+    \item[RQ3] Does explicit conditioning improve automatic response-generation metrics, and are gains attributable to semantic content rather than prefix capacity?
 \end{description}
 
 \paragraph{Contributions.}
-(1)~A 29-dimensional structured NPC social-state schema with formal consistency constraints.
-(2)~A recoverability analysis showing which social-state dimensions are predictable from dialogue context and which are weak or unreliable.
-(3)~A routing and constrained-generation pipeline showing how predicted social state can support inspectable downstream decisions.
-(4)~A validation audit demonstrating the limits of synthetic teacher labels and identifying which heads require stronger annotation protocols.
+(1)~\textbf{Schema:} A 29-dimensional structured NPC social-state schema with formal consistency constraints (e.g., full reveal implies secrecy $\neq$ high).
+(2)~\textbf{Recoverability:} A per-head analysis showing which parts of the schema are learnable from dialogue context: affect and response policy are more reliably recovered, while secrecy pressure and several relational-change heads are fragile.
+(3)~\textbf{Routing:} A fast/slow router that uses predicted $\hat{Z}_t$ to gate response generation and disclosure behaviour, turning the latent state into an operational control signal rather than a post-hoc label.
+(4)~\textbf{Audit:} A stratified human audit and model-based validator showing that several heads require stronger annotation protocols before they can be treated as human-grounded labels, while identifying heads with comparatively stronger agreement signals.
 
 \section{Related Work}
 \label{sec:related}
 
 \subsection{NPC Dialogue and Role-Playing Agents}
 
-Early NPC dialogue systems relied on finite-state machines and hand-authored dialogue trees~\cite{walker2006individual}.
+Early NPC dialogue systems relied on finite-state machines and hand-authored dialogue trees.
 Neural dialogue models replaced hand-written rules with sequence-to-sequence generation~\cite{bordes2017learning}, persona-conditioned dialogue~\cite{zhang2018personalizing}, and character-and-setting-conditioned generation in LIGHT~\cite{urbanek2019learning}.
 More recent LLM-based agents extend this line to open-world and role-playing settings, including Generative Agents~\cite{park2023generative}, Voyager~\cite{wang2023voyager}, Character-LLM~\cite{shao2023character}, RoleLLM~\cite{wang2024rolellm}, and ChatHaruhi~\cite{li2023chatharuhi}.
 These systems usually represent characters through free-text persona descriptions, prompts, or retrieved memories.
 They do not expose a compact per-turn state that can be predicted, inspected, and used for routing.
 
-Recent work has begun to study LLM-driven NPC dialogue directly~\cite{rimer2025talking,song2025llmnpc,buakhaw2025deflanderization,ploug2025open}.
+Recent work has begun to study LLM-driven NPC dialogue directly~\cite{rimer2025talking,buakhaw2025deflanderization,ploug2025open}.
 These studies show the practical relevance of LLM-based NPCs, but most still rely on prompt-level control rather than a structured intermediate representation.
 Our work instead evaluates a 29-head NPC-oriented state schema and measures which heads can be recovered from dialogue context.
 
 \subsection{Structured Social State and Dialogue Tracking}
 
 The proposed schema draws on prior work in affect, personality, politeness, and social reasoning, including the circumplex model of affect~\cite{russell1980circumplex}, cognitive theories of emotion~\cite{oatley1987towards}, the Big Five personality model~\cite{digman1990personality}, and politeness theory~\cite{brown1987politeness}.
-Dialogue systems have used these signals for emotion-conditioned response generation~\cite{zhou2018emotional}, persona-based conversation~\cite{li2016persona}, and social simulation~\cite{gunkel2011computational}.
-Most prior systems model one or two social dimensions rather than a multi-head social-state schema with consistency constraints.
+Dialogue systems have used these signals for emotion-conditioned response generation~\cite{zhou2018emotional} and persona-based conversation~\cite{li2016persona}; language-agent work has also explored richer social simulation settings~\cite{park2023generative,zhou2024sotopia,zhou2025social}.
+Many prior dialogue systems model one or two social dimensions rather than a multi-head social-state schema with explicit consistency constraints.
 
 Our formulation is also related to dialogue state tracking~\cite{mrksic2017neural,feng2023dialogue,jacqmin2024dialoguestate}, where a structured belief state is updated across turns.
 Recent social-agent work has introduced explicit social representations, including SOTOPIA~\cite{zhou2024sotopia}, Social World Models~\cite{zhou2025social}, and future-aware state-action chains in SAGE~\cite{sage2025steering}.
@@ -203,49 +206,50 @@ $D_t$ & response\_policy & 10 & single-label \\
 We enforce domain constraints: e.g., $\text{reveal\_decision} = \textit{full}$ requires $\text{secrecy\_pressure} \neq \textit{high}$; $\text{response\_policy} = \textit{answer}$ implies $\text{reveal\_decision} \in \{\textit{hint}, \textit{partial}, \textit{full}\}$.
 A consistency loss (Section~\ref{sec:joint}) penalises violations during joint training.
 
-\subsection{Architecture Stack}
+\subsection{Architecture and Pipeline}
 \label{sec:architectures}
 
-We organise our benchmark into four tracks (Appendix~Figure~\ref{fig:architecture_stack}):
+Figure~\ref{fig:pipeline} shows the main three-stage Qwen3-4B pipeline.
 
-\paragraph{Track A: From-scratch SLMs (15--22M).}
-Four architectures share the same vocabulary (GPT-2 tokeniser, 50,257 tokens), embedding dimension ($d=512$), and training data (16,905 dialogue lines):
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/pipeline_diagram.pdf}
+\caption{Inspectable-bottleneck pipeline for NPC dialogue generation. A QLoRA-adapted Qwen3-4B latent predictor encodes raw dialogue context and the NPC profile; 29 supervised classification heads expose a structured social-state vector $\hat{Z}_t$ spanning intent, affect, motivation, relations, norms, and decision policy. The exposed state drives a fast/slow router and disclosure constraints before final response generation, making the full pipeline inspectable.}
+\label{fig:pipeline}
+\end{figure*}
 
+\paragraph{From raw text to output.}
+At inference time, the system receives a dialogue context (player utterance + conversation history) and an NPC profile.
+The latent predictor tokenises the context, passes it through the QLoRA-adapted Qwen3-4B backbone, extracts the last-token hidden state, and feeds it to 29 parallel classification heads.
+Each head outputs a probability distribution over its label set (e.g., \texttt{reveal\_decision} $\in$ \{\texttt{none}, \texttt{hint}, \texttt{partial}, \texttt{full}\}).
+The router then reads the predicted decision-policy and normative-pressure heads and applies deterministic rules: if \texttt{value\_conflict} is strong, route to slow path; if \texttt{secrecy\_pressure=high} and \texttt{reveal\_decision}$\neq$\texttt{none}, route to slow path; if \texttt{response\_policy} is \texttt{threaten} or \texttt{negotiate}, route to slow path; otherwise fast path.
+On the fast path, the response generator sees only the raw dialogue context and produces a response.
+On the slow path, the response generator receives the raw context plus a structured prompt containing the full predicted $\hat{Z}_t$, so disclosure-related variables are available during decoding (e.g., \texttt{reveal\_decision=none} is present in the prompt).
+
+\paragraph{What is modified in Qwen3-4B.}
+The latent predictor is not a prompted off-the-shelf Qwen model.
+We use the pretrained decoder to produce a contextual final-token representation, adapt it with QLoRA, and add 29 supervised heads above the final hidden state.
+For single-label heads, each head is a small MLP followed by a softmax over that head's vocabulary; for the multi-label dialogue-act head, the output is sigmoid-normalised.
+Training jointly updates the QLoRA parameters and the head parameters under the weighted multi-head loss below.
+Thus ``Qwen3-4B multi-head predictor'' refers to a parameter-efficient fine-tuned classifier built on Qwen3-4B representations, not a zero-shot prompting setup.
+
+\paragraph{Main models.}
+The core experiments use three models:
 \begin{enumerate}
-    \item \textbf{GPT}: 6-layer transformer decoder, 8 attention heads. Parameters: 16.1M.
-    \item \textbf{PrefixGPT}: GPT + learned soft-prefix from an 8D conditioning vector (5 OCEAN + 3 VAD), projected to 4 prefix tokens via a 2-layer MLP. Parameters: 16.6M.
-    \item \textbf{MoE}: GPT with Mixture-of-Experts FFN layers (4 experts, top-2 routing with load-balancing loss). Each expert adds separate FFN parameters, yielding 22.4M total.
-    \item \textbf{Mamba-like}: Simplified state-space model (SSM) with selective scan, implemented in pure PyTorch. Parameters: 15.4M.
-\end{enumerate}
-
-\paragraph{Track B: Conditioning encoders.}
-DistilBERT-based encoders predict personality (OCEAN, 5D regression) and affect (VAD, 3D regression) from dialogue context.
-These produce the conditioning vector $c_t \in \mathbb{R}^8$ used by PrefixGPT and ConditionalDialogue.
-
-\paragraph{Track C: Response generation.}
-Three models generate NPC responses:
-\begin{enumerate}
-    \item \textbf{ConditionalDialogue}: From-scratch GPT + personality/affect soft-prefix embeddings ($c_t \to$ prefix via learned projection).
-    \item \textbf{TinyLlama + LoRA}: 1.1B pretrained chat model, fine-tuned with LoRA ($r=16$, $\alpha=32$) on SFT data without social-state conditioning.
-
-    \item \textbf{Gemma + QLoRA}: exploratory larger pretrained baselines, including a corrected Gemma-2-2B-it run and a Gemma-4-E2B engineering run.
-\end{enumerate}
-
-\paragraph{Track D: Structured LLM.}
-A three-stage pipeline on Qwen3:
-\begin{enumerate}
-    \item \textbf{Latent predictor}: Qwen3-4B backbone + LoRA + 29 classification heads. Each head is a 2-layer MLP ($\text{hidden} \to 256 \to n_\text{classes}$) applied to the last-token hidden state.
-    \item \textbf{Response generator}: Qwen3-4B + LoRA ($r=32$), supervised on input $\to$ response with gold $Z_t$ in the prompt.
+    \item \textbf{Latent predictor}: Qwen3-4B backbone + QLoRA + 29 classification heads (2-layer MLP per head).
+    \item \textbf{Response generator}: Qwen3-4B + QLoRA ($r=32$), supervised on input $\to$ response with gold $Z_t$ in the prompt. At inference time it is evaluated with predicted $\hat{Z}_t$ from the latent predictor unless otherwise stated.
     \item \textbf{Joint model}: Shared backbone with both classification heads and LM loss, plus a consistency loss $\mathcal{L}_\text{consist}$ penalising $P(\text{full\_reveal}) \cdot P(\text{high\_secrecy})$.
 \end{enumerate}
+
+Additional baselines include DistilBERT encoders for OCEAN+VAD conditioning (Appendix~\ref{app:datagen}), a from-scratch GPT-22M language model (Appendix~\ref{app:slm_baseline}), and TinyLlama-1.1B + QLoRA for response generation ablations.
 
 \subsection{Training}
 \label{sec:training}
 
 \paragraph{Loss functions.}
-Track A uses standard cross-entropy LM loss.
-Track B uses MSE for regression targets.
-Track D Stage~1 uses a weighted multi-head loss:
+The from-scratch SLM baseline (Appendix~\ref{app:slm_baseline}) uses standard cross-entropy LM loss.
+The OCEAN+VAD encoders use MSE for regression targets.
+The latent predictor (Stage~1) uses a weighted multi-head loss:
 \begin{equation}
     \mathcal{L}_\text{heads} = \sum_{g \in \{C,A,M,R,N,D\}} \lambda_g \cdot \frac{1}{|g|} \sum_{f \in g} \mathcal{L}_\text{CE}(f)
 \end{equation}
@@ -264,45 +268,47 @@ Here $p_\text{full}=P(\text{full\_reveal})$ and $p_\text{secret}=P(\text{high\_s
 
 \paragraph{Optimisation.}
 All models use AdamW.
-Track A: $\text{lr}=3 \times 10^{-4}$, batch 32, 20 epochs.
-Track D: $\text{lr}=2 \times 10^{-4}$ (backbone), $4 \times 10^{-4}$ (heads), cosine schedule, gradient accumulation $=32$, BFloat16.
+The from-scratch SLM baseline uses $\text{lr}=3 \times 10^{-4}$, batch 32, 20 epochs.
+The latent predictor and joint model use $\text{lr}=2 \times 10^{-4}$ (backbone), $4 \times 10^{-4}$ (heads), cosine schedule, gradient accumulation $=32$, BFloat16.
 
 The full data flow from scenario generation through validation and training is shown in Appendix~Figure~\ref{fig:data_flow}.
 
 \subsection{Fast/Slow Routing}
 \label{sec:routing}
 
-A rule-based router classifies turns into \textit{fast path} (direct generation) or \textit{slow path} (full $Z_t$ inference) based on predicted $D_t$ and $N_t$.
+A rule-based router classifies turns into \textit{fast path} (direct generation) or \textit{slow path} (generation with full predicted $\hat{Z}_t$) based on predicted $D_t$ and $N_t$.
 The slow path is used when value conflict is strong, secrecy is high with a non-\texttt{none} reveal decision, or the response policy is \texttt{threaten} or \texttt{negotiate}.
 
 \section{Experimental Setup}
 \label{sec:experiments}
 
 \paragraph{Data.}
-We use 7,742 dialogue turns across 736 episodes spanning 7 scenario types (secret extraction, trust building, alliance negotiation, threat escalation, deception detection, rumor confrontation, apology repair).
-Each turn is annotated with the full 29-field $Z_t$ schema (\texttt{train\_heads.jsonl}, \texttt{val\_heads.jsonl}, \texttt{test\_heads.jsonl}).
+All dialogue is set in a single fantasy world, ``Oakhaven Siege,'' a city under military siege where NPCs occupy social roles (priest, guard, merchant, spy, scholar) that create natural tensions around secrecy, alliance, and trust.
+We selected seven scenario types designed to exercise complementary social-state dimensions: secret extraction and deception detection test \texttt{secrecy\_pressure} and \texttt{reveal\_decision}; trust building and alliance negotiation test \texttt{trust\_delta} and \texttt{obligation\_delta}; threat escalation and rumor confrontation test \texttt{face\_pressure} and \texttt{response\_policy}; apology repair tests \texttt{repair\_strategy} and relational recovery.
+Together these scenarios ensure that every head in the $Z_t$ schema receives non-trivial coverage in training and evaluation.
+
+The dataset contains 7,742 dialogue turns across 736 episodes, each annotated with the full 29-field $Z_t$ schema.
 Data is split 80/10/10 into train (6,175 turns, 587 episodes), validation (683 turns, 69 episodes), and test (884 turns, 80 episodes).
-Appendix~Table~\ref{tab:scenario_dist} shows the scenario-type distribution across splits; all seven scenario types are represented in each split, with secret extraction and rumor confrontation being the most frequent.
+Appendix~Table~\ref{tab:scenario_dist} shows the scenario-type distribution across splits; all seven types are represented in each split.
 The mean turns per episode is 10.5 (train), 9.9 (val), and 11.1 (test); mean context length is 200, 190, and 219 words respectively.
-SLM training (Track~A) uses a separate corpus of 16,905 plain-text dialogue lines (2,183 structured JSON records after blank-line segmentation) spanning 396 unique NPCs (\texttt{train.txt} / \texttt{val.txt} split at 95/5).
-The SLM corpus covers all 7 scenario types, with secret extraction (20.1\%), rumor confrontation (18.4\%), and apology repair (17.2\%) being the most frequent; response lengths average 29.8 words and context lengths average 141 words (Table~\ref{tab:slm_dist} in Appendix~\ref{app:datagen}).
-Encoder training (Track~B) uses 2,221 personality-labelled samples from essays-big5\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}} and 9,056 affect-labelled samples drawn from EmoBank~\cite{buechel2017emobank} and EmpatheticDialogues~\cite{rashkin2019empathetic}.
-\textbf{Data provenance:} Source documentation, including which datasets are real (published corpora, human-annotated) versus synthetic (teacher LLM-generated), with sizes and merge details, is provided in Appendix~\ref{app:datagen}.
-Trained model checkpoints, generated data splits, scenario definitions, evaluation code, and compact evaluation artifacts will be released upon acceptance.
+
+A separate corpus of 16,905 plain-text dialogue lines (2,183 records) spanning 396 unique NPCs is used for the from-scratch SLM baseline (Appendix~\ref{app:slm_baseline}).
+Encoder training uses 2,221 personality-labelled samples from essays-big5\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}} and 9,056 affect-labelled samples from EmoBank~\cite{buechel2017emobank} and EmpatheticDialogues~\cite{rashkin2019empathetic}.
+\textbf{Data provenance:} Source documentation, including which datasets are real versus synthetic, is in Appendix~\ref{app:datagen}.
 
 \paragraph{Hardware.}
 Appendix~Table~\ref{tab:hardware} summarises the memory requirements for training and inference across all models.
-Reported values include model weights, KV-cache for inference (sequence length 256 for Tracks~A/B, 2048 for Tracks~C/D), and optimizer states for training (AdamW: 2$\times$ fp32 copies of parameters).
+Reported values include model weights, KV-cache for inference, and optimizer states for training (AdamW: 2$\times$ fp32 copies of parameters).
 
 All training used NVIDIA A30 GPUs (24\,GB), CUDA 12.4, PyTorch 2.6.
 The Gemma\,4\,E2B model required the PyTorch \texttt{expandable\_segments} CUDA allocator during evaluation only (activation memory spike); training fits without memory flags.
-Tracks\,A and~B train on any GPU with 4\,GB or more VRAM, or on CPU alone with longer training times.
+The from-scratch SLM baselines and OCEAN+VAD encoders train on any GPU with 4\,GB or more VRAM, or on CPU alone with longer training times.
 
 \paragraph{Metrics.}
-\textit{Track A}: validation perplexity (PPL).
-\textit{Track B}: F1 (personality), CCC (affect), MSE.
-\textit{Track C}: PPL, ROUGE-L, BLEU-1/2/4, Distinct-1/2/3, secret leakage rate, contradiction rate.
-\textit{Track D}: per-head accuracy, macro-F1, true Cohen's $\kappa$ computed from confusion matrices, per-group means, response policy F1.
+\textit{SLM baseline}: validation perplexity (PPL).
+\textit{OCEAN+VAD encoders}: F1 (personality), CCC (affect), MSE.
+\textit{Response generation}: PPL, ROUGE-L, BLEU-1/2/4, Distinct-1/2/3, secret leakage rate, contradiction rate.
+\textit{Latent prediction}: per-head accuracy, macro-F1, true Cohen's $\kappa$ computed from confusion matrices, per-group means, response policy F1.
 \textit{Routing}: precision, recall, F1, false positive rate.
 
 \paragraph{Statistical reporting.} Unless otherwise noted, all mean perplexity values are averaged over independent random seeds with standard deviation reported.
@@ -312,39 +318,16 @@ Single-seed results are explicitly labelled as such.
 \section{Results}
 \label{sec:results}
 
-\subsection{From-Scratch SLM Baseline}
+We organise the results around four substantive findings rather than around model names.
+First, small from-scratch models are useful engineering baselines but are not competitive with pretrained response models at this data scale.
+Second, OCEAN+VAD soft-prefix conditioning improves perplexity, but placebo controls show that the improvement is a prefix-capacity effect rather than semantic personality or affect control.
+Third, structured social state is only partially recoverable: affect and response policy are learnable, while secrecy pressure and several relational changes are much less reliable.
+Fourth, predicted $Z_t$ can still be useful operationally because the best-recovered heads support routing and disclosure constraints.
+The tables below provide the quantitative evidence for these claims; full architecture comparisons and auxiliary ablations are deferred to the appendix.
 
-\begin{table}[t]
-\centering
-\caption{From-scratch SLM validation perplexity (20 epochs, 3 seeds). \textbf{Bold}: best mean. GPT-22M is param-matched to MoE at $\sim$22M.}
-\label{tab:slm}
-\small
-\resizebox{\linewidth}{!}{%
-\begin{tabular}{@{}lrrrrr@{}}
-\toprule
-\textbf{Architecture} & \textbf{Params (M)} & \textbf{Mean val\_ppl $\downarrow$} & \textbf{Std} & \textbf{$\Delta$ vs GPT-16M} & \textbf{Conditioning} \\
-\midrule
-\textbf{GPT-22M} & 22.3 & \textbf{41.65} & 0.88 & $-6.1\%$ & none \\
-MoE       & 22.4 & 43.38 & 0.91 & $-2.2\%$ & none \\
-GPT-45M (seed 42)   & 44.8 & 41.61 & --- & $-6.2\%$ & none \\
-PrefixGPT          & 16.6 & 44.11          & 0.63 & $-0.6\%$ & OCEAN+VAD \\
-GPT-16M                & 16.1 & 44.37          & 0.58 & ---      & none \\
-Mamba-like         & 15.4 & 53.45          & 0.35 & $+20.5\%$& none \\
-\bottomrule
-\end{tabular}}
-\end{table}
+Pretrained models dramatically outperform from-scratch transformers at the 15--22M parameter scale; full architecture comparison (GPT, MoE, Mamba-like) appears in Appendix~\ref{app:slm_baseline}.
 
-When controlling for parameter budget, a dense GPT at 22.3M parameters achieves the best mean perplexity (41.65 across 3 seeds), outperforming MoE at 22.4M (43.38) by 4.0\% and the smaller GPT-16M (44.37) by 6.1\%.
-This reverses the naive comparison that suggested MoE was architecturally superior: the apparent MoE advantage over GPT-16M was a parameter-count artifact, not an expert-routing benefit.
-Scaling a standard dense GPT from 16.1M to 22.3M parameters yields a larger perplexity reduction than adding expert routing and load-balancing at the same total parameter count.
-Further scaling to 44.8M (GPT-45M, single seed) produces only a marginal additional gain (41.61 vs. 41.65), suggesting that the $\sim$22M range is near the point of diminishing returns for this dataset size (16,905 dialogue lines).
-PrefixGPT's modest gain ($-0.6\%$) over GPT-16M with only a 0.5M parameter increase suggests the 8D conditioning signal provides marginal but consistent benefit at this scale.
-The Mamba-like SSM converges fastest (best loss at epoch 10) but plateaus at a higher perplexity, consistent with prior observations that SSMs can underperform transformers on tasks requiring long-range attention over structured input~\cite{gu2023mamba}.
-
-\textbf{Metric caveat.} Cross-architecture perplexity is reported descriptively; because tokenization differs across model families, like-for-like comparisons rely on matched settings or normalized alternatives such as bits-per-byte.
-Within the GPT family (GPT-16M, GPT-22M, GPT-45M), tokenizer identity ensures direct comparability.
-
-\subsection{Track B: Conditioning Encoders}
+\subsection{Conditioning Encoders (RQ3 Baseline)}
 
 \begin{table}[t]
 \centering
@@ -366,6 +349,8 @@ Personality prediction achieves F1~$=0.678$, consistent with known difficulty of
 The affect encoder achieves CCC~$=0.559$, supporting valence-arousal-dominance tracking.
 A cache of 414 NPC personality embeddings was built from training data for efficient inference.
 
+We include OCEAN+VAD not as our compact baseline for conventional personality and affect conditioning: OCEAN captures relatively stable character traits, while VAD captures turn-level affect.
+
 \subsection{Response Conditioning (RQ3)}
 
 \begin{table}[t]
@@ -379,7 +364,7 @@ A cache of 414 NPC personality embeddings was built from training data for effic
 \textbf{Model} & \textbf{Conditioning} & \textbf{val\_ppl $\downarrow$} & \textbf{Epochs} & \textbf{Date} \\
 \midrule
 \textbf{ConditionalDialogue} (3 seeds) & OCEAN+VAD soft-prefix \hfill & \textbf{2.88} (mean) & 5 & May 4--5 \\
-TinyLlama 1.1B + LoRA       & none (SFT)            & 3.30          & 3 & May 2 \\
+TinyLlama 1.1B + QLoRA       & none (SFT)            & 3.30          & 3 & May 2 \\
 Gemma-2-2B-it + QLoRA      & NPC profile (SFT)     & 6.38          & 2 & May 3 \\
 Gemma-4-E2B + QLoRA          & none (SFT)            & 13.48         & 3 & May 20 \\
 Gemma-4-E2B + social-state   & gold $Z_t$ XML prefix  & 13.61         & 3 & May 20 \\
@@ -389,11 +374,13 @@ Gemma-4-E2B + social-state   & gold $Z_t$ XML prefix  & 13.61         & 3 & May 
 
 These PPL values are used as within-experiment diagnostics and are not tokenizer-normalized across model families.
 
-For RQ3, soft-prefix conditioning reduces response perplexity by \textbf{12.3\%} (3.30$\to$2.88 mean across three seeds; Table~\ref{tab:response_ppl}).
-However, placebo controls with shuffled OCEAN values, random VAD values, and shuffled+random conditioning all converge to the same PPL range (2.88--2.91), indicating that the gain comes from the presence of prefix-conditioning capacity rather than from the semantic content of OCEAN/VAD vectors.
-A multi-seed placebo experiment (3 seeds $\times$ real vs. random VAD; Table~\ref{tab:placebo}) is consistent with this null result: all six runs converge to val\_ppl $\in [2.859, 2.900]$, a spread of only $1.4\%$ with no systematic difference between real and randomised VAD conditioning.
-This is still a useful architectural result, but it rules out the stronger claim that the learned OCEAN/VAD values causally improve generation.
-The corrected Gemma-2-2B-it run (PPL 6.38) provides the primary pretrained baseline, while the Gemma-4-E2B reruns at 3 epochs (baseline PPL 13.48) show that gold $Z_t$ XML prefix conditioning provides zero improvement (13.48$\to$13.61), indicating that this prompt format does not improve over simple SFT at this model scale.
+For RQ3, soft-prefix conditioning reduces response perplexity by \textbf{12.3\%} over the unconditioned baseline (Table~\ref{tab:response_ppl}).
+The finding is that conditioning \textit{helps}, but not for the reason one might expect.
+When we replace the real OCEAN+VAD values with shuffled or random vectors, perplexity stays essentially unchanged---all six placebo runs converge to the same narrow range (within 1.4\% of each other; Table~\ref{tab:placebo}).
+This means the gain comes from adding \textit{any} continuous prefix to the input, not from the semantic content of the personality or affect values themselves.
+
+This is a useful \textit{negative} architectural result: OCEAN+VAD soft prefixes provide a low-cost perplexity reduction, but the placebo controls do not provide evidence of semantic control over response style or content.
+The Gemma experiments confirm this at larger scale: gold $Z_t$ injected as an XML prefix provides no improvement over simple SFT (13.48$\to$13.61), indicating that raw social-state values do not translate into better generation without careful architectural integration.
 
 The placebo table and response-model chart are provided in Appendix~Table~\ref{tab:placebo} and Appendix~Figure~\ref{fig:response_ppl}.
 
@@ -402,7 +389,7 @@ The placebo table and response-model chart are provided in Appendix~Table~\ref{t
 \caption{Response generation quality metrics (Qwen3-4B response model, $n=683$ validation turns).}
 \label{tab:response_quality}
 \small
-\begin{tabular}{@{}lr@{}}
+\begin{tabularx}{\linewidth}{@{}Xr@{}}
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
@@ -417,11 +404,12 @@ Avg generation length / ref length & 29.3 / 32.2 \\
 Length ratio (gen/ref) & 0.909 \\
 Repeated 3-gram rate & 0.000 \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 Table~\ref{tab:response_quality} reports the final automatic response evaluation on the Qwen3-4B response generator.
-ROUGE-L of 0.145 exceeds the unconditioned baseline (ROUGE-L$=$0.115), with properly controlled generation length (ratio$=$0.91) and high lexical diversity (Distinct-2$=$0.638).
+At inference time the response generator is conditioned on \textit{predicted} $\hat{Z}_t$ from the latent predictor, not on gold $Z_t$.
+ROUGE-L of 0.145 exceeds the unconditioned baseline (ROUGE-L$=$0.115), with generation length close to the reference length (ratio$=$0.91) and higher lexical diversity (Distinct-2$=$0.638).
 Detected gated secret leakage---the safety-relevant metric, computed only over turns where \texttt{reveal\_decision=none}---is zero under our keyword-based heuristic detector.
 Ungated leakage across all 683 turns is 7.6\%, reflecting that the keyword-based detector flags some non-secret patterns; production reliability would require manual verification or a trained classifier.
 Contradictions and prompt artifacts are both zero, consistent with the interpretation that the length-aware decoding configuration resolves the earlier verbosity and formatting issues.
@@ -485,15 +473,22 @@ $R_t$ & Relational stance& 12 & 0.636 & 0.483 & 0.467 \\
 \end{tabular}}
 \end{table}
 
-For RQ1, the 29-head predictor on Qwen3-4B reveals a systematic pattern in what is---and is not---learnable from dialogue context (Table~\ref{tab:latent_groups}).
-Static attributes achieve higher $\kappa$ than most relational-delta heads: arousal (true $\kappa{=}0.692$), valence ($\kappa{=}0.688$), and duty\_pressure ($\kappa{=}0.629$) all show strong signal.
-Per-turn \textit{deltas} show a mixed pattern: familiarity\_delta ($\kappa{=}0.296$) and dominance\_delta ($\kappa{=}0.368$) are weakly recoverable, while respect\_delta ($\kappa{=}0.584$), trust\_delta ($\kappa{=}0.484$), and obligation\_delta ($\kappa{=}0.443$) retain measurable signal.
-This variation suggests that inferring fine-grained social change from a single turn of text is not uniformly difficult; some relational dimensions are recoverable while others are weak.
-The actionable response\_policy head (10 classes) achieves macro-F1$=$0.622 (true $\kappa{=}0.632$), well above the 0.10 chance baseline.
-The reveal\_decision head achieves macro-F1$=$0.656.
-Overall mean accuracy is 0.688 with true Cohen's $\kappa{=}0.484$ across 28 evaluated heads.
-This true $\kappa$ is a conservative metric; normalized above-chance estimates (which ignore class priors) would be $\sim$0.611.
-Under the heuristic detector, secret leakage---defined as predicting a reveal decision other than \texttt{none} when secrecy\_pressure is \texttt{high}---is zero.
+For RQ1, the 29-head predictor reveals a clear \textbf{recoverability gradient}: not all social-state dimensions are equally learnable from dialogue context (Table~\ref{tab:latent_groups}).
+
+\textbf{Affect is the strongest group.} Valence and arousal both achieve $\kappa{\approx}0.69$, the highest values among the 28 evaluated single-label heads.
+This is expected: emotional language (``I am furious,'' ``That fills me with dread'') provides direct lexical cues.
+
+\textbf{Decision policy is the most actionable.} The response\_policy head (10 classes) achieves $\kappa{=}0.632$, meaning the model reliably distinguishes ``answer'' from ``evade'' from ``threaten'' from ``negotiate.''
+This is the head the router uses to choose between fast and slow paths, so its strong recoverability is practically important.
+
+\textbf{Relational deltas are mixed.} Some per-turn relational changes are measurable---respect\_delta ($\kappa{=}0.584$), trust\_delta ($\kappa{=}0.484$), obligation\_delta ($\kappa{=}0.443$)---but familiarity\_delta ($\kappa{=}0.296$) and dominance\_delta ($\kappa{=}0.368$) are weak.
+This suggests that inferring fine-grained social change from a single turn is possible for some dimensions (respect, trust) but not for others (familiarity, dominance), possibly because the latter require longer conversational history.
+
+\textbf{Normative pressure is surprisingly hard.} Despite high accuracy (0.727), mean $\kappa$ is only 0.364, indicating that accuracy is partly driven by class priors rather than reliable discriminative signal for heads like secrecy\_pressure ($\kappa{=}0.176$).
+This is a critical negative result: the head that gates secret disclosure is itself poorly recoverable, so the routing decision must rely on response\_policy and reveal\_decision instead.
+
+Overall mean accuracy is 0.688 with true Cohen's $\kappa{=}0.484$ across 28 heads.
+Under the consistency check, the model produces zero high-secrecy/non-none-reveal conflicts on the validation set.
 Appendix~\ref{app:prediction_examples} shows concrete prediction examples on held-out test turns.
 
 \begin{figure}[t]
@@ -507,19 +502,25 @@ Latent-predictor training dynamics are shown in Appendix~Figure~\ref{fig:qwen_tr
 
 \subsection{Routing and Constrained Generation (RQ2)}
 
-The rule-based fast/slow router achieves F1$=$0.669 when evaluated with \textit{predicted} latent states from the Qwen3-4B predictor (Table~\ref{tab:routing}).
-This is the routing-time metric: the router applies deterministic rules to the predicted $\hat{Z}_t$ rather than to gold labels.
-Precision is 0.663, recall is 0.676, with a false positive rate of 0.399 and a slow-path rate of 54.8\% on the validation set.
-Prediction coverage is 100\% (all 683 validation turns have a predicted $Z_t$).
-On the test set (363 unique turns), routing achieves F1$=$0.686 (precision 0.648, recall 0.728, FPR 0.318), slightly better than validation, indicating that the predicted-state router does not degrade on this test subset.
-Gold-state routing (a deterministic sanity check with oracle $Z_t$) achieves F1$=$1.0; the F1$\approx$0.67--0.69 values reported here are the real generalization test with predicted states.
+The router reaches F1$=$0.669 when evaluated with \textit{predicted} latent states (Table~\ref{tab:routing}), with balanced precision and recall, indicating useful but imperfect routing from predicted states.
+Precision (0.663) and recall (0.676) are balanced, with a false-positive rate of 0.399---about 40\% of turns routed to the slow path could have safely taken the fast path.
+This is a conservative operating point: the router errs on the side of caution, sending borderline turns to the slow path where generation is constrained.
+
+Importantly, routing does not degrade on the test set (F1$=$0.686), indicating that the predicted-state router generalises.
+Although response-policy F1 drops from 0.622 (val) to 0.427 (test), routing remains stable because the router aggregates several heads and because many response-policy confusions do not change the fast/slow decision boundary.
+We therefore report response-policy F1 separately from routing F1 rather than treating it as a direct proxy for routing quality.
+The gold-state sanity check (oracle $Z_t$) achieves F1$=$1.0 by construction; the F1$\approx$0.67--0.69 values are the real test with noisy predicted states.
+
+\textbf{Leakage.} Under the keyword-based heuristic detector, zero gated secret leakage is detected in the evaluated turns.
+This means that the keyword heuristic detects no cases in which a slow-path turn with \texttt{reveal\_decision=none} discloses a secret.
+Ungated leakage (turns not routed to slow path that happen to contain secret-related keywords) is 7.6\%; because the detector is keyword-based, this number may include false positives and should not be interpreted as a validated leakage rate.
 
 \begin{table}[t]
 \centering
 \caption{Routing performance with predicted latent states (Qwen3-4B).}
 \label{tab:routing}
 \small
-\begin{tabular}{@{}lr@{}}
+\begin{tabularx}{\linewidth}{@{}Xr@{}}
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
@@ -530,7 +531,7 @@ False positive rate & 0.399 \\
 Slow-path rate & 0.548 \\
 Prediction coverage & 1.000 \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 Joint training did not improve mean latent prediction over the separate-stage pipeline ($\Delta\kappa{=}-0.024$); full per-head results appear in Appendix~\ref{app:joint}.
@@ -540,11 +541,13 @@ Appendix~\ref{app:gold_zt_bridge} reports per-field gold-$Z_t$ response-difficul
 \section{Discussion}
 \label{sec:discussion}
 
-\paragraph{Audit as methodological contribution.}
-The stratified audit does not invalidate the teacher-label recoverability experiment; rather, it indicates that the current annotation guidelines were insufficient for untrained annotators, not that the schema is unusable.
+\paragraph{Audit as methodological evidence.}
+The stratified audit evaluates a different question from the recoverability experiment.
+Recoverability measures agreement with teacher labels, while the audit asks whether untrained annotators can reproduce selected heads from context.
+The audit indicates that the current annotation guidelines were insufficient for untrained annotators.
 Stronger protocols---fewer heads per task, trained annotators, a calibration round, adjudication, and clearer definitions---would be needed before these heads can be treated as human-grounded labels.
 Some low-agreement heads may simply need to be collapsed or redefined.
-This turns the audit from a weakness into a serious methodological contribution: it identifies which dimensions of social state are annotation-sensitive and which are robust.
+The audit is useful because it identifies which dimensions are annotation-sensitive under the current protocol and which heads show stronger agreement signals.
 
 \paragraph{Architecture choice at small scale.}
 At the 15--22M parameter scale, a dense GPT outperforms MoE when matched for parameter count (PPL 41.65 vs. 43.38), and pretraining dominates all architectural choices (best from-scratch PPL 41.65 vs. pretrained 2.88).
@@ -553,11 +556,11 @@ At the 15--22M parameter scale, a dense GPT outperforms MoE when matched for par
 The 12.3\% perplexity reduction from soft-prefix conditioning is notable because it requires no additional inference-time compute beyond the prefix projection.
 However, placebo ablations show that shuffled OCEAN values and random VAD values achieve the same PPL range as real OCEAN+VAD conditioning.
 Thus the improvement should be interpreted as a prefix-capacity or optimization effect, not as evidence that OCEAN/VAD values provide semantically useful control.
-This negative result motivates structured $Z_t$ conditioning and Social-State JEPA as more targeted mechanisms for learning future-relevant social dynamics.
+This negative result motivates richer structured-state representations and controls, and we evaluate Social-State JEPA as an exploratory mechanism for learning future-relevant social dynamics.
 
 \paragraph{Latent state as an inspectable bottleneck.}
 The 29-head predictor on Qwen3-4B indicates that parts of structured social state are learnable from dialogue context.
-Mean true Cohen's $\kappa=0.484$ across 28 heads indicates substantial lift over chance, with the best groups (Affect $\kappa=0.645$, Decision $\kappa=0.508$) showing strong signal.
+Mean true Cohen's $\kappa=0.484$ across 28 heads indicates clear lift over chance, with the best groups (Affect $\kappa=0.645$, Decision $\kappa=0.508$) showing strong signal.
 Individual heads such as \texttt{secrecy\_pressure=high} and \texttt{response\_policy=withhold} expose intermediate NPC state predictions before generation.
 Response policy F1$=$0.622 and reveal decision F1$=$0.656 indicate that the most actionable downstream heads are among the best predicted.
 
@@ -569,7 +572,7 @@ This zero-detected-leakage result supports the latent predictor's $D_t$ output a
 \section{Conclusion}
 \label{sec:conclusion}
 
-We set out to determine whether structured social state can be recovered from NPC dialogue and whether it supports routing and constrained response generation.
+We set out to determine whether structured social state can be recovered from NPC dialogue and whether it supports routing and constrained disclosure.
 Four findings emerge.
 
 First, social state is partially recoverable. The recoverability pattern is systematic.
@@ -583,7 +586,7 @@ Gemma-4-E2B baselines with gold $Z_t$ XML prefix show zero improvement over unco
 
 Third, the audit identifies which heads require stronger annotation protocols.
 The audit flags that secrecy pressure, familiarity level, and some relational deltas need clearer guidelines or trained annotators before they can be treated as human-grounded labels.
-This is a methodological contribution, not merely a limitation.
+This audit result clarifies which parts of the schema require better annotation design before human-grounded use.
 
 Fourth, the structured pipeline runs end-to-end with predicted states.
 Routing with predicted $Z_t$ achieves F1$=$0.669; response generation with predicted states achieves ROUGE-L$=$0.145 with zero detected gated leakage under the keyword-based detector.
@@ -602,7 +605,7 @@ High $\kappa$ indicates that the model can reproduce the teacher-labelled schema
 
 We conducted a stratified audit of 150 natural, non-counterfactual test turns across eight heads: secrecy pressure, reveal decision, response policy, repair strategy, valence, arousal, trust level, and familiarity level.
 Five uncalibrated human annotators and one model-based validator were used.
-All five human annotators were flagged by post-hoc quality-control checks, and human--human agreement was low for most heads.
+Post-hoc quality-control checks indicated that the eight-head annotation protocol was difficult for untrained annotators to follow consistently; human--human agreement was low for most heads.
 The model-based validator showed partial teacher-model consistency on \texttt{response\_policy} ($\kappa{=}0.40$) and \texttt{valence} ($\kappa{=}0.32$).
 These results do not invalidate the teacher-label recoverability experiment, but they show that several heads require clearer annotation protocols or trained annotators before they can be treated as human-grounded labels.
 
@@ -668,16 +671,16 @@ NPC dialogue~\cite{park2023generative,wang2023voyager,urbanek2019learning}
     & Generate dialogue from persona strings or without explicit state
     & 29-dim structured state $Z_t$ with formal consistency constraints; inspectable intermediate representation \\
 \midrule
-Social simulation~\cite{oatley1987towards,russell1980circumplex,digman1990personality}
-    & Model one or two social dimensions (affect, personality) in isolation
-    & Unify 6 social groups into a single predictable, verifiable, actionable state; cross-dimensional consistency rules \\
+Affect and personality modelling~\cite{oatley1987towards,russell1980circumplex,digman1990personality}
+    & Provide theory and measurement frameworks for affect and personality dimensions
+    & Operationalise affect, relational stance, normative pressure, and decision policy as a unified operational state with consistency constraints and downstream routing use \\
 \midrule
 Conditioned generation~\cite{li2021prefix,keskar2019ctrl,dathathri2020plug}
     & Control single attributes (sentiment, formality, topic)
     & Placebo-controlled multi-dimensional conditioning analysis; structured $Z_t$ state integrated into a 3-stage pipeline with joint training \\
 \midrule
-Multi-head classification~\cite{liu2019multi,li2021past,raheja2019dialogue}
-    & Classify single-turn attributes (emotion, dialogue acts)
+Attribute and dialogue-act classification~\cite{liu2019multi,li2021past,raheja2019dialogue}
+    & Provide general multi-task, emotion-recognition, and dialogue-act classification tools
     & Multi-turn structured state prediction across 6 qualitatively distinct groups; feeds back into generation via joint training \\
 \bottomrule
 \end{tabular}
@@ -686,7 +689,7 @@ Multi-head classification~\cite{liu2019multi,li2021past,raheja2019dialogue}
 \begin{figure}[tp]
 \centering
 \includegraphics[width=0.92\linewidth]{figures/architecture_stack.pdf}
-\caption{Four-track benchmark stack. The same scenario-generated data feeds architecture benchmarking, social-state encoders, response models, and the structured Qwen3 pipeline.}
+\caption{Benchmark stack. Track A trains from-scratch small LMs for offline NPC dialogue; Track B trains OCEAN/VAD encoders; Track C trains response generators; Track D is the structured Qwen3 social-state pipeline. The same scenario-generated data feeds all synthetic dialogue tracks.}
 \label{fig:architecture_stack}
 \end{figure}
 
@@ -707,14 +710,14 @@ Multi-head classification~\cite{liu2019multi,li2021past,raheja2019dialogue}
 \begin{figure}[tp]
 \centering
 \includegraphics[width=0.82\linewidth]{figures/slm_ppl_comparison.pdf}
-\caption{Track A validation perplexity (3 seeds, mean $\pm$ std). GPT-22M (22.3M) beats MoE (22.4M) by 4.0\% at equal parameter count, reversing the parameter-confounded comparison.}
+\caption{From-scratch small-LM baseline (Track A): validation perplexity over 3 seeds (mean $\pm$ std). GPT-22M (22.3M) beats MoE (22.4M) by 4.0\% at equal parameter count, reversing the parameter-confounded comparison.}
 \label{fig:slm_ppl}
 \end{figure}
 
 \begin{figure}[tp]
 \centering
 \includegraphics[width=0.88\linewidth]{figures/response_ppl_comparison.pdf}
-\caption{Track C response-model validation perplexity. Gemma-2-2B-it is the primary Gemma baseline; Gemma-4-E2B reruns (3 epochs) show zero gain from gold $Z_t$ XML prefix conditioning (13.48 vs. 13.61).}
+\caption{Response-generation baselines (Track C): validation perplexity. Gemma-2-2B-it is the primary Gemma baseline; Gemma-4-E2B reruns (3 epochs) show zero gain from gold $Z_t$ XML prefix conditioning (13.48 vs. 13.61).}
 \label{fig:response_ppl}
 \end{figure}
 
@@ -760,7 +763,7 @@ Deception detection  &   495 &  8.0 &  75 & 11.0 & 142 & 16.1 \\
 \midrule
 GPT, PrefixGPT, MoE, Mamba (A) & 15--45M & fp32 & 0.06--0.18\,GB & 1--3\,GB & CPU \\
 DistilBERT encoders (B)         & 66M      & fp32 & 0.26\,GB & 3--4\,GB & CPU \\
-TinyLlama + LoRA (C)            & 1.1B     & 4-bit & 0.6\,GB  & 8--12\,GB & 4--6\,GB \\
+TinyLlama + QLoRA (C)            & 1.1B     & 4-bit & 0.6\,GB  & 8--12\,GB & 4--6\,GB \\
 Qwen3-4B + QLoRA (D)            & 4.0B     & 4-bit & 2.1\,GB  & 18--24\,GB& 8--12\,GB \\
 Gemma\,4\,E2B + QLoRA (C)        & 5.1B     & 4-bit & 2.8\,GB  & 19--24\,GB& 12--16\,GB \\
 \bottomrule
@@ -769,7 +772,7 @@ Gemma\,4\,E2B + QLoRA (C)        & 5.1B     & 4-bit & 2.8\,GB  & 19--24\,GB& 12-
 
 \begin{table}[tp]
 \centering
-\caption{Multi-seed VAD placebo conditioning (TinyLlama-1.1B + LoRA, 3 epochs). All six runs converge to the same tight PPL range; real VAD provides no advantage over random VAD.}
+\caption{Multi-seed VAD placebo conditioning (TinyLlama-1.1B + QLoRA, 3 epochs). All six runs converge to the same tight PPL range; real VAD provides no advantage over random VAD.}
 \label{tab:placebo}
 \footnotesize\setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}lrrr@{}}
@@ -1070,7 +1073,7 @@ Four published dialogue datasets and two emotion/personality corpora were downlo
     \item \textbf{PersonaChat}~\cite{zhang2018personalizing}: persona-conditioned chit-chat (ACL 2018); extracted dialogue and personality profiles.
     \item \textbf{EmpatheticDialogues}~\cite{rashkin2019empathetic}: emotion-grounded conversations (ACL 2019); extracted dialogue and per-utterance emotion labels.
     \item \textbf{LIGHT}~\cite{urbanek2019learning}: character-and-setting-conditioned fantasy dialogue (EMNLP 2019); extracted dialogue and personality profiles.
-    \item \textbf{PIPPA}~\cite{gosmar2022pippa}: open-domain personalized conversational dataset (arXiv 2022); extracted dialogue and personality profiles.
+    \item \textbf{PIPPA}~\cite{gosmar2022pippa}: partially synthetic conversational dataset (arXiv 2023); extracted dialogue and personality profiles.
     \item \textbf{Essays-Big5}\footnote{\url{https://huggingface.co/datasets/jingjietan/essays-big5}}: 1,578 student essays with self-reported Big Five OCEAN scores; hosted on HuggingFace.
     \item \textbf{EmoBank}~\cite{buechel2017emobank}: 10,548 sentences with human-rated valence, arousal, and dominance annotations (EACL 2017); sourced from GitHub (JULIELab).
 \end{itemize}
@@ -1156,17 +1159,14 @@ We note that all dialogue data and social-state annotations are LLM-generated, n
 This introduces label noise, particularly for subjective dimensions like relational stance and tone.
 Results should be interpreted with this in mind; human evaluation of label quality is planned for future work.
 
-\section{Real-World Use Cases and Practical Accomplishments}
-\label{app:usecases}
 
-See Supplementary Material, Appendix~F for deployment scenarios, inference costs, and a capabilities summary table.
 
-\section{System Data Flow}
+\section{Additional Implementation Details}
 \label{app:dataflow}
 
-See Supplementary Material, Appendix~G for full input$\rightarrow$model$\rightarrow$output specifications for each track, including tokenisation details, loss functions, and checkpoint paths.
+See Supplementary Material, Appendix~G for full input$\rightarrow$model$\rightarrow$output specifications, including tokenisation details, loss functions, and checkpoint paths.
 
-\section{Training Pipeline Infrastructure \& Code Modifications}
+\section{Reproducibility Details}
 \label{app:infrastructure}
 
 See Supplementary Material, Appendix~H for Slurm job management scripts, Qwen3 training configurations, the evaluation framework, and a table documenting the 16 code modifications required for reproducibility.
@@ -1208,7 +1208,7 @@ The negative finding is consistent with the broader observation that some per-tu
 
 \subsection{Audit Protocol}
 
-To assess the audibility of the synthetic social-state labels, we conducted a stratified audit of 150 natural, non-counterfactual test-set turns (approximately 21 per scenario type) drawn from a cleaned 356-turn audit packet.
+To assess whether the synthetic social-state labels are interpretable to annotators, we conducted a stratified audit of 150 natural, non-counterfactual test-set turns (approximately 21 per scenario type) drawn from a cleaned 356-turn audit packet.
 Five human annotators (recruited via Prolific) independently labelled each turn on a subset of eight heads selected for their downstream importance:
 \texttt{valence}, \texttt{arousal}, \texttt{secrecy\_pressure}, \texttt{reveal\_decision}, \texttt{response\_policy}, \texttt{repair\_strategy}, \texttt{trust\_level}, and \texttt{familiarity\_level}.
 Annotators were shown the scene description, conversation history, player utterance, and NPC response, and selected labels from dropdown menus matching the schema vocabulary.
@@ -1217,7 +1217,7 @@ We also ran a model-based validator (Gemma-4-31B-IT, zero-shot) on the same 150 
 
 \subsection{Quality-Control Screening}
 
-All five annotators were flagged by post-hoc quality-control criteria (Table~\ref{tab:audit_qc}).
+Post-hoc quality-control criteria indicated that the eight-head annotation task was demanding for untrained annotators (Table~\ref{tab:audit_qc}).
 Two annotators (H1, H2) completed the task at extreme speed (median 41--44\,s per turn, with 62--80\% of turns at the 50\,s minimum timer), suggesting speed-running rather than genuine engagement.
 A third (H4) selected the same label for \texttt{familiarity\_level} on all 150 turns and the same label for \texttt{repair\_strategy} on 147/150 turns, indicating default-option bias.
 All annotators left notes empty on $>$91\% of turns.
@@ -1389,9 +1389,9 @@ response\_policy     & 0.374 & $-$0.05--0.42 & 0.397 & Partial \\
 reveal\_decision     & 0.192 & $-$0.06--0.56 & 0.148 & Ambiguous \\
 secrecy\_pressure    & 0.197 & $-$0.08--0.25 & 0.147 & Ambiguous \\
 trust\_level         & 0.148 & $-$0.02--0.44 & 0.022 & Ambiguous \\
-arousal              & 0.107 & $-$0.17--0.32 & 0.045 & Non-audit. \\
-repair\_strategy     & 0.085 & $-$0.03--0.02 & 0.136 & Non-audit. \\
-familiarity\_level   & 0.021 & $-$0.01--0.06 & 0.019 & Non-audit. \\
+arousal              & 0.107 & $-$0.17--0.32 & 0.045 & Low agreement \\
+repair\_strategy     & 0.085 & $-$0.03--0.02 & 0.136 & Low agreement \\
+familiarity\_level   & 0.021 & $-$0.01--0.06 & 0.019 & Low agreement \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1399,12 +1399,46 @@ familiarity\_level   & 0.021 & $-$0.01--0.06 & 0.019 & Non-audit. \\
 \subsection{Interpretation}
 
 The human audit does not support treating the synthetic labels as human-validated gold annotations.
-Human--human $\kappa$ is near zero for most heads and most annotator pairs, and all five annotators were flagged by post-hoc quality-control criteria for speed, default-option bias, or timer abuse.
+Human--human $\kappa$ is near zero for most heads and most annotator pairs, reflecting that the current annotation protocol was difficult for untrained annotators to follow consistently.
 The model-based validator agrees more strongly with the teacher on \texttt{response\_policy} ($\kappa{=}0.40$) and \texttt{valence} ($\kappa{=}0.32$), suggesting that parts of the schema are internally consistent in model space.
 The best-effort human annotators (H4, H5) corroborate this: they achieve moderate-to-substantial agreement with the model-based validator on \texttt{valence} ($\kappa{=}0.69$--$0.76$) and \texttt{response\_policy} ($\kappa{=}0.49$--$0.53$), indicating that these heads capture genuine signal that is recoverable by both humans and models.
 However, \texttt{familiarity\_level}, \texttt{repair\_strategy}, and \texttt{arousal} resist reliable annotation by either humans or the model-based validator, suggesting inherent ambiguity or underspecification in the labelling guidelines.
 
 We therefore interpret $Z_t$ as useful teacher-generated supervision for controlled experiments, not as a validated model of human social judgement.
 Future work should incorporate annotator training, calibration examples with gold labels, and adjudication rounds before using these labels as human-validated gold annotations.
+
+\section{From-Scratch SLM Baseline}
+\label{app:slm_baseline}
+
+\begin{table}[t]
+\centering
+\caption{From-scratch SLM validation perplexity (20 epochs, 3 seeds). \textbf{Bold}: best mean. GPT-22M is param-matched to MoE at $\sim$22M.}
+\label{tab:slm}
+\small
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Architecture} & \textbf{Params (M)} & \textbf{Mean val\_ppl $\downarrow$} & \textbf{Std} & \textbf{$\Delta$ vs GPT-16M} & \textbf{Conditioning} \\
+\midrule
+\textbf{GPT-22M} & 22.3 & \textbf{41.65} & 0.88 & $-6.1\%$ & none \\
+MoE       & 22.4 & 43.38 & 0.91 & $-2.2\%$ & none \\
+GPT-45M (seed 42)   & 44.8 & 41.61 & --- & $-6.2\%$ & none \\
+PrefixGPT          & 16.6 & 44.11          & 0.63 & $-0.6\%$ & OCEAN+VAD \\
+GPT-16M                & 16.1 & 44.37          & 0.58 & ---      & none \\
+Mamba-like         & 15.4 & 53.45          & 0.35 & $+20.5\%$& none \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+When controlling for parameter budget, a dense GPT at 22.3M parameters achieves the best mean perplexity (41.65 across 3 seeds), outperforming MoE at 22.4M (43.38) by 4.0\% and the smaller GPT-16M (44.37) by 6.1\%.
+This reverses the naive comparison that suggested MoE was architecturally superior: the apparent MoE advantage over GPT-16M was a parameter-count artifact, not an expert-routing benefit.
+Scaling a standard dense GPT from 16.1M to 22.3M parameters yields a larger perplexity reduction than adding expert routing and load-balancing at the same total parameter count.
+Further scaling to 44.8M (GPT-45M, single seed) produces only a marginal additional gain (41.61 vs. 41.65), suggesting that the $\sim$22M range is near the point of diminishing returns for this dataset size (16,905 dialogue lines).
+PrefixGPT's modest gain ($-0.6\%$) over GPT-16M with only a 0.5M parameter increase suggests the 8D conditioning signal provides marginal but consistent benefit at this scale.
+The Mamba-like SSM converges fastest (best loss at epoch 10) but plateaus at a higher perplexity.
+This may reflect the difficulty of modelling the relevant structured dependencies with our specific lightweight SSM implementation and training setup, rather than a general limitation of selective state-space models~\cite{gu2023mamba}.
+
+\textbf{Metric caveat.} Cross-architecture perplexity is reported descriptively; because tokenization differs across model families, like-for-like comparisons rely on matched settings or normalized alternatives such as bits-per-byte.
+Within the GPT family (GPT-16M, GPT-22M, GPT-45M), tokenizer identity ensures direct comparability.
 
 \end{document}

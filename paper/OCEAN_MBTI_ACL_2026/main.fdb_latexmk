@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main"] 1779734142.82593 "main.aux" "main.bbl" "main" 1779734144.4081 0
+["bibtex main"] 1779769015.90381 "main.aux" "main.bbl" "main" 1779769017.46573 0
   "./acl_natbib.bst" 1779510864.92145 45186 3d1af46d62cc9172ef6e42b56c1cd613 ""
-  "./references.bib" 1779510785.4227 16794 6c513e31fd090fa76e997898e0a3479f ""
-  "main.aux" 1779734144.02441 51867 a426804e6a59d3048113164decf9c42d "pdflatex"
+  "./references.bib" 1779765268.9925 17163 b270592a01d9f02f12d60dc1030f5b75 ""
+  "main.aux" 1779769017.09267 54346 a1ec2ad06b00ee7b9efbd038869716f7 "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1779734142.97175 "main.tex" "main.pdf" "main" 1779734144.40837 0
+["pdflatex"] 1779769016.04069 "main.tex" "main.pdf" "main" 1779769017.46601 0
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc" 1558214095 7631 5169ff1acd97ff1c4ab83563c99f96f4 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
@@ -170,7 +170,9 @@
   "/usr/local/texlive/2024/texmf-dist/tex/latex/refcount/refcount.sty" 1576624809 9878 9e94e8fa600d95f9c7731bb21dfb67a4 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty" 1657483315 9714 ba3194bd52c8499b3f1e3eb91d409670 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/tablefootnote/tablefootnote.sty" 1390859653 16781 8c11f7c6d0bd619ff2175f2f43357032 ""
+  "/usr/local/texlive/2024/texmf-dist/tex/latex/tools/array.sty" 1698869629 12667 e4b5eb11e4b7239e6c8a52bbe074a6c6 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/tools/calc.sty" 1698869629 10214 547fd4d29642cb7c80bf54b49d447f01 ""
+  "/usr/local/texlive/2024/texmf-dist/tex/latex/tools/tabularx.sty" 1698869629 7147 d45559f8a31b8c53ada0640516660003 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/units/nicefrac.sty" 1137111039 4029 0462ee5ab265cf59dc15a41a3b883101 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/upquote/upquote.sty" 1334873510 1048 517e01cde97c1c0baf72e69d43aa5a2e ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/url/url.sty" 1388531844 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
@@ -187,13 +189,14 @@
   "figures/data_flow.pdf" 1779731645.2254 24774 e2de1879178e471384d739d5038d643e ""
   "figures/latent_group_scores.pdf" 1779510774.40487 21711 313b67b2092246e68c42ca6c981cd279 ""
   "figures/latent_head_heatmap.pdf" 1779510774.40127 28459 6f6a5d542701abce45564ea9e99159b6 ""
+  "figures/pipeline_diagram.pdf" 1779768002.18478 30496 8fe80ca2be4baf2aa1fb4082996042f8 ""
   "figures/qwen_latent_training.pdf" 1779510774.40629 20881 e84ed5e888c1c6d7b1897438ac5bfcc9 ""
   "figures/response_ppl_comparison.pdf" 1779510774.40532 21139 3c42fdb4ec85a5c9e13caa38dfbd29b1 ""
   "figures/slm_ppl_comparison.pdf" 1779510774.40672 21835 9c72e2d208ab3ff962b84dc65599772b ""
-  "main.aux" 1779734144.02441 51867 a426804e6a59d3048113164decf9c42d "pdflatex"
-  "main.bbl" 1779734142.96778 14175 45222e1bb1c5476b2d0e5b1a6f847570 "bibtex main"
-  "main.out" 1779734144.0268 8831 7cdd2ecada8d573c5cf4fdfbdf41fe64 "pdflatex"
-  "main.tex" 1779734105.39887 89414 ea47537020b7fd61ce4c3371c944dbe6 ""
+  "main.aux" 1779769017.09267 54346 a1ec2ad06b00ee7b9efbd038869716f7 "pdflatex"
+  "main.bbl" 1779769016.0372 14188 64463418705d4cf894c30068ef1235c8 "bibtex main"
+  "main.out" 1779769017.09539 8502 bb86adcea0d2e1991740dbec3d5a8a98 "pdflatex"
+  "main.tex" 1779768995.3236 95973 2d2a18e342d5dfa74fc1603eabbb55d4 ""
   (generated)
   "main.aux"
   "main.log"
