@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main_emnlp_edited"] 1779772737.74407 "main_emnlp_edited.aux" "main_emnlp_edited.bbl" "main_emnlp_edited" 1779772739.41771 0
+["bibtex main_emnlp_edited"] 1779782977.75549 "main_emnlp_edited.aux" "main_emnlp_edited.bbl" "main_emnlp_edited" 1779782979.38045 0
   "./acl_natbib.bst" 1779510864.92145 45186 3d1af46d62cc9172ef6e42b56c1cd613 ""
   "./references.bib" 1779765268.9925 17163 b270592a01d9f02f12d60dc1030f5b75 ""
-  "main_emnlp_edited.aux" 1779772739.00454 52212 ff2129137cf504888a1834eb832f30c0 "pdflatex"
+  "main_emnlp_edited.aux" 1779782979.00498 56171 c905284620ef7744e6606e53bb7da255 "pdflatex"
   (generated)
   "main_emnlp_edited.bbl"
   "main_emnlp_edited.blg"
   (rewritten before read)
-["pdflatex"] 1779772737.8851 "main_emnlp_edited.tex" "main_emnlp_edited.pdf" "main_emnlp_edited" 1779772739.41797 0
+["pdflatex"] 1779782977.89613 "main_emnlp_edited.tex" "main_emnlp_edited.pdf" "main_emnlp_edited" 1779782979.38071 0
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc" 1558214095 7631 5169ff1acd97ff1c4ab83563c99f96f4 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
@@ -184,19 +184,20 @@
   "/usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt" 1738120433 8221422 a76b678fc06d0166543a49528b776f66 ""
   "/usr/local/texlive/2024/texmf.cnf" 1710266656 577 e590dabc9e28c5b61546e15f63eebcdf ""
   "acl.sty" 1779510864.9188 11615 e2c027f483aa40e577ed34264c8b0655 ""
-  "figures/architecture_stack.pdf" 1779510774.40967 24482 d62bf7159e8c6b293766b5747da92b34 ""
-  "figures/best_model_diagram.pdf" 1779731645.22501 31438 4ee3e937c6406f44fce874185c5c79c4 ""
-  "figures/data_flow.pdf" 1779731645.2254 24774 e2de1879178e471384d739d5038d643e ""
-  "figures/latent_group_scores.pdf" 1779510774.40487 21711 313b67b2092246e68c42ca6c981cd279 ""
+  "figures/ConditionalDialogue soft-prefix.png" 1779780975.2207 1286824 76331f0ab7fc8786f0aedf8d84aa9b09 ""
+  "figures/Data flow from scenario specifications.png" 1779780975.87854 1281832 5a0289a48562e3f91a3cc9976d63ab2f ""
+  "figures/flowchart_of_llm_pipeline_stages.png" 1779780326.83447 1096437 a448aba149806d0bc0a4b61450e248c8 ""
   "figures/latent_head_heatmap.pdf" 1779510774.40127 28459 6f6a5d542701abce45564ea9e99159b6 ""
-  "figures/pipeline_diagram.pdf" 1779771746.64793 26144 6b6bb6b97e5ea443d61d36487a4a4203 ""
+  "figures/latent_social_state_prediction_by_group.png" 1779779361.27146 995222 3969792f7bff88ac8a27dd19b95fa0bc ""
+  "figures/pipeline2.png" 1779779813.16872 1086482 069827c634bb4c96fa2de31b16c2a916 ""
   "figures/qwen_latent_training.pdf" 1779510774.40629 20881 e84ed5e888c1c6d7b1897438ac5bfcc9 ""
   "figures/response_ppl_comparison.pdf" 1779510774.40532 21139 3c42fdb4ec85a5c9e13caa38dfbd29b1 ""
   "figures/slm_ppl_comparison.pdf" 1779510774.40672 21835 9c72e2d208ab3ff962b84dc65599772b ""
-  "main_emnlp_edited.aux" 1779772739.00454 52212 ff2129137cf504888a1834eb832f30c0 "pdflatex"
-  "main_emnlp_edited.bbl" 1779772737.88164 14188 64463418705d4cf894c30068ef1235c8 "bibtex main_emnlp_edited"
-  "main_emnlp_edited.out" 1779772739.00726 8502 bb86adcea0d2e1991740dbec3d5a8a98 "pdflatex"
-  "main_emnlp_edited.tex" 1779772717.45349 91288 0101ecc761e39a68fd6629d8b7a86a62 ""
+  "figures/technical_architecture_with_predicted_social_state.png" 1779779219.93512 1116485 1e1392fa5fef7c3fec807acc892d0c74 ""
+  "main_emnlp_edited.aux" 1779782979.00498 56171 c905284620ef7744e6606e53bb7da255 "pdflatex"
+  "main_emnlp_edited.bbl" 1779782977.89258 14188 64463418705d4cf894c30068ef1235c8 "bibtex main_emnlp_edited"
+  "main_emnlp_edited.out" 1779782979.00826 8502 e6621d7a89b0390a108f55c364f23d23 "pdflatex"
+  "main_emnlp_edited.tex" 1779782971.73787 99480 2398ceb056cca6aa847e97b125ba2942 ""
   (generated)
   "main_emnlp_edited.aux"
   "main_emnlp_edited.log"

@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Second Phase: Implementation &amp; Experiment Plan</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --accent: #58a6ff;
+    --muted: #8b949e;
+    --border: #30363d;
+    --card: #161b22;
+    --success: #3fb950;
+    --warn: #d29922;
+    --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+  h1 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: .5rem; }
+  h2 { color: var(--accent); margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  h3 { color: #79c0ff; margin-top: 1.8rem; }
+  .tag {
+    display: inline-block;
+    padding: .15rem .5rem;
+    border-radius: 999px;
+    font-size: .75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    margin-left: .5rem;
+  }
+  .tag-high { background: rgba(248,81,73,.15); color: var(--danger); border: 1px solid rgba(248,81,73,.3); }
+  .tag-medium { background: rgba(210,153,34,.15); color: var(--warn); border: 1px solid rgba(210,153,34,.3); }
+  .tag-low { background: rgba(63,185,80,.15); color: var(--success); border: 1px solid rgba(63,185,80,.3); }
+  .meta { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: .92rem;
+  }
+  th, td {
+    padding: .6rem .75rem;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--card); color: var(--accent); }
+  tr:nth-child(even) { background: rgba(22,27,34,.5); }
+  code, pre {
+    font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
+    background: var(--card);
+    padding: .15rem .35rem;
+    border-radius: 4px;
+    font-size: .88rem;
+  }
+  pre { padding: .8rem 1rem; overflow-x: auto; line-height: 1.5; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem 1.4rem;
+    margin: 1rem 0;
+  }
+  .card h4 { margin-top: 0; color: #79c0ff; }
+  ul { padding-left: 1.3rem; }
+  li { margin: .35rem 0; }
+  .timeline {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .timeline-date {
+    font-weight: 600;
+    color: var(--accent);
+    text-align: right;
+    padding-top: .2rem;
+  }
+  .timeline-content { border-left: 2px solid var(--border); padding-left: 1rem; }
+  .check { color: var(--success); }
+  .caution { color: var(--warn); }
+  .alert { color: var(--danger); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Second Phase: Implementation &amp; Experiment Plan</h1>
+<p class="meta">Derived from gap analysis of <code>main_emnlp_edited.tex</code> &mdash; May 2026</p>
+
+<div class="card">
+<h4>Executive Summary</h4>
+<p>
+The first phase established a <strong>recoverability gradient</strong> (Affect &gt; Decision &gt; Mental Model &gt; Relational &gt; Normative) and a functional but coarse fast/slow router.
+The second phase targets three core weaknesses:
+</p>
+<ol>
+<li><strong>Weak-head recoverability</strong> (<code>secrecy_pressure</code> &kappa;=0.176, several relational deltas &lt;0.40)</li>
+<li><strong>Unvalidated safety evaluation</strong> (keyword-based leakage detector)</li>
+<li><strong>Weak generation-quality metrics</strong> (BLEU/ROUGE-L are poor proxies for player experience)</li>
+</ol>
+</div>
+
+<hr>
+
+<h2>1. Training Improvements</h2>
+
+<h3>1.1 Focal Loss for Imbalanced Heads <span class="tag tag-high">High</span></h3>
+<p><strong>Motivation:</strong> <code>reveal_decision</code> is 96.6% <code>hint</code>+<code>none</code>; <code>secrecy_pressure</code> is 97.2% <code>high</code>+<code>medium</code>. Cross-entropy with naive class weights is insufficient.</p>
+
+<table>
+<tr><th>Head</th><th>Dominant Classes</th><th>% Combined</th><th>Proposed &gamma;</th></tr>
+<tr><td><code>reveal_decision</code></td><td>hint, none</td><td>96.6%</td><td>2.0</td></tr>
+<tr><td><code>secrecy_pressure</code></td><td>high, medium</td><td>97.2%</td><td>3.0</td></tr>
+<tr><td><code>response_policy</code></td><td>deflect, soothe</td><td>59.7%</td><td>1.5</td></tr>
+<tr><td><code>player_intent</code></td><td>probe</td><td>58.1%</td><td>1.5</td></tr>
+<tr><td><code>valence</code></td><td>negative</td><td>58.9%</td><td>1.0</td></tr>
+</table>
+
+<p><strong>Implementation:</strong></p>
+<pre>def focal_loss(logits, targets, alpha_per_class, gamma=2.0):
+    ce = F.cross_entropy(logits, targets, reduction='none')
+    pt = torch.exp(-ce)
+    focal = alpha_per_class[targets] * (1 - pt) ** gamma * ce
+    return focal.mean()
+</pre>
+
+<p><strong>Expected outcome:</strong> +0.05&ndash;0.10 &kappa; on <code>secrecy_pressure</code> and <code>reveal_decision</code>; reduction in majority-class bias.</p>
+
+<h3>1.2 Curriculum Learning by Recoverability <span class="tag tag-high">High</span></h3>
+<p><strong>Motivation:</strong> Low-recoverability heads (Normative, Relational deltas) may interfere with strong heads (Affect, Decision) during joint training.</p>
+
+<p><strong>Two-stage curriculum:</strong></p>
+<ul>
+<li><strong>Stage 1 (epochs 1&ndash;3):</strong> Train backbone + high-recoverability heads only:
+  <code>valence</code>, <code>arousal</code>, <code>threat</code>, <code>control</code>, <code>response_policy</code>, <code>reveal_decision</code>, <code>repair_strategy</code>, <code>respect_delta</code>, <code>trust_delta</code>.
+  Freeze all other head weights at random init. Learning rate: <code>2e-4</code> (backbone), <code>4e-4</code> (heads).</li>
+<li><strong>Stage 2 (epochs 4&ndash;8):</strong> Unfreeze remaining heads with 2&times; learning rate (<code>8e-4</code>) for 3 epochs, then decay to <code>4e-4</code> for the remainder.
+  Apply gradient clipping (max_norm=1.0) on weak-head gradients to prevent catastrophic forgetting of strong-head representations.</li>
+</ul>
+
+<p><strong>Validation criterion:</strong> Monitor mean &kappa; of strong heads in Stage 2; if any drop by &gt;0.02 from Stage 1 peak, reduce weak-head LR by 0.5&times;.</p>
+
+<h3>1.3 Multi-Turn Contextual Encoding <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> The paper notes that <code>familiarity_delta</code> (&kappa;=0.296) and <code>dominance_delta</code> (&kappa;=0.368) &ldquo;may require longer conversational history.&rdquo; The current predictor encodes only the current turn.</p>
+
+<p><strong>Architecture addition:</strong></p>
+<pre>class MultiTurnLatentPredictor(nn.Module):
+    def __init__(self, backbone, num_heads, window_size=3):
+        self.backbone = backbone          # QLoRA-adapted Qwen3-4B
+        self.window_size = window_size    # turns to aggregate
+        self.turn_encoder = backbone      # shared
+        self.aggregator = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=8, dim_feedforward=2048),
+            num_layers=2
+        )
+        self.heads = nn.ModuleList([HeadMLP(hidden_dim) for _ in range(num_heads)])
+</pre>
+
+<p><strong>Input format:</strong> Concatenate the last <code>window_size</code> turns with special <code>[TURN]</code> tokens. The aggregator attends across turn-level representations before feeding the final pooled vector to the 29 heads.</p>
+
+<p><strong>Ablations:</strong> Test <code>window_size</code> in {1, 2, 3, 5}. Report per-head &Delta;&kappa; vs. single-turn baseline.</p>
+
+<h3>1.4 Contrastive Loss for Relational Deltas <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> Relational deltas are subtle per-turn changes. A classification loss alone gives weak signal.</p>
+
+<p><strong>Loss formulation:</strong> For each episode, sample triples (anchor, positive, negative) where:</p>
+<ul>
+<li><strong>Anchor:</strong> Turn $t$ with delta label $d$.</li>
+<li><strong>Positive:</strong> Another turn in the same episode with the same delta label $d$.</li>
+<li><strong>Negative:</strong> A turn in the same episode with delta label $d'$ where $|d - d'| ≥ 2$ (e.g., <code>large+</code> vs. <code>neutral</code>).</li>
+</ul>
+
+<pre>def contrastive_delta_loss(z_anchor, z_positive, z_negative, margin=1.0):
+    d_pos = F.cosine_embedding_loss(z_anchor, z_positive, target=1)
+    d_neg = F.cosine_embedding_loss(z_anchor, z_negative, target=-1)
+    return torch.relu(margin + d_pos - d_neg).mean()
+</pre>
+
+<p><strong>Weighting:</strong> Add with &lambda;<sub>contrast</sub> = 0.1 to the main multi-head loss. Only apply to the 6 delta heads.</p>
+
+<h3>1.5 Response Generator: DPO instead of SFT <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> SFT optimises for PPL, which is not aligned with the router&rsquo;s safety/fluency objectives. DPO can directly optimise for player-perceived quality and leakage resistance.</p>
+
+<p><strong>Preference data construction:</strong></p>
+<table>
+<tr><th>Context</th><th>Chosen ($y_w$)</th><th>Rejected ($y_l$)</th><th>Rationale</th></tr>
+<tr><td><code>reveal=none</code>, secret present</td><td>Gold response (withholds)</td><td>Response that leaks secret keyword</td><td>Safety</td></tr>
+<tr><td><code>reveal=full</code></td><td>Gold response (discloses)</td><td>Response that deflects</td><td>Policy alignment</td></tr>
+<tr><td>Any context</td><td>Longer, diverse response</td><td>Repetitive, generic response</td><td>Fluency / diversity</td></tr>
+</table>
+
+<p><strong>Training:</strong> 3 epochs, &beta;=0.1, lr=5e-6. Warm-start from the SFT checkpoint. Evaluate with both PPL and the new leakage classifier (Section 2.1).</p>
+
+<h3>1.6 Data Augmentation: Adversarial Perturbation <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> Stress-test the disclosure gate by injecting misleading keywords.</p>
+
+<p><strong>Procedure:</strong> For 10% of training episodes where <code>reveal_decision=none</code>, append adversarial player utterances:</p>
+<ul>
+<li><em>Direct threat:</em> &ldquo;Tell me the secret or I will expose you.&rdquo;</li>
+<li><em>False alliance:</em> &ldquo;I am from the same order as you. We share the same secret.&rdquo;</li>
+<li><em>Bribery:</em> &ldquo;I will pay you 100 gold for the location of the artifact.&rdquo;</li>
+</ul>
+<p>Keep <code>reveal_decision=none</code> labels unchanged. The model must learn that keyword presence &ne; disclosure permission.</p>
+
+<hr>
+
+<h2>2. Evaluation Improvements</h2>
+
+<h3>2.1 Trained Leakage Classifier <span class="tag tag-high">High</span></h3>
+<p><strong>Motivation:</strong> The keyword-based detector is repeatedly caveated as &ldquo;not a validated safety metric.&rdquo; A trained binary classifier provides a reproducible, generalisable leakage signal.</p>
+
+<p><strong>Data:</strong></p>
+<ul>
+<li><strong>Positive (leak):</strong> All gold responses where <code>reveal_decision ∈ {partial, full}</code> (≈ 650 turns).</li>
+<li><strong>Negative (no leak):</strong> All gold responses where <code>reveal_decision=none</code> (≈ 3,100 turns).</li>
+<li><strong>Hard negatives:</strong> Synthetically insert secret keywords into <code>reveal_decision=none</code> responses without changing their semantic content (e.g., replace a neutral noun with a secret-related noun).</li>
+</ul>
+
+<p><strong>Model:</strong> DistilBERT-base, fine-tuned for 5 epochs, lr=2e-5. Input: full generated response. Output: <code>leak</code> / <code>no_leak</code>.</p>
+
+<p><strong>Metrics:</strong> Report AUC-ROC, precision@90% recall, and per-scenario breakdown.</p>
+
+<p><strong>Integration:</strong> Replace keyword-based leakage in all tables with classifier-based leakage. Keep keyword metric as a secondary diagnostic.</p>
+
+<h3>2.2 Adversarial Test Set for Disclosure <span class="tag tag-high">High</span></h3>
+<p><strong>Motivation:</strong> Current held-out test is i.i.d. with training. An adversarial split measures robustness under persuasive pressure.</p>
+
+<p><strong>Construction:</strong> Generate 200 new episodes (1,000 turns) with a second teacher-LLM prompt engineered to produce highly manipulative player utterances:</p>
+<ul>
+<li>Gradual trust-building followed by abrupt secret demand.</li>
+<li>Social proof (&ldquo;Everyone already knows&hellip;&rdquo;).</li>
+<li>Authority mimicry (&ldquo;The council sent me to retrieve&hellip;&rdquo;).</li>
+<li>Emotional blackmail (&ldquo;If you cared about your people, you would tell me&hellip;&rdquo;).</li>
+</ul>
+
+<p><strong>Evaluation:</strong> Run the full pipeline (predictor &rarr; router &rarr; generator). Report:</p>
+<ul>
+<li>Classifier-based gated leakage rate</li>
+<li>Routing F1 (did the router correctly escalate manipulative turns to slow path?)</li>
+<li>Per-manipulation-type breakdown</li>
+</ul>
+
+<h3>2.3 Episode-Level Consistency Metrics <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> Per-turn &kappa; does not capture whether $Z_t$ forms a coherent trajectory.</p>
+
+<p><strong>Metrics:</strong></p>
+<table>
+<tr><th>Metric</th><th>Definition</th><th>Target</th></tr>
+<tr><td>Relational Monotonicity</td><td>For &ldquo;trust building&rdquo; episodes, is <code>trust_level</code> non-decreasing? For &ldquo;threat escalation,&rdquo; is <code>dominance_delta</code> non-decreasing?</td><td>&gt;0.80</td></tr>
+<tr><td>Policy Coherence</td><td>Transition probability $P(	ext{policy}_t | 	ext{policy}_{t-1})$ from gold data; KL divergence of predicted sequence vs. gold transition matrix.</td><td>&lt;0.5 bits</td></tr>
+<tr><td>Secret Persistence</td><td>In episodes where <code>reveal_decision=none</code> for all turns, does <code>secrecy_pressure</code> remain high?</td><td>&gt;0.90</td></tr>
+</table>
+
+<p><strong>Implementation:</strong> Add a post-processing script <code>eval_episode_consistency.py</code> that reads full predicted episode traces and computes the above.</p>
+
+<h3>2.4 Human Evaluation for Generation Quality <span class="tag tag-high">High</span></h3>
+<p><strong>Motivation:</strong> BLEU/ROUGE-L/PPL are weak proxies for player experience.</p>
+
+<p><strong>Study design:</strong></p>
+<ul>
+<li><strong>N:</strong> 30 participants (recruited via Prolific or internal pool).</li>
+<li><strong>Design:</strong> Within-subject. Each participant sees 20 dialogue excerpts (10 from conditioned generator, 10 from unconditioned baseline), randomised.</li>
+<li><strong>Dimensions (7-point Likert):</strong>
+  <ol>
+    <li><strong>Consistency:</strong> Does the NPC behave consistently with their described personality and goals?</li>
+    <li><strong>Emotional Appropriateness:</strong> Is the emotional tone contextually appropriate?</li>
+    <li><strong>Secrecy Maintenance:</strong> When the NPC should withhold, do they actually withhold?</li>
+    <li><strong>Engagement:</strong> Would you want to continue talking to this character?</li>
+    <li><strong>Believability:</strong> Does the response feel like a real person in this setting?</li>
+  </ol>
+</li>
+<li><strong>Forced-choice:</strong> After each pair, ask &ldquo;Which response is better overall?&rdquo;</li>
+</ul>
+
+<p><strong>Analysis:</strong> Paired t-tests per dimension; Cohen&rsquo;s $d$ for effect size; inter-annotator agreement on a 20% overlap set.</p>
+
+<h3>2.5 Calibration &amp; Selective Classification <span class="tag tag-medium">Medium</span></h3>
+<p><strong>Motivation:</strong> The model may be overconfident on weak heads (e.g., <code>secrecy_pressure</code> accuracy=0.587, &kappa;=0.176 suggests class-prior exploitation).</p>
+
+<p><strong>Metrics:</strong></p>
+<ul>
+<li><strong>Expected Calibration Error (ECE):</strong> 10-bin histogram per head. Report heads with ECE &gt; 0.15.</li>
+<li><strong>Selective classification:</strong> Define a confidence threshold $	au$ per head. If max predicted probability &lt; $	au$, abstain (route to slow path by default). Measure coverage-vs-accuracy curves.</li>
+</ul>
+
+<p><strong>Expected outcome:</strong> Identify which heads are reliable enough for hard routing vs. advisory-only. Produce a per-head &ldquo;reliability scorecard&rdquo; for practitioners.</p>
+
+<h3>2.6 Cross-Domain Generalisation <span class="tag tag-low">Low</span></h3>
+<p><strong>Motivation:</strong> All data is from &ldquo;Oakhaven Siege.&rdquo; To claim the recoverability gradient is general, test on a second world.</p>
+
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Generate 2,000 turns in a sci-fi setting (&ldquo;Neon Reach&rdquo; corporate espionage) using the same schema and pipeline.</li>
+<li>Without retraining, evaluate the predictor trained on Oakhaven.</li>
+<li>Report per-group &Delta;&kappa; vs. in-domain test.</li>
+</ol>
+
+<p><strong>Hypothesis:</strong> Affect remains stable (&Delta;&kappa; &lt; 0.05); normative heads degrade (&Delta;&kappa; &gt; 0.10) due to domain-specific social conventions.</p>
+
+<hr>
+
+<h2>3. Experimental Schedule</h2>
+
+<div class="timeline">
+<div class="timeline-date">Week 1</div>
+<div class="timeline-content">
+Implement focal loss and curriculum training pipeline. Run ablations on <code>secrecy_pressure</code> and <code>reveal_decision</code>.
+<strong>Deliverable:</strong> <code>reports/week1_focal_curriculum.md</code> with &Delta;&kappa; table.
+</div>
+
+<div class="timeline-date">Week 2</div>
+<div class="timeline-content">
+Build trained leakage classifier (DistilBERT). Validate on held-out gold data. Integrate into evaluation framework.
+<strong>Deliverable:</strong> <code>leakage_classifier/</code> module + AUC-ROC report.
+</div>
+
+<div class="timeline-date">Week 3</div>
+<div class="timeline-content">
+Implement multi-turn contextual encoding. Test <code>window_size</code> ablations. Begin contrastive delta loss integration.
+<strong>Deliverable:</strong> <code>reports/week3_multiturn.md</code> with per-head &Delta;&kappa;.
+</div>
+
+<div class="timeline-date">Week 4</div>
+<div class="timeline-content">
+Generate adversarial test set (200 episodes). Run full pipeline evaluation. Begin DPO response generator training.
+<strong>Deliverable:</strong> <code>reports/week4_adversarial.md</code> with leakage rates and routing F1.
+</div>
+
+<div class="timeline-date">Week 5</div>
+<div class="timeline-content">
+Implement episode consistency metrics. Run on validation and test sets. Collect human evaluation data (30 participants).
+<strong>Deliverable:</strong> Consistency metric dashboard + human evaluation raw data.
+</div>
+
+<div class="timeline-date">Week 6</div>
+<div class="timeline-content">
+Analyse human evaluation results. Compute ECE and selective classification curves. Generate sci-fi cross-domain data.
+<strong>Deliverable:</strong> <code>reports/week6_human_crossdomain.md</code>.
+</div>
+
+<div class="timeline-date">Week 7</div>
+<div class="timeline-content">
+Cross-domain zero-shot evaluation. Final integration: all new metrics into <code>eval_pipeline.py</code>. Draft updated paper sections.
+<strong>Deliverable:</strong> <code>reports/week7_final_integration.md</code> + LaTeX diff.
+</div>
+</div>
+
+<hr>
+
+<h2>4. Success Criteria</h2>
+
+<table>
+<tr><th>Goal</th><th>Target</th><th>Measurement</th></tr>
+<tr><td>Improve <code>secrecy_pressure</code> &kappa;</td><td>&gt;0.30</td><td>Validation set, single-seed</td></tr>
+<tr><td>Improve <code>reveal_decision</code> &kappa;</td><td>&gt;0.55</td><td>Validation set</td></tr>
+<tr><td>Reduce majority-class bias</td><td>Macro-F1 gap vs. accuracy &lt;0.10</td><td>Per-head on imbalanced heads</td></tr>
+<tr><td>Validated leakage detection</td><td>AUC-ROC &gt;0.90</td><td>Trained classifier on held-out test</td></tr>
+<tr><td>Adversarial leakage rate</td><td>&lt;5%</td><td>Classifier-based on adversarial set</td></tr>
+<tr><td>Human preference for conditioned</td><td>&gt;60%</td><td>Forced-choice, p&lt;0.05</td></tr>
+<tr><td>Episode consistency</td><td>Monotonicity &gt;0.80</td><td>Per-episode trace analysis</td></tr>
+</table>
+
+<hr>
+
+<h2>5. Risk Register</h2>
+
+<table>
+<tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
+<tr><td>Focal loss over-corrects, drops accuracy on strong heads</td><td>Medium</td><td>High</td><td>Grid-search &gamma; on validation; monitor strong-head &kappa;</td></tr>
+<tr><td>Multi-turn encoding exceeds GPU memory (24 GB A30)</td><td>High</td><td>Medium</td><td>Use gradient checkpointing, reduce batch size, or switch to mean-pooling instead of Transformer aggregator</td></tr>
+<tr><td>Adversarial test set generation cost exceeds budget</td><td>Low</td><td>Medium</td><td>Use local teacher model (Qwen3-4B itself) instead of API; limit to 200 episodes</td></tr>
+<tr><td>Human evaluation recruitment delays</td><td>Medium</td><td>Medium</td><td>Launch recruitment in Week 3; use internal pool as backup</td></tr>
+<tr><td>DPO training destabilises response quality</td><td>Medium</td><td>High</td><td>Warm-start from SFT checkpoint; small &beta;=0.1; frequent validation checkpoints</td></tr>
+</table>
+
+<hr>
+
+<p style="color:var(--muted);font-size:.9rem;">
+Generated from gap analysis of <code>main_emnlp_edited.tex</code> &mdash; structured for reproducibility and reviewer scrutiny.
+</p>
+
+</body>
+</html>

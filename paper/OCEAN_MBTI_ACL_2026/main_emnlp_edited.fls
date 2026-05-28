@@ -316,11 +316,6 @@ INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmr8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8t.tfm
-INPUT ./figures/pipeline_diagram.pdf
-INPUT ./figures/pipeline_diagram.pdf
-INPUT ./figures/pipeline_diagram.pdf
-INPUT ./figures/pipeline_diagram.pdf
-INPUT ./figures/pipeline_diagram.pdf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmb8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmb8r.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmr8t.vf
@@ -329,38 +324,48 @@ INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmr8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmr8r.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmri8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8r.tfm
+INPUT ./figures/technical_architecture_with_predicted_social_state.png
+INPUT ./figures/technical_architecture_with_predicted_social_state.png
+INPUT ./figures/technical_architecture_with_predicted_social_state.png
+INPUT ./figures/technical_architecture_with_predicted_social_state.png
+INPUT ./figures/technical_architecture_with_predicted_social_state.png
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmr8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmr8r.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/public/inconsolata/t1-zi4r-0.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmb8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmb8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmb8r.tfm
-INPUT ./figures/latent_group_scores.pdf
-INPUT ./figures/latent_group_scores.pdf
-INPUT ./figures/latent_group_scores.pdf
-INPUT ./figures/latent_group_scores.pdf
-INPUT ./figures/latent_group_scores.pdf
+INPUT ./figures/latent_social_state_prediction_by_group.png
+INPUT ./figures/latent_social_state_prediction_by_group.png
+INPUT ./figures/latent_social_state_prediction_by_group.png
+INPUT ./figures/latent_social_state_prediction_by_group.png
+INPUT ./figures/latent_social_state_prediction_by_group.png
 INPUT ./main_emnlp_edited.bbl
 INPUT ./main_emnlp_edited.bbl
 INPUT main_emnlp_edited.bbl
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmri8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8r.tfm
-INPUT ./figures/architecture_stack.pdf
-INPUT ./figures/architecture_stack.pdf
-INPUT ./figures/architecture_stack.pdf
-INPUT ./figures/architecture_stack.pdf
-INPUT ./figures/architecture_stack.pdf
-INPUT ./figures/data_flow.pdf
-INPUT ./figures/data_flow.pdf
-INPUT ./figures/data_flow.pdf
-INPUT ./figures/data_flow.pdf
-INPUT ./figures/data_flow.pdf
-INPUT ./figures/best_model_diagram.pdf
-INPUT ./figures/best_model_diagram.pdf
-INPUT ./figures/best_model_diagram.pdf
-INPUT ./figures/best_model_diagram.pdf
-INPUT ./figures/best_model_diagram.pdf
+INPUT ./figures/flowchart_of_llm_pipeline_stages.png
+INPUT ./figures/flowchart_of_llm_pipeline_stages.png
+INPUT ./figures/flowchart_of_llm_pipeline_stages.png
+INPUT ./figures/flowchart_of_llm_pipeline_stages.png
+INPUT ./figures/flowchart_of_llm_pipeline_stages.png
+INPUT ./figures/pipeline2.png
+INPUT ./figures/pipeline2.png
+INPUT ./figures/pipeline2.png
+INPUT ./figures/pipeline2.png
+INPUT ./figures/pipeline2.png
+INPUT ./figures/Data flow from scenario specifications.png
+INPUT ./figures/Data flow from scenario specifications.png
+INPUT ./figures/Data flow from scenario specifications.png
+INPUT ./figures/Data flow from scenario specifications.png
+INPUT ./figures/Data flow from scenario specifications.png
+INPUT ./figures/ConditionalDialogue soft-prefix.png
+INPUT ./figures/ConditionalDialogue soft-prefix.png
+INPUT ./figures/ConditionalDialogue soft-prefix.png
+INPUT ./figures/ConditionalDialogue soft-prefix.png
+INPUT ./figures/ConditionalDialogue soft-prefix.png
 INPUT ./figures/slm_ppl_comparison.pdf
 INPUT ./figures/slm_ppl_comparison.pdf
 INPUT ./figures/slm_ppl_comparison.pdf
@@ -379,15 +384,15 @@ INPUT ./figures/qwen_latent_training.pdf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/public/inconsolata/t1-zi4r-0.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmr8t.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmb8t.tfm
-INPUT ./figures/latent_head_heatmap.pdf
-INPUT ./figures/latent_head_heatmap.pdf
-INPUT ./figures/latent_head_heatmap.pdf
-INPUT ./figures/latent_head_heatmap.pdf
-INPUT ./figures/latent_head_heatmap.pdf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmb8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmb8r.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/vf/adobe/times/ptmr8t.vf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmr8r.tfm
+INPUT ./figures/latent_head_heatmap.pdf
+INPUT ./figures/latent_head_heatmap.pdf
+INPUT ./figures/latent_head_heatmap.pdf
+INPUT ./figures/latent_head_heatmap.pdf
+INPUT ./figures/latent_head_heatmap.pdf
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/zapfding/pzdr.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/zapfding/pzdr.tfm
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/adobe/times/ptmri8t.tfm
