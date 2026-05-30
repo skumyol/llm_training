@@ -227,22 +227,55 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
     run_name = cfg["mlflow"].get("run_name", "latent_train")
 
+    # Early stopping configuration
+    early_stopping_patience = train_cfg.get("early_stopping_patience", 0)
+    early_stopping_counter = 0
+
+    # Resume from checkpoint if specified
+    resume_from = cfg.get("resume_from")
+    start_epoch = 1
+    global_step = 0
+    if resume_from and Path(resume_from).exists():
+        print(f"Resuming from checkpoint: {resume_from}")
+        save_predictor(predictor, str(resume_from), load=True)
+        if jepa_head is not None:
+            jepa_state_file = Path(resume_from) / "jepa_head.pt"
+            if jepa_state_file.exists():
+                jepa_state = torch.load(jepa_state_file)
+                jepa_head.load_state_dict(jepa_state["state_dict"])
+        # Try to load training state
+        state_file = Path(resume_from) / "training_state.pt"
+        if state_file.exists():
+            state = torch.load(state_file)
+            optimizer.load_state_dict(state["optimizer"])
+            scheduler.load_state_dict(state["scheduler"])
+            start_epoch = state["epoch"] + 1
+            global_step = state["global_step"]
+            best_metric_value = state.get("best_metric_value", None)
+            early_stopping_counter = state.get("early_stopping_counter", 0)
+            print(f"Resumed from epoch {start_epoch}, global_step {global_step}")
+        else:
+            best_metric_value = None
+            early_stopping_counter = 0
+    else:
+        best_metric_value = None
+        early_stopping_counter = 0
+
     with mlflow.start_run(run_name=run_name):
         log_config(cfg)
         mlflow.log_param("model_name", model_name)
         mlflow.log_param("n_train", len(train_ds))
         mlflow.log_param("n_val", len(val_ds))
+        mlflow.log_param("early_stopping_patience", early_stopping_patience)
 
-        best_metric_value = None
         best_metric_name = train_cfg.get("metric_for_best_model", "val/response_policy_f1")
         # Determine if higher is better (True for acc/f1, False for loss)
         higher_is_better = "loss" not in best_metric_name
-        global_step = 0
         last_val_metrics: dict = {}
 
         print(f"Best model selection: {best_metric_name} (higher_is_better={higher_is_better})")
 
-        for epoch in range(1, epochs + 1):
+        for epoch in range(start_epoch, epochs + 1):
             predictor.train()
             if jepa_head is not None:
                 jepa_head.train()
@@ -337,6 +370,26 @@ def train_latent(config_path: str, debug: bool = False) -> None:
                 _save_jepa_head(jepa_head, best_dir, jepa_cfg)
                 mlflow.log_metric(f"val/best_{metric_key}", best_metric_value, step=epoch)
                 print(f"  → New best model ({best_metric_name}={best_metric_value:.4f}) saved to {best_dir}")
+                early_stopping_counter = 0
+            else:
+                early_stopping_counter += 1
+                if early_stopping_patience > 0 and early_stopping_counter >= early_stopping_patience:
+                    print(f"Early stopping triggered after {early_stopping_counter} epochs without improvement")
+                    break
+
+            # Save checkpoint for resume
+            checkpoint_dir = output_dir / f"checkpoint_epoch_{epoch}"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            save_predictor(predictor, str(checkpoint_dir))
+            _save_jepa_head(jepa_head, checkpoint_dir, jepa_cfg)
+            torch.save({
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "epoch": epoch,
+                "global_step": global_step,
+                "best_metric_value": best_metric_value,
+                "early_stopping_counter": early_stopping_counter,
+            }, checkpoint_dir / "training_state.pt")
 
         save_predictor(predictor, str(output_dir / "final"))
         _save_jepa_head(jepa_head, output_dir / "final", jepa_cfg)

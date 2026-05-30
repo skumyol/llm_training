@@ -201,6 +201,9 @@ class SFTDataset(Dataset):
         max_seq_len: int = 2048,
         mask_secret_spans: bool = False,
         secret_strings_file: Optional[str] = None,
+        conditioning_mode: str = "gold",
+        predicted_state_file: Optional[str] = None,
+        state_dropout_prob: float = 0.0,
     ):
         """
         Args:
@@ -211,10 +214,18 @@ class SFTDataset(Dataset):
             secret_strings_file: Optional JSON mapping episode_id -> list[str] of
                 secret strings. If absent, only per-record `secret_spans` /
                 `secret_strings` fields are used.
+            conditioning_mode: "gold" (use gold states from input field) or "predicted"
+                (use predicted states from predicted_state_file).
+            predicted_state_file: Optional JSON mapping (episode_id, turn_idx) to
+                predicted latent state dict. Used when conditioning_mode="predicted".
+            state_dropout_prob: Probability of dropping each latent state head during
+                training to improve robustness. Only applies when conditioning_mode="predicted".
         """
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.mask_secret_spans = bool(mask_secret_spans)
+        self.conditioning_mode = conditioning_mode
+        self.state_dropout_prob = state_dropout_prob
         self.records: list[dict] = []
         with open(jsonl_path, "r") as f:
             for line in f:
@@ -233,8 +244,87 @@ class SFTDataset(Dataset):
                 if isinstance(val, list):
                     self._secret_strings_by_episode[str(ep)] = [str(s) for s in val if s]
 
+        # Load predicted states if provided
+        self._predicted_states: dict[tuple[str, int], dict] = {}
+        if predicted_state_file and Path(predicted_state_file).exists():
+            with open(predicted_state_file, "r") as f:
+                raw = json.load(f)
+            # Expected format: {"episode_id_turn_idx": {...state dict...}}
+            for key, state in raw.items():
+                # Parse key as "episode_id_turn_idx"
+                parts = key.rsplit("_", 1)
+                if len(parts) == 2:
+                    episode_id, turn_idx = parts
+                    try:
+                        turn_idx_int = int(turn_idx)
+                        self._predicted_states[(str(episode_id), turn_idx_int)] = state
+                    except ValueError:
+                        # Skip if turn_idx is not an integer
+                        pass
+
     def __len__(self) -> int:
         return len(self.records)
+
+    def _apply_state_dropout(self, state: dict) -> dict:
+        """Randomly drop latent state heads to improve robustness.
+        
+        Args:
+            state: Latent state dict with keys like C_t, A_t, M_t, R_t, N_t, D_t
+        
+        Returns:
+            State dict with some heads randomly dropped (set to empty or None)
+        """
+        if self.state_dropout_prob == 0.0:
+            return state
+        
+        dropped_state = {}
+        for key, value in state.items():
+            if random.random() < self.state_dropout_prob:
+                # Drop this head by setting to empty dict or None
+                if isinstance(value, dict):
+                    dropped_state[key] = {}
+                else:
+                    dropped_state[key] = None
+            else:
+                dropped_state[key] = value
+        return dropped_state
+
+    def _state_dict_to_string(self, state: dict) -> str:
+        """Convert a latent state dict to string format matching packager output.
+        
+        Args:
+            state: Latent state dict with keys C_t, A_t, M_t, R_t, N_t, D_t
+        
+        Returns:
+            Formatted string representation of the state
+        """
+        C_t = state.get("C_t", {})
+        A_t = state.get("A_t", {})
+        M_t = state.get("M_t", {})
+        R_t = state.get("R_t", {})
+        N_t = state.get("N_t", {})
+        D_t = state.get("D_t", {})
+
+        # Format stance dimensions
+        stance_dims = ["trust", "intimacy", "power", "conflict"]
+        stance_parts = []
+        for dim in stance_dims:
+            entry = R_t.get(dim, {})
+            l = entry.get("level", "N")
+            d = entry.get("delta", "0")
+            stance_parts.append(f"{dim}={l}({d})")
+
+        lines = [
+            "<latent_state>",
+            f"C_t: dialogue_act={C_t.get('dialogue_act', [])}  tone={C_t.get('tone', '')}  risk={C_t.get('risk_type', '')}",
+            f"A_t: valence={A_t.get('valence', '')}  arousal={A_t.get('arousal', '')}  threat={A_t.get('threat', '')}  control={A_t.get('control', '')}",
+            f"M_t: player_intent={M_t.get('player_intent', '')}  player_knowledge={M_t.get('player_knowledge', '')}  credibility={M_t.get('player_credibility', '')}",
+            f"R_t: {' '.join(stance_parts)}",
+            f"N_t: duty={N_t.get('duty_pressure', '')}  secrecy={N_t.get('secrecy_pressure', '')}  face={N_t.get('face_pressure', '')}  conflict={N_t.get('value_conflict', '')}",
+            f"D_t: policy={D_t.get('response_policy', '')}  reveal={D_t.get('reveal_decision', '')}  repair={D_t.get('repair_strategy', '')}",
+            "</latent_state>",
+        ]
+        return "\n".join(lines)
 
     def _collect_secret_strings(self, record: dict) -> list[str]:
         ep = str(record.get("episode_id", ""))
@@ -298,7 +388,32 @@ class SFTDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         record = self.records[idx]
-        prompt_text = record["input"] + "\n"
+        
+        # Determine prompt text based on conditioning mode
+        if self.conditioning_mode == "predicted":
+            episode_id = str(record.get("episode_id", ""))
+            turn_idx = record.get("turn_idx", 0)
+            state_key = (episode_id, turn_idx)
+            
+            if state_key in self._predicted_states:
+                # Use predicted state
+                predicted_state = self._predicted_states[state_key]
+                # Apply state dropout for robustness
+                if self.state_dropout_prob > 0.0:
+                    predicted_state = self._apply_state_dropout(predicted_state)
+                
+                # Build prompt with predicted state
+                # For now, we'll use a simple string representation
+                # In production, this should use the same format as the packager
+                state_str = self._state_dict_to_string(predicted_state)
+                prompt_text = state_str + "\n"
+            else:
+                # Fall back to gold state if predicted not available
+                prompt_text = record["input"] + "\n"
+        else:
+            # Use gold state (default)
+            prompt_text = record["input"] + "\n"
+        
         full_text = prompt_text + record["target"]
 
         encoding = self.tokenizer(
@@ -333,7 +448,9 @@ class SFTDataset(Dataset):
             "labels": labels,
             "prompt_len": torch.tensor(prompt_len, dtype=torch.long),
             "episode_id": record.get("episode_id", ""),
+            "turn_idx": record.get("turn_idx", 0),
             "scenario_type": record.get("scenario_type", ""),
+            "secret_strings": record.get("secret_strings", []),
         }
 
 

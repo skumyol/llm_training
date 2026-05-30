@@ -6,6 +6,7 @@ import yaml
 from tqdm import tqdm
 
 from src.metrics_report import log_metrics_to_mlflow, write_metrics_bundle
+from src.eval.selective_router import SelectiveRouter, should_route_slow_confident
 
 
 SLOW_PATH_TRIGGERS = {
@@ -49,6 +50,9 @@ def eval_routing(config_path: str) -> dict:
 
     setup_mlflow(cfg["mlflow"]["tracking_uri"])
     mlflow.set_experiment(cfg["mlflow"]["experiment_name"])
+
+    use_selective_router = cfg.get("selective_router", {}).get("enabled", False)
+    selective_router = SelectiveRouter.from_config(cfg) if use_selective_router else None
 
     test_trace = cfg["data"].get("test_trace_file")
     if not test_trace or not Path(test_trace).exists():
@@ -121,7 +125,20 @@ def eval_routing(config_path: str) -> dict:
                     for key in ["value_conflict", "secrecy_pressure"]:
                         if key in pred_rec:
                             pred_N_t[key] = pred_rec[key]
-                pred_slow = should_route_slow(pred_D_t, pred_N_t)
+
+                if use_selective_router and selective_router is not None:
+                    # Try to extract confidences from predicted record
+                    confidences = {}
+                    for key in ["response_policy", "reveal_decision", "value_conflict", "secrecy_pressure"]:
+                        if f"{key}_conf" in pred_rec:
+                            confidences[key] = pred_rec[f"{key}_conf"]
+                    pred_slow, route_log = selective_router.should_route_slow(
+                        pred_D_t, pred_N_t, confidences=confidences if confidences else None
+                    )
+                    # Store log for analysis (optional)
+                    record["_routing_log"] = route_log
+                else:
+                    pred_slow = should_route_slow(pred_D_t, pred_N_t)
             else:
                 pred_slow = should_route_slow(D_t, N_t)
 
@@ -151,6 +168,7 @@ def eval_routing(config_path: str) -> dict:
         "n_trace_records":    trace_records,
         "missing_predictions": missing_predictions,
         "prediction_coverage": total / max(1, trace_records),
+        "selective_router":  use_selective_router,
     }
 
     with open(results_dir / "routing_eval_metrics.json", "w") as f:
@@ -178,6 +196,8 @@ def _gold_slow_path(D_t: dict, N_t: dict, record: dict) -> bool:
 def _print_summary(metrics: dict, thresholds: dict) -> None:
     mode = metrics.get("routing_mode", "gold")
     print(f"\n=== Routing Evaluation Summary (mode={mode}) ===")
+    if metrics.get("selective_router"):
+        print(f"  [Selective Router: ENABLED]")
     fp_thresh = thresholds.get("router_false_positive_rate", 0.15)
     fp_rate   = metrics.get("false_positive_rate", 0.0)
     status = "PASS" if fp_rate <= fp_thresh else "FAIL"

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deeper Experiment Plan for Structured NPC Dialogue</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 0.5em;
+        }
+        h2 {
+            color: #444;
+            margin-top: 1.2em;
+        }
+        h3 {
+            color: #555;
+            margin-top: 1em;
+        }
+        ul {
+            list-style-type: disc;
+            margin-left: 20px;
+        }
+        li {
+            margin-bottom: 0.5em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Deeper Experiment Plan for Structured NPC Dialogue</h1>
+        <p>
+            The following plan outlines deeper improvements to the structured state pipeline for NPC dialogue,
+            expanding beyond the submission-focused additions. These experiments are intended for a
+            subsequent phase of research and are more ambitious in scope.
+        </p>
+
+        <h2>A. Multi-Turn Contextual State Modelling</h2>
+        <p>
+            A key limitation of the current pipeline is that each head predicts its labels from a single-turn
+            context, despite relational factors such as familiarity, dominance and trust depending on the
+            dialogue history. Multi-turn modelling addresses this by encoding and updating the social state across
+            several turns.
+        </p>
+        <h3>Data Requirements</h3>
+        <ul>
+            <li>Collect or generate multi-turn conversations (3–5 turns) where the NPC interacts with the player over time.</li>
+            <li>Label the relational features (familiarity, dominance, trust, secrecy pressure) after each turn along with the correct reveal decision.</li>
+            <li>Include episodes where trust builds slowly and then players attempt to extract secrets, capturing dynamic changes in the state.</li>
+        </ul>
+        <h3>Model Architecture</h3>
+        <ul>
+            <li>Replace the single-turn encoder with a recurrent model (e.g., GRU or Transformer encoder) that processes sequences of NPC–player turns.</li>
+            <li>Maintain a latent state representing the current social relationship; update this state after each turn.</li>
+            <li>Use the latent state as input to each head (response policy, reveal decision, relational deltas).</li>
+            <li>Investigate gating mechanisms to control how much new evidence updates the social state.</li>
+        </ul>
+        <h3>Evaluation</h3>
+        <ul>
+            <li>Compare the multi-turn model to the single-turn baseline on relational delta prediction accuracy.</li>
+            <li>Assess whether reveal decisions and routing become more reliable when conditioned on the updated state.</li>
+            <li>Analyse whether multi-turn encoding reduces spurious familiarity/dominance fluctuations between dialogue turns.</li>
+        </ul>
+
+        <h2>B. Focal Loss &amp; Curriculum Training</h2>
+        <p>
+            Rare events such as secret disclosure and high pressure states are under-represented in the data.
+            Focal loss and curriculum learning can mitigate class imbalance and improve robustness on hard cases.
+        </p>
+        <h3>Focal Loss</h3>
+        <ul>
+            <li>Incorporate the focal loss with tunable parameter \(\gamma\) for the reveal decision and secrecy pressure heads.</li>
+            <li>Tune \(\gamma\) to emphasize misclassified minority examples; start with values in {1, 2, 5}.</li>
+            <li>Monitor whether focal loss improves recall for rare events without significantly degrading precision.</li>
+        </ul>
+        <h3>Curriculum Learning</h3>
+        <ul>
+            <li>Organize training episodes by difficulty—start with in-distribution, single-intent interactions, then gradually introduce adversarial manipulations (authority mimicry, bribery, emotional blackmail).</li>
+            <li>Evaluate whether gradually increasing difficulty leads to more stable training and better performance on hard test cases.</li>
+            <li>Experiment with different curriculum schedules (e.g., linear warm-up, exponential mixture) and measure convergence speed.</li>
+        </ul>
+
+        <h2>C. Contrastive Loss for Relational Deltas</h2>
+        <p>
+            The relational delta heads (familiarity and dominance changes) sometimes learn spurious correlations.
+            A contrastive objective can encourage the model to learn meaningful representations by bringing
+            contexts with similar relational changes closer in embedding space and pushing apart dissimilar contexts.
+        </p>
+        <h3>Loss Formulation</h3>
+        <ul>
+            <li>Create positive pairs by sampling two contexts whose gold relational deltas are identical (e.g., both reflect an increase in familiarity).</li>
+            <li>Create negative pairs by sampling contexts with different relational deltas.</li>
+            <li>Use an InfoNCE or triplet loss on the embeddings just before the classification layer.</li>
+            <li>Combine the contrastive loss with the classification loss to jointly optimize accuracy and representation quality.</li>
+        </ul>
+        <h3>Evaluation</h3>
+        <ul>
+            <li>Report classification accuracy for relational delta prediction with and without contrastive loss.</li>
+            <li>Perform dimensionality reduction (e.g., t-SNE) on the learned embeddings to visualize clustering by relational delta.</li>
+            <li>Measure cluster cohesion and separation metrics to quantify whether similar deltas group together more tightly.</li>
+        </ul>
+
+        <h2>D. Direct Preference Optimization (DPO) for Response Generation</h2>
+        <p>
+            The current generator relies on deterministic routing and sampling from a base language model. To produce
+            more natural and ethically aligned responses, fine-tune the generator using Direct Preference Optimization
+            (DPO), which directly optimizes for preferred responses without reward models.
+        </p>
+        <h3>Data Collection</h3>
+        <ul>
+            <li>Gather pairwise human preferences on generated responses: ask annotators to choose the better response between baseline and alternative outputs for a given context.</li>
+            <li>Label ties when neither response is preferred.</li>
+            <li>Ensure the dataset includes examples across different manipulation types and NPC roles.</li>
+        </ul>
+        <h3>DPO Training</h3>
+        <ul>
+            <li>Use the methodology of DPO: compute the probability ratio between preferred and dispreferred responses according to the base model.</li>
+            <li>Minimize the negative log of the preference-weighted ratios to adjust the generator's parameters.</li>
+            <li>Start with small learning rates to avoid catastrophic forgetting and fine-tune for a few epochs.</li>
+        </ul>
+        <h3>Evaluation</h3>
+        <ul>
+            <li>Compare generation quality metrics (BLEU, ROUGE, Distinct-n, perplexity) before and after DPO.</li>
+            <li>Conduct a human evaluation to verify whether DPO-trained responses are preferred over baseline in terms of believability, secrecy maintenance and emotional appropriateness.</li>
+            <li>Check that DPO training does not increase leakage—combine with the leakage classifier from earlier.</li>
+        </ul>
+
+        <h2>E. Cross-Domain Generalisation Experiments</h2>
+        <p>
+            To demonstrate that the structured state approach is not limited to a single fantasy world, conduct experiments on
+            additional domains (e.g., science fiction, historical, modern settings). This tests whether the heads and router
+            generalize across NPC profiles and world dynamics.
+        </p>
+        <h3>Domain Selection &amp; Data</h3>
+        <ul>
+            <li>Define 2–3 new game domains with distinct lore and social dynamics, such as a cyberpunk city or medieval court.</li>
+            <li>Generate new dialogue corpora per domain, ensuring each includes secrets, roles and relational dynamics.</li>
+            <li>Label the same latent heads (response policy, reveal decision, relational deltas) on these new corpora.</li>
+        </ul>
+        <h3>Transfer Strategies</h3>
+        <ul>
+            <li>Train the model on the original domain and evaluate zero-shot performance on new domains to measure direct transfer.</li>
+            <li>Fine-tune the model on small amounts of new-domain data to test few-shot adaptability.</li>
+            <li>Explore domain-adaptive pretraining: continue language model pretraining on domain-specific corpora before fine-tuning the heads.</li>
+        </ul>
+        <h3>Evaluation Metrics</h3>
+        <ul>
+            <li>Report cross-domain accuracy and F1 for each head separately.</li>
+            <li>Measure cross-domain gating decisions and leakage rates.</li>
+            <li>Analyse qualitative differences in errors across domains to identify domain-specific challenges.</li>
+        </ul>
+
+        <h2>F. Additional Analyses and Metrics</h2>
+        <p>
+            Beyond the core experiments, further analyses can provide deeper insights into model behaviour and fairness.
+        </p>
+        <h3>Calibration Under Adversarial Conditions</h3>
+        <ul>
+            <li>Measure calibration error (ECE) on adversarial test sets to see if the model remains reliable under manipulative conditions.</li>
+            <li>Compute coverage vs. accuracy curves for selective routing when adversarial examples are prevalent.</li>
+        </ul>
+        <h3>Fairness Across NPC Profiles</h3>
+        <ul>
+            <li>Check whether certain NPC archetypes (e.g., merchant vs. guard) experience higher leakage or misclassification rates.</li>
+            <li>If disparities exist, investigate adjusting training data or loss weighting to mitigate them.</li>
+        </ul>
+        <h3>Robustness to Prompt Variations</h3>
+        <ul>
+            <li>Test the model on paraphrased or off-distribution player utterances to ensure robustness to linguistic diversity.</li>
+            <li>Include morphological variants, synonyms and colloquial phrases in adversarial sets.</li>
+        </ul>
+
+        <h2>Overall Timeline</h2>
+        <p>
+            Given the increased scope, a staged approach is recommended. An approximate timeline might be:
+        </p>
+        <ul>
+            <li><strong>Months 1–2:</strong> Multi-turn contextual modelling dataset creation, model development and evaluation.</li>
+            <li><strong>Months 3–4:</strong> Implement focal loss, curriculum training and contrastive loss; perform ablation studies.</li>
+            <li><strong>Months 5–6:</strong> Collect preference data and apply DPO fine-tuning; run comprehensive human evaluations.</li>
+            <li><strong>Months 7–8:</strong> Prepare new domains and run cross-domain transfer experiments; analyse fairness and robustness metrics.</li>
+            <li><strong>Month 9:</strong> Consolidate results, draw cross-cutting insights and draft the next paper.</li>
+        </ul>
+
+        <p>
+            These deeper experiments expand on the submission-focused improvements by tackling long-term challenges in
+            structured NPC dialogue: modelling temporal context, addressing data imbalance, learning richer relational
+            representations, aligning generation with human preferences, and demonstrating domain transferability. They
+            would form the foundation for a more comprehensive research paper or follow-up publication.
+        </p>
+    </div>
+</body>
+</html>
