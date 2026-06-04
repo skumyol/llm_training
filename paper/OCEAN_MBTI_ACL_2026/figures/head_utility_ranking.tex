@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\caption{Head utility ranking by operational importance ($n{=}683$ val turns). Ranked by composite score: $\Delta$ routing F1 + 0.5 $\times$ (unsafe FP reduction). Critical heads ($\Delta$F1${>}0.05$) are essential for routing; Low heads can be dropped without degrading safety.}
+\label{tab:head_utility_ranking}
+\small
+\begin{tabular}{@{}rlrrrrl@{}}
+\toprule
+\textbf{Rank} & \textbf{Head} & \textbf{Routing F1} & \textbf{$\Delta$F1} & \textbf{Unsafe FP} & \textbf{$\Delta$Unsafe} & \textbf{Importance} \\
+\midrule
+1 & secrecy\_pressure    & 0.788 & +0.116 & 0.113 & +0.061 & \textbf{Critical} \\
+2 & reveal\_decision     & 0.710 & +0.038 & 0.155 & +0.019 & High \\
+3 & response\_policy     & 0.691 & +0.019 & 0.164 & +0.010 & Medium \\
+4 & value\_conflict      & 0.687 & +0.015 & 0.173 & +0.001 & Medium \\
+\midrule
+\multicolumn{2}{l}{\textbf{Baseline} (no mask)} & 0.672 & --- & 0.174 & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\caption{Statistical significance of decision-card effects (bootstrap $n{=}1{,}000$). $^*p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$, ns = not significant.}
+\label{tab:significance}
+\small
+\begin{tabular}{@{}lrrrrc@{}}
+\toprule
+\textbf{Metric} & \textbf{$\Delta$} & \textbf{95\% CI} & \textbf{$p$-value} & \textbf{Sig.} \\
+\midrule
+ROUGE-L & -0.0557 & [-0.0691, -0.0423] & 0.012 & $^{*}$ \\
+Policy consistency & +0.0499 & [+0.0057, +0.1013] & 0.044 & $^{*}$ \\
+Secret leakage & +0.0000 & [+0.0000, +0.0000] & 1.000 & ns \\
+Contradiction rate & +0.0000 & [+0.0000, +0.0000] & 1.000 & ns \\
+Over-disclosure & -0.0013 & [-0.0084, +0.0043] & 0.693 & ns \\
+Under-disclosure & +0.0288 & [-0.0085, +0.0697] & 0.257 & ns \\
+\bottomrule
+\end{tabular}
+\end{table}

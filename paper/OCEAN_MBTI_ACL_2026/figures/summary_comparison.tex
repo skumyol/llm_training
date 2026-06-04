@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\caption{Summary comparison across all systems ($n{=}683$ val turns). Routing metrics (F1, unsafe FP, cost) apply to predictor+router pipeline; generation metrics (policy consistency, over-disclosure, ROUGE-L) apply to response quality.}
+\label{tab:summary_comparison}
+\small
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{System} & \textbf{Routing F1} & \textbf{Unsafe FP} & \textbf{Slow-path} & \textbf{Cost (5:1)} & \textbf{Policy Cons.} & \textbf{Over-disl.} & \textbf{ROUGE-L} \\
+\midrule
+Oracle (gold 29D) & 1.000 & 0.000 & 0.548 & 0.000 & --- & --- & --- \\
+Gold-head oracle (4 heads) & 0.893 & 0.061 & 0.529 & 0.183 & --- & --- & --- \\
+Predicted 29D (current) & 0.672 & 0.174 & 0.543 & 1.051 & 0.735 & 0.003 & 0.126 \\
+4-head retrained (M1) & 0.697 & 0.003 & 0.997 & 0.477 & --- & --- & --- \\
+Decision card (compressed) & --- & --- & --- & --- & 0.850 & 0.002 & 0.080 \\
+\bottomrule
+\end{tabular}
+\end{table*}
