@@ -6,6 +6,7 @@ Start here:
 
 - `docs/source/technical_paper.md` - repo-grounded technical overview.
 - `docs/source/research_status.md` - evidence ledger for paper claims and evaluation gaps.
+- `docs/source/experiment_registry.md` - canonical map from scripts to experiments, results, and paper status.
 - `docs/source/experiment_results_report.md` - current result reconciliation and next remote batch checklist.
 - `docs/source/eval_plan.md` - canonical evaluation contract and upgrade plan.
 - `docs/source/model_registry.md` - generated architecture, hyperparameter, and data registry.
