@@ -103,24 +103,25 @@ class RelationalMemoryPredictor(nn.Module):
         hidden_size = base_predictor.hidden_size
         relational_input_size = hidden_size + relational_feature_size
 
-        # Replace relational level heads
+        # Build relational heads that take pooled + memory projection
         import copy
         from src.training.model import ClassificationHead
-        new_heads = nn.ModuleDict()
+        self.rel_heads = nn.ModuleDict()
         for name, head in base_predictor.heads.items():
             if name in RELATIONAL_HEADS:
-                # Rebuild with larger input
                 spec = base_predictor.head_specs[name]
-                new_heads[name] = nn.Sequential(
-                    nn.Linear(relational_input_size, hidden_size),
-                    nn.GELU(),
-                    nn.Dropout(0.1),
-                    ClassificationHead(hidden_size, spec["n_classes"]),
+                # Projection back to hidden_size so original head can consume it
+                proj = nn.Linear(relational_input_size, hidden_size)
+                # Initialize to approximately extract the pooled part (identity-like)
+                with torch.no_grad():
+                    eye = torch.eye(hidden_size, relational_input_size)
+                    proj.weight.copy_(eye)
+                    proj.bias.zero_()
+                # Reuse original head weights so checkpoint knowledge is preserved
+                self.rel_heads[name] = nn.Sequential(
+                    proj,
+                    copy.deepcopy(head),
                 )
-            else:
-                new_heads[name] = copy.deepcopy(head)
-        self.base.heads = new_heads
-        # Store a flag so forward knows which heads are relational
         self.relational_head_names = set(RELATIONAL_HEADS)
 
     def forward(
@@ -140,13 +141,9 @@ class RelationalMemoryPredictor(nn.Module):
         # For relational heads, use pooled + projected memory
         enriched = torch.cat([pooled, projected], dim=-1)
 
-        logits = {}
-        for name, head in self.base.heads.items():
-            if name in self.relational_head_names:
-                logits[name] = head(enriched)
-            else:
-                # Re-run through original head (or use cached from base_out if possible)
-                logits[name] = head(pooled)
+        logits = dict(base_out["logits"])  # Start with base logits
+        for name, head in self.rel_heads.items():
+            logits[name] = head(enriched)
 
         return {
             "logits": logits,
