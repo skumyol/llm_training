@@ -158,11 +158,11 @@ def calibrate(config_path: str, method: str, calib_heads_file: str, output_dir: 
         if method == "temperature":
             T = _temperature_scale(logits, labels)
             # Verify ECE before/after
-            conf_before = np.max(np.exp(logits - np.max(logits, axis=1, keepdims=True)) /
-                           np.sum(np.exp(logits - np.max(logits, axis=1, keepdims=True)), axis=1), axis=1)
+            exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
+            conf_before = np.max(exp_logits / np.sum(exp_logits, axis=1, keepdims=True), axis=1)
             calibrated_logits = logits / T
-            conf_after = np.max(np.exp(calibrated_logits - np.max(calibrated_logits, axis=1, keepdims=True)) /
-                          np.sum(np.exp(calibrated_logits - np.max(calibrated_logits, axis=1, keepdims=True)), axis=1), axis=1)
+            exp_calib = np.exp(calibrated_logits - np.max(calibrated_logits, axis=1, keepdims=True))
+            conf_after = np.max(exp_calib / np.sum(exp_calib, axis=1, keepdims=True), axis=1)
             ece_before = _ece(conf_before, labels)
             ece_after = _ece(conf_after, labels)
             calibrated[field] = {
@@ -175,8 +175,8 @@ def calibrate(config_path: str, method: str, calib_heads_file: str, output_dir: 
             print(f"  {field:25s} T={T:.3f}  ECE: {ece_before:.3f} → {ece_after:.3f}")
 
         elif method == "isotonic":
-            confidences = np.max(np.exp(logits - np.max(logits, axis=1, keepdims=True)) /
-                                 np.sum(np.exp(logits - np.max(logits, axis=1, keepdims=True)), axis=1), axis=1)
+            exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
+            confidences = np.max(exp_logits / np.sum(exp_logits, axis=1, keepdims=True), axis=1)
             ir = _fit_isotonic(confidences, labels)
             if ir is None:
                 continue

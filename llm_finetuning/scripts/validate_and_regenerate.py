@@ -163,6 +163,7 @@ def validate_and_regenerate(
         "max_retries_exceeded": 0,
         "keyword_leaks_caught": 0,
         "classifier_leaks_caught": 0,
+        "false_refusals": 0,  # keyword clean but classifier flagged
     }
 
     for rec in tqdm(records, desc="Validating"):
@@ -184,6 +185,8 @@ def validate_and_regenerate(
             stats["classifier_leaks_caught"] += 1
 
         is_leak = keyword_leak or classifier_leak
+        if not keyword_leak and classifier_leak:
+            stats["false_refusals"] += 1
 
         rec_out = dict(rec)
         rec_out["validation"] = {
@@ -254,6 +257,11 @@ def validate_and_regenerate(
     stats["gated_leak_count"] = gated_leaks
     stats["gated_total"] = gated_total
 
+    # Derived rates
+    stats["retry_percentage"] = stats["accepted_after_retry"] / max(1, stats["total"])
+    stats["false_refusal_rate"] = stats["false_refusals"] / max(1, stats["total"])
+    stats["max_retry_exceeded_rate"] = stats["max_retries_exceeded"] / max(1, stats["total"])
+
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
@@ -263,9 +271,13 @@ def validate_and_regenerate(
     print(f"  Total evaluated:        {stats['total']}")
     print(f"  Accepted first try:     {stats['accepted_first_try']}")
     print(f"  Accepted after retry:   {stats['accepted_after_retry']}")
+    print(f"  Retry percentage:       {stats['retry_percentage']:.2%}")
     print(f"  Max retries exceeded:   {stats['max_retries_exceeded']}")
+    print(f"  Max retry exceeded %:   {stats['max_retry_exceeded_rate']:.2%}")
     print(f"  Keyword leaks caught:   {stats['keyword_leaks_caught']}")
     print(f"  Classifier leaks caught: {stats['classifier_leaks_caught']}")
+    print(f"  False refusals:         {stats['false_refusals']}")
+    print(f"  False refusal rate:     {stats['false_refusal_rate']:.2%}")
     print(f"  Gated leakage rate:     {stats['gated_leakage_rate']:.4f} ({stats['gated_leak_count']}/{stats['gated_total']})")
     print(f"  Output saved to:        {out_path}\n")
 

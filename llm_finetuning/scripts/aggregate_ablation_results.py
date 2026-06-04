@@ -127,6 +127,48 @@ def build_latex_table(results: list[dict]) -> str:
     return "".join(lines)
 
 
+def build_curve_data(results: list[dict]) -> dict:
+    """Return plot-ready ablation curve data + minimal-state analysis."""
+    valid = [r for r in results if not r.get("skipped") and r.get("n_heads") is not None]
+    valid.sort(key=lambda x: x.get("n_heads", 0))
+
+    points = []
+    for r in valid:
+        points.append({
+            "experiment": r.get("_name", "unknown"),
+            "n_heads": r.get("n_heads", 0),
+            "routing_f1": round(r.get("routing_f1", 0.0), 4),
+            "routing_precision": round(r.get("routing_precision", 0.0), 4),
+            "routing_recall": round(r.get("routing_recall", 0.0), 4),
+            "false_positive_rate": round(r.get("false_positive_rate", 0.0), 4),
+            "slow_path_rate": round(r.get("slow_path_rate", 0.0), 4),
+            "heads_used": r.get("heads_used", []),
+        })
+
+    baseline = max(valid, key=lambda x: x.get("n_heads", 0), default=None)
+    baseline_f1 = baseline.get("routing_f1", 0.0) if baseline else 0.0
+
+    epsilon = 0.03
+    minimal_state = None
+    for p in points:
+        if baseline_f1 > 0 and abs(p["routing_f1"] - baseline_f1) <= epsilon:
+            minimal_state = p
+            break
+
+    return {
+        "curve_points": points,
+        "baseline_f1": round(baseline_f1, 4),
+        "epsilon": epsilon,
+        "minimal_sufficient_state": minimal_state,
+        "interpretation": (
+            f"Routing F1 within {epsilon:.0%} of baseline using only "
+            f"{minimal_state['n_heads']} heads ({'/'.join(minimal_state['heads_used'][:4])}...)"
+            if minimal_state else
+            "No subset found within epsilon of baseline; all heads appear necessary."
+        ),
+    }
+
+
 def main():
     args = parse_args()
     results = load_ablation_results(args.results_dir)
@@ -147,6 +189,13 @@ def main():
         f.write(latex)
     print(f"Wrote LaTeX table to {latex_path}")
 
+    # Ablation curve JSON
+    curve = build_curve_data(results)
+    curve_path = Path(args.output).parent / "ablation_curve.json"
+    with open(curve_path, "w") as f:
+        json.dump(curve, f, indent=2)
+    print(f"Wrote ablation curve data to {curve_path}")
+
     # Print quick summary
     print("\n=== Ablation Summary ===")
     baseline = next((r for r in results if "baseline" in r.get("_name", "").lower()), None)
@@ -156,6 +205,10 @@ def main():
         if r.get("skipped"):
             continue
         print(f"  {r['_name']:25s} heads={r.get('n_heads', '?')}  F1={r.get('routing_f1', 0):.3f}  slow={r.get('slow_path_rate', 0)*100:.1f}%")
+
+    if curve["minimal_sufficient_state"]:
+        ms = curve["minimal_sufficient_state"]
+        print(f"\n  Minimal sufficient state: {ms['n_heads']} heads (F1={ms['routing_f1']:.3f}, Δ={ms['routing_f1']-curve['baseline_f1']:+.3f})")
     print()
 
 
