@@ -1,0 +1,15 @@
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccccc}
+\toprule
+Experiment & Heads & Routing F1 & Prec & Rec & FP Rate & Slow \% \\
+\midrule
+exp\_a\_routing\_only & 4 & 0.698 & 0.537 & 0.997 & 0.997 & 99.7 \\
+exp\_b\_plus\_affect & 7 & 0.686 & 0.533 & 0.962 & 0.978 & 96.9 \\
+exp\_c\_plus\_relational & 6 & 0.666 & 0.545 & 0.856 & 0.829 & 84.3 \\
+exp\_d\_full\_29head & 28 & 0.604 & 0.533 & 0.698 & 0.709 & 70.3 \\
+\bottomrule
+\end{tabular}
+\caption{Head ablation results. Lower F1 indicates operationally necessary heads.}
+\label{tab:ablation}
+\end{table}
