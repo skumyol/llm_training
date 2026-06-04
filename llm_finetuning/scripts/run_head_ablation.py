@@ -240,14 +240,24 @@ def _eval_routing_on_ablated(cfg: dict, keep_heads: set, checkpoint_dir: str, te
     recall = true_positives / max(1, true_positives + false_negatives)
     f1 = 2 * precision * recall / max(1e-9, precision + recall)
     fp_rate = false_positives / max(1, false_positives + true_negatives)
+    fnr = false_negatives / max(1, false_negatives + true_positives)
+    unsafe_fp = false_negatives / max(1, total)
     slow_rate = (true_positives + false_positives) / max(1, total)
+    cost_fn5 = (5 * false_negatives + false_positives) / max(1, total)
+    cost_fn10 = (10 * false_negatives + false_positives) / max(1, total)
 
     return {
         "routing_precision": precision,
         "routing_recall": recall,
         "routing_f1": f1,
         "false_positive_rate": fp_rate,
+        "false_negative_rate": fnr,
+        "unsafe_fast_path_rate": unsafe_fp,
+        "slow_path_precision": precision,
+        "slow_path_recall": recall,
         "slow_path_rate": slow_rate,
+        "routing_cost_fn5": cost_fn5,
+        "routing_cost_fn10": cost_fn10,
         "n_evaluated": total,
         "heads_used": sorted(keep_heads),
         "n_heads": len(keep_heads),

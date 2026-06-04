@@ -155,7 +155,12 @@ def eval_routing(config_path: str) -> dict:
     precision = true_positives / max(1, true_positives + false_positives)
     recall    = true_positives / max(1, true_positives + false_negatives)
     fp_rate   = false_positives / max(1, false_positives + true_negatives)
+    fnr       = false_negatives / max(1, false_negatives + true_positives)
     f1        = 2 * precision * recall / max(1e-9, precision + recall)
+
+    # Cost-sensitive routing: false negatives (unsafe fast-path) are much worse than false positives (over-routing)
+    cost_fn5_fp1  = 5 * false_negatives + 1 * false_positives
+    cost_fn10_fp1 = 10 * false_negatives + 1 * false_positives
 
     metrics = {
         "routing_mode":      mode,
@@ -163,7 +168,15 @@ def eval_routing(config_path: str) -> dict:
         "routing_recall":    recall,
         "routing_f1":        f1,
         "false_positive_rate": fp_rate,
+        "false_negative_rate": fnr,
+        "unsafe_fast_path_rate": false_negatives / max(1, total),
+        "slow_path_precision": precision,
+        "slow_path_recall":    recall,
         "slow_path_rate":    (true_positives + false_positives) / max(1, total),
+        "routing_cost_fn5_fp1": cost_fn5_fp1,
+        "routing_cost_fn10_fp1": cost_fn10_fp1,
+        "normalized_routing_cost_fn5": cost_fn5_fp1 / max(1, total),
+        "normalized_routing_cost_fn10": cost_fn10_fp1 / max(1, total),
         "n_evaluated":       total,
         "n_trace_records":    trace_records,
         "missing_predictions": missing_predictions,
@@ -202,11 +215,17 @@ def _print_summary(metrics: dict, thresholds: dict) -> None:
     fp_rate   = metrics.get("false_positive_rate", 0.0)
     status = "PASS" if fp_rate <= fp_thresh else "FAIL"
     print(f"  [{status}] False Positive Rate: {fp_rate:.4f} (threshold ≤ {fp_thresh})")
-    print(f"  Precision:    {metrics.get('routing_precision', 0):.4f}")
-    print(f"  Recall:       {metrics.get('routing_recall', 0):.4f}")
-    print(f"  F1:           {metrics.get('routing_f1', 0):.4f}")
-    print(f"  Slow path %:  {metrics.get('slow_path_rate', 0)*100:.1f}%")
+    print(f"  Precision:              {metrics.get('routing_precision', 0):.4f}")
+    print(f"  Recall:                 {metrics.get('routing_recall', 0):.4f}")
+    print(f"  F1:                     {metrics.get('routing_f1', 0):.4f}")
+    print(f"  False Negative Rate:    {metrics.get('false_negative_rate', 0):.4f}")
+    print(f"  Unsafe Fast-Path Rate:  {metrics.get('unsafe_fast_path_rate', 0):.4f}  (safety-critical)")
+    print(f"  Slow-path Precision:    {metrics.get('slow_path_precision', 0):.4f}")
+    print(f"  Slow-path Recall:       {metrics.get('slow_path_recall', 0):.4f}")
+    print(f"  Slow path %:            {metrics.get('slow_path_rate', 0)*100:.1f}%")
+    print(f"  Routing Cost (FN=5,FP=1): {metrics.get('routing_cost_fn5_fp1', 0)} (norm={metrics.get('normalized_routing_cost_fn5', 0):.4f})")
+    print(f"  Routing Cost (FN=10,FP=1):{metrics.get('routing_cost_fn10_fp1', 0)} (norm={metrics.get('normalized_routing_cost_fn10', 0):.4f})")
     if mode == "predicted":
-        print(f"  Coverage:     {metrics.get('prediction_coverage', 0):.4f}")
-        print(f"  Missing preds:{metrics.get('missing_predictions', 0)}")
+        print(f"  Coverage:               {metrics.get('prediction_coverage', 0):.4f}")
+        print(f"  Missing preds:          {metrics.get('missing_predictions', 0)}")
     print()
