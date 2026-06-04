@@ -134,7 +134,7 @@ def accuracy(y_true: List[int], y_pred: List[int]) -> float:
 def bootstrap_ci(
     metric_fn, y_true: List, y_pred: List, n_bootstrap: int = 1000, ci: float = 0.95
 ) -> Tuple[float, float, float]:
-    """Bootstrap confidence interval for a metric."""
+    """Bootstrap confidence interval for a metric (turn-level resampling)."""
     rng = np.random.RandomState(42)
     n = len(y_true)
     if n == 0:
@@ -148,6 +148,59 @@ def bootstrap_ci(
             scores.append(metric_fn(yt, yp))
         except Exception:
             continue
+    if not scores:
+        return 0.0, 0.0, 0.0
+    alpha = (1 - ci) / 2
+    lo = float(np.percentile(scores, 100 * alpha))
+    hi = float(np.percentile(scores, 100 * (1 - alpha)))
+    mean = float(np.mean(scores))
+    return mean, lo, hi
+
+
+def bootstrap_ci_episode(
+    metric_fn,
+    items: List[dict],
+    n_bootstrap: int = 1000,
+    ci: float = 0.95,
+    episode_key: str = "episode_id",
+) -> Tuple[float, float, float]:
+    """Episode-level bootstrap: resample episodes, not turns.
+
+    Args:
+        metric_fn: Callable that receives a list of items and returns a scalar.
+        items: List of dicts, each containing at least episode_key.
+        n_bootstrap: Number of bootstrap iterations.
+        ci: Confidence level.
+        episode_key: Field name for episode identifier.
+
+    Returns:
+        (mean, lower, upper) across bootstrap samples.
+    """
+    rng = np.random.RandomState(42)
+    # Group items by episode
+    episodes: Dict[str, List[dict]] = defaultdict(list)
+    for it in items:
+        ep = str(it.get(episode_key, ""))
+        if ep == "":
+            ep = "_no_episode"
+        episodes[ep].append(it)
+
+    ep_ids = list(episodes.keys())
+    n_eps = len(ep_ids)
+    if n_eps == 0:
+        return 0.0, 0.0, 0.0
+
+    scores = []
+    for _ in range(n_bootstrap):
+        sampled_ids = [ep_ids[rng.randint(0, n_eps)] for _ in range(n_eps)]
+        sampled_items = []
+        for sid in sampled_ids:
+            sampled_items.extend(episodes[sid])
+        try:
+            scores.append(metric_fn(sampled_items))
+        except Exception:
+            continue
+
     if not scores:
         return 0.0, 0.0, 0.0
     alpha = (1 - ci) / 2
@@ -432,13 +485,31 @@ def compute_response_metrics_comprehensive(
             float(np.mean(list(policy_consistency.values()))), 4
         )
 
-    # Bootstrap CI for ROUGE-L
-    def _rouge_metric(yt, yp):
-        scores = [rouge_l(r, h) for r, h in zip(yt, yp)]
+    # Episode-aware bootstrap CIs (resample episodes, not turns)
+    def _mean_rouge_metric(items):
+        scores = [rouge_l(i["gold"], i["generated"]) for i in items if i.get("gold") and i.get("generated")]
         return float(np.mean(scores)) if scores else 0.0
 
-    mean_rl, lo_rl, hi_rl = bootstrap_ci(_rouge_metric, references, hypotheses, n_bootstrap=500)
+    def _mean_leakage_metric(items):
+        leaks = sum(1 for i in items if check_secret_leakage(i.get("input_snippet", ""), i.get("generated", "")))
+        total = sum(1 for i in items if "reveal_decision" in i.get("input_snippet", ""))
+        return leaks / max(1, total)
+
+    def _mean_contradiction_metric(items):
+        cnt = sum(1 for i in items if check_contradiction(i.get("input_snippet", ""), i.get("generated", "")))
+        return cnt / max(1, len(items))
+
+    _, lo_rl, hi_rl = bootstrap_ci_episode(_mean_rouge_metric, valid_samples, n_bootstrap=500)
     metrics["rouge_l_95ci"] = [round(lo_rl, 4), round(hi_rl, 4)]
+    metrics["rouge_l_ci_method"] = "episode_bootstrap"
+
+    _, lo_leak, hi_leak = bootstrap_ci_episode(_mean_leakage_metric, valid_samples, n_bootstrap=500)
+    metrics["secret_leakage_95ci"] = [round(lo_leak, 4), round(hi_leak, 4)]
+    metrics["secret_leakage_ci_method"] = "episode_bootstrap"
+
+    _, lo_contra, hi_contra = bootstrap_ci_episode(_mean_contradiction_metric, valid_samples, n_bootstrap=500)
+    metrics["contradiction_95ci"] = [round(lo_contra, 4), round(hi_contra, 4)]
+    metrics["contradiction_ci_method"] = "episode_bootstrap"
 
     return metrics
 

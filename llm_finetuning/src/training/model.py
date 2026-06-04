@@ -214,7 +214,27 @@ def load_predictor(
     )
     
     if backbone_dir.exists():
-        backbone = PeftModel.from_pretrained(backbone, str(backbone_dir))
+        adapter_config = backbone_dir / "adapter_config.json"
+        if adapter_config.exists():
+            backbone = PeftModel.from_pretrained(backbone, str(backbone_dir))
+        else:
+            # Full-model checkpoint — reload with same quantization
+            bnb_config = None
+            if quantization == "4bit":
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=_DTYPE_MAP.get(torch_dtype, torch.bfloat16),
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+            elif quantization == "8bit":
+                bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            backbone = AutoModelForCausalLM.from_pretrained(
+                str(backbone_dir),
+                quantization_config=bnb_config,
+                torch_dtype=_DTYPE_MAP.get(torch_dtype, torch.bfloat16),
+                device_map="auto",
+            )
 
     predictor = LatentStatePredictor(backbone, hidden_size)
     heads_path = save_dir / "heads.pt"

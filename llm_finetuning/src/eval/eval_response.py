@@ -269,6 +269,8 @@ def eval_response(config_path: str) -> dict:
                     "secret_leak": leaks,
                     "reveal_decision": reveal_decision,
                     "used_decision_card": used_decision_card,
+                    "episode_id": str(batch.get("episode_id", [""])[0]),
+                    "turn_idx": int(batch.get("turn_idx", [0])[0]),
                 }
                 if used_decision_card and decision_card_text:
                     gen_rec["decision_card"] = decision_card_text
@@ -458,7 +460,7 @@ def _lcs_length(a: list, b: list) -> int:
     return prev[n]
 
 
-_REVEAL_RE = re.compile(r"reveal_decision\s*[:=]\s*([a-z_]+)", flags=re.IGNORECASE)
+_REVEAL_RE = re.compile(r"(?:reveal_decision|reveal)\s*[:=]\s*([a-z_]+)", flags=re.IGNORECASE)
 _VALENCE_RE = re.compile(r"A_t:.*?valence=([a-z_]+)", flags=re.IGNORECASE | re.DOTALL)
 
 

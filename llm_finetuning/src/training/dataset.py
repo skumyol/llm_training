@@ -550,7 +550,7 @@ def collate_joint_batch(batch: list[dict]) -> dict:
 
 
 def collate_sft_batch(batch: list[dict]) -> dict:
-    keys = [k for k in batch[0] if k not in ("episode_id", "scenario_type")]
+    keys = [k for k in batch[0] if k not in ("episode_id", "scenario_type", "secret_strings")]
     result: dict = {}
     for k in keys:
         tensors = [b[k] for b in batch]
@@ -558,4 +558,6 @@ def collate_sft_batch(batch: list[dict]) -> dict:
             result[k] = torch.stack(tensors)
         except Exception:
             result[k] = tensors
+    result["episode_id"] = [b.get("episode_id", "") for b in batch]
+    result["secret_strings"] = [b.get("secret_strings", []) for b in batch]
     return result
