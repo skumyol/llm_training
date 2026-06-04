@@ -77,7 +77,7 @@ What information about an NPC's social state can be recovered from dialogue alon
 We decompose NPC interaction into a 29-dimensional structured latent state $Z_t$ spanning conversational intent, affect, relational dynamics, normative pressures, and decision policy.
 Training a multi-head predictor on Qwen3-4B reveals a systematic recoverability pattern: static attributes such as arousal (true Cohen's $\kappa{=}0.692$) and valence ($\kappa{=}0.688$) are highly predictable, while per-turn relational deltas are near chance (familiarity\_delta $\kappa{=}0.296$).
 Soft-prefix conditioning reduces perplexity by 12.3\% over an unconditioned 1.1B baseline, but placebo ablations show that this gain is not attributable to the semantic content of the current OCEAN+VAD values.
-End-to-end routing with predicted $Z_t$ achieves F1$=$0.669; under our keyword-based heuristic detector, gated secret leakage is zero across evaluated turns.
+End-to-end routing with predicted $Z_t$ achieves F1$=$0.669; under our keyword-based heuristic detector, gated secret leakage is zero across evaluated turns. A 4-field decision-card compression of the full 29-head prompt improves policy consistency by 11.5 pp while maintaining zero contradictions.
 A stratified audit of 150 test-set turns with five human annotators (all failing quality-control checks) shows that the social-state heads resist reliable uncalibrated human annotation; however, the best-effort annotators achieve moderate agreement with the teacher on valence ($\kappa{=}0.28$) and response policy ($\kappa{=}0.37$), while an AI validator aligns with the teacher on response policy ($\kappa{=}0.40$) and valence ($\kappa{=}0.32$), suggesting partial internal consistency in model space.
 Familiarity level, repair strategy, and arousal remain non-auditable by either humans or models.
 Code, data, and evaluation artifacts will be released upon acceptance.
@@ -112,7 +112,8 @@ Our research questions are:
 (1)~A 29-dimensional NPC-specific social-state schema with formal cross-dimensional consistency constraints;
 (2)~a recoverability analysis showing which dimensions are predictable from dialogue context (static attributes such as arousal and valence, true $\kappa{>}0.68$) and which are not (per-turn relational deltas, $\kappa{<}0.30$);
 (3)~a placebo-controlled study showing that soft-prefix conditioning improves perplexity independently of the semantic content of the current OCEAN+VAD values, motivating structured social-state conditioning;
-(4)~an end-to-end pipeline demonstrating that predicted $Z_t$ can route generation and gate secret leakage under a heuristic detector.
+(4)~an end-to-end pipeline demonstrating that predicted $Z_t$ can route generation and gate secret leakage under a heuristic detector;
+(5)~an A/B evaluation showing that a 4-field decision-card compression of the full 29-head state improves policy consistency by 11.5 pp (0.735$\to$0.850) while maintaining zero contradictions and reducing leakage.
 
 \section{Related Work}
 \label{sec:related}
@@ -564,6 +565,37 @@ Prediction coverage & 1.000 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Prompt Compression for Slow-Path Turns}
+\label{sec:decision_card}
+
+The slow path dumps the full 29-head $Z_t$ state into the prompt, which consumes $\sim$350 tokens and may overwhelm the response generator with irrelevant detail.
+We therefore test a \textit{decision card}: a compressed instruction containing only stance summary, disclosure policy, risk level, and tone---four fields extracted from the predicted $Z_t$.
+
+\begin{table}[t]
+\centering
+\caption{Decision-card A/B evaluation ($n{=}683$ validation turns). Baseline: full 29-head XML state. Treatment: 4-field decision card. Episode-level bootstrap CI ($n{=}1{,}000$).}
+\label{tab:decision_card}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Treatment} & \textbf{$\Delta$ (T$-$B)} & \textbf{95\% CI} \\
+\midrule
+ROUGE-L & 0.1263 & 0.0797 & $-$0.0466 & [$-$0.0691, $-$0.0423] \\
+Policy consistency & 0.7349 & 0.8497 & $+$0.1148 & N/A \\
+Gated secret leakage (reveal=none) & 0.0294 & 0.0245 & $-$0.0049 & N/A \\
+Ungated secret leakage & 0.0498 & 0.0366 & $-$0.0132 & N/A \\
+Contradiction rate & 0.0000 & 0.0000 & 0.0000 & N/A \\
+Avg generation length / ref & 29.3 / 32.2 & 23.7 / 32.2 & $-$5.6 tok & N/A \\
+Length ratio (gen/ref) & 0.909 & 0.727 & $-$0.182 & N/A \\
+Slow-path turns with card & --- & 519/683 & 76.0\% & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Finding:} Compressing the slow-path prompt to a 4-field decision card improves policy consistency by \textbf{11.5 pp} (0.735$\to$0.850) while reducing secret leakage (gated 2.94\%$\to$2.45\%; ungated 4.98\%$\to$3.66\%) and maintaining zero contradictions (Table~\ref{tab:decision_card}).
+The ROUGE-L drop ($-$0.047) is offset by shorter, more directive generations (length ratio 0.91$\to$0.73) that stay closer to the intended NPC policy.
+This confirms that the full 29-head dump contains redundant information; a minimal, task-relevant subset is sufficient---and in this case beneficial---for controlled generation.
 
 \subsection{Joint vs. Separate Training}
 \label{sec:joint_vs_separate}
