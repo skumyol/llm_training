@@ -1,0 +1,47 @@
+# Shared protocol used by scripts/run_paper_small_lms.py.
+hardware_profile: paper_16m
+train_jsonl: data/dialogue/from_gen_train.jsonl
+val_jsonl: data/dialogue/from_gen_val.jsonl
+tokenizer_path: artifacts/tokenizers/dialogue_8k.json
+
+seq_len: 128
+batch_size: 16
+grad_accum: 8
+lr: 6.0e-4
+weight_decay: 0.1
+epochs: 30
+max_steps: null
+adam_betas: [0.9, 0.95]
+scheduler: warmup_cosine
+warmup_ratio: 0.02
+min_lr_ratio: 0.1
+early_stop_patience: 5
+early_stop_min_delta: 0.005
+
+cond_dim: 8
+condition_mode: aligned
+condition_dropout: 0.1
+profile_max_tokens: 48
+max_turns: 4
+deduplicate: true
+source_weights: {}
+curriculum_ratio: 0.1
+curriculum_max_target_tokens: 48
+curriculum_max_turns: 2
+
+eval_every_steps: 50
+log_every: 20
+generation_eval_examples: 32
+generation_max_new_tokens: 48
+use_amp: true
+device: auto
+num_workers: null
+pin_memory: null
+prefetch_factor: 2
+persistent_workers: true
+allow_tf32: true
+cudnn_benchmark: true
+fused_optimizer: true
+mlflow_enabled: true
+mlflow_experiment: paper_small_lm
+output_dir: artifacts/paper_small_lm/runs

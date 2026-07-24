@@ -273,6 +273,93 @@ def convert_empathetic_dialogues(raw_dir: Path) -> Tuple[List[Dict], List[Dict],
     return train_d, val_d, train_a + val_a
 
 
+DAILYDIALOG_PROFILE = (
+    "A conversational NPC who responds clearly, naturally, and concisely."
+)
+
+
+def records_from_dailydialog_example(
+    example: Dict[str, Any],
+    *,
+    split_name: str,
+    dialogue_id: str,
+) -> List[Dict]:
+    """Expand one two-party DailyDialog conversation into response records."""
+    raw_turns = example.get("dialog") or example.get("utterances") or []
+    turns: List[str] = []
+    for raw_turn in raw_turns:
+        if isinstance(raw_turn, dict):
+            text = raw_turn.get("text") or raw_turn.get("utterance") or ""
+        else:
+            text = raw_turn
+        text = str(text).strip()
+        if text:
+            turns.append(text)
+    records: List[Dict] = []
+    if len(turns) < 2:
+        return records
+    npc_id = _npc_id(f"{DAILYDIALOG_PROFILE}:{dialogue_id}")
+    for target_index in range(1, len(turns)):
+        context = []
+        for context_index in range(target_index):
+            distance_from_target = target_index - 1 - context_index
+            speaker = "player" if distance_from_target % 2 == 0 else "npc"
+            context.append({"speaker": speaker, "text": turns[context_index]})
+        records.append(
+            {
+                "npc_id": npc_id,
+                "npc_profile": DAILYDIALOG_PROFILE,
+                "dialogue_context": context,
+                "target_response": turns[target_index],
+                "metadata": {
+                    "source": "dailydialog",
+                    "split": split_name,
+                    "dialogue_id": dialogue_id,
+                    "turn_idx": target_index,
+                },
+            }
+        )
+    return records
+
+
+def convert_dailydialog(raw_dir: Path) -> Tuple[List[Dict], List[Dict]]:
+    """DailyDialog → compact two-speaker response records."""
+    src = raw_dir / "dailydialog"
+    if not src.exists():
+        print(f"  [SKIP] dailydialog not found at {src}")
+        return [], []
+    if not HF_OK:
+        print("  [SKIP] huggingface datasets not installed")
+        return [], []
+    print("  Loading dailydialog …")
+    try:
+        ds = load_from_disk(str(src))
+    except Exception:
+        try:
+            ds = load_dataset("ConvLab/dailydialog", cache_dir=str(src))
+        except Exception as exc:
+            print(f"  [ERROR] dailydialog load failed: {exc}")
+            return [], []
+
+    def process(split_name: str) -> List[Dict]:
+        rows: List[Dict] = []
+        split = ds[split_name] if split_name in ds else []
+        for index, example in enumerate(split):
+            rows.extend(
+                records_from_dailydialog_example(
+                    example,
+                    split_name=split_name,
+                    dialogue_id=f"{split_name}_{index}",
+                )
+            )
+        return rows
+
+    train = process("train")
+    val = process("validation") or process("test")
+    print(f"  dailydialog → {len(train):,} train  {len(val):,} val")
+    return train, val
+
+
 # =============================================================================
 # Writers
 # =============================================================================
@@ -348,6 +435,10 @@ def run(raw_dir: Path, out_dir: Path, val_frac: float, sources: List[str], seed:
         train_records += tr; val_records += va
         all_affect    += affect_rows
 
+    if "dailydialog" in sources:
+        tr, va = convert_dailydialog(raw_dir)
+        train_records += tr; val_records += va
+
     if not train_records:
         print("\n[ERROR] No records produced. Run data download first:")
         print("  python -m src.data.datasets --datasets personachat crd3 empathetic_dialogues")
@@ -404,8 +495,8 @@ def main() -> None:
     p.add_argument("--val-frac", type=float, default=0.05,
                    help="Fraction of data to use as validation if no explicit val split")
     p.add_argument("--sources",  nargs="+",
-                   default=["personachat", "crd3", "empathetic_dialogues"],
-                   choices=["personachat", "crd3", "empathetic_dialogues"],
+                   default=["personachat", "crd3", "empathetic_dialogues", "dailydialog"],
+                   choices=["personachat", "crd3", "empathetic_dialogues", "dailydialog"],
                    help="Which source datasets to convert")
     p.add_argument("--seed",     type=int, default=42)
     args = p.parse_args()

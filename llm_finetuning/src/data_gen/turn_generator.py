@@ -81,11 +81,13 @@ class TurnGenerator:
         validator: Validator,
         rng: Optional[random.Random] = None,
         player_utterance_sampled_ratio: float = 0.0,
+        max_turn_retries: int = 2,
     ):
         self.labeler = labeler
         self.validator = validator
         self.rng = rng or random.Random()
         self.player_utterance_sampled_ratio = player_utterance_sampled_ratio
+        self.max_turn_retries = max(0, int(max_turn_retries))
 
     def generate_episode(
         self,
@@ -127,20 +129,24 @@ class TurnGenerator:
                     scenario, arc_phase, history, npc_profile
                 )
 
-            turn_record = self._generate_turn(
-                episode_id=episode_id,
-                turn_idx=turn_idx,
-                player_utterance=player_utterance,
-                scenario=scenario,
-                npc_profile=npc_profile,
-                arc=arc,
-                arc_phase=arc_phase,
-                required_shifts=required_shifts,
-                prior_R_t=current_R_t,
-                history=history,
-                scene_description=scene_description,
-                target_policy=target_policy,
-            )
+            turn_record = None
+            for _attempt in range(self.max_turn_retries + 1):
+                turn_record = self._generate_turn(
+                    episode_id=episode_id,
+                    turn_idx=turn_idx,
+                    player_utterance=player_utterance,
+                    scenario=scenario,
+                    npc_profile=npc_profile,
+                    arc=arc,
+                    arc_phase=arc_phase,
+                    required_shifts=required_shifts,
+                    prior_R_t=current_R_t,
+                    history=history,
+                    scene_description=scene_description,
+                    target_policy=target_policy,
+                )
+                if turn_record is not None:
+                    break
 
             if turn_record is not None:
                 turns.append(turn_record)
@@ -150,6 +156,9 @@ class TurnGenerator:
                     "response": turn_record["response"],
                 })
                 current_R_t = turn_record["R_t"]
+            else:
+                # Do not advance the planned social arc with a missing state transition.
+                break
 
         return turns
 

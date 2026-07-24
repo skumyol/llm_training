@@ -91,7 +91,7 @@ Our results show uneven recoverability: affect is the strongest group-level sign
 
 Non-player characters (NPCs) in interactive narratives must exhibit consistent social behaviour: their relationships with players and characters should inform their responses, whether it is keeping a secret until trust is established, or reacting with context-appropriate emotion.
 %remembering relationships, keeping secrets, reacting emotionally, and selecting contextually appropriate responses.
-Current approaches either rely on hand-scripted dialogue trees, or use large language models (LLMs), including system prompts, free-text memories, and environment state to condition the response~\cite{park2023generative,wang2023voyager}. However, hand-scripted dialogue trees are rigid and expensive to author, while LLMs tend to lose track of context and over-disclose information~\cite{wu2026orchid}. 
+Current approaches either rely on hand-scripted dialogue trees, or use large language models (LLMs), including system prompts, free-text memories, and environment state to condition the response~\cite{park2023generative,wang2023voyager}. However, hand-scripted dialogue trees are rigid and expensive to author, while LLM-based agents can lose track of context and over-disclose information.
 
 As such, even though LLMs allow more dynamic dialogues, they still struggle with complex social scenarios. For instance, a local guard may know a deep local secret that can be revealed in different ways. The player may reveal the secret by establishing trust through friendship, bribing to gather more information, or threatening/attacking the guard. Under these scenarios, the guard may reveal the secret based on their own character, their current mood, and their current relationship with the player. Typical free-text memory systems may record these facts, but they do not expose which aspect of the response is shaped by each factor. As such, the initial burden of authoring hand-scripted dialogues is shifted to designing prompts and harnesses that ensure appropriate social behaviour with little control and auditability in the face of unpredictable player behaviour.
 
@@ -112,7 +112,7 @@ Our research questions are:
 We test three operational hypotheses that link schema design to measurable outcomes:
 
 \begin{description} \setlength\itemsep{0em}
-    \item[H1 (Compression)] A subset of the 29 heads suffices for routing F1 within 5\% of the gold-head oracle, while reducing cost-weighted routing error.
+    \item[H1 (Compression)] A routing-focused subset of the 29 heads improves deployment routing trade-offs relative to the full predicted state, while revealing the remaining gap to the gold-head oracle.
     \item[H2 (Calibration)] Compressed decision-card prompts (4 fields) improve policy consistency without increasing over-disclosure relative to the full 29-head state dump.
     \item[H3 (Placebo Control)] OCEAN+VAD soft-prefix conditioning gains are attributable to added prefix capacity rather than to the semantic content of personality/affect values.
 \end{description}
@@ -121,9 +121,10 @@ We test three operational hypotheses that link schema design to measurable outco
 
 \paragraph{Contributions.}
 \begin{enumerate} \setlength\itemsep{0em}
-    \item We decompose NPC social state as  a 29-dimensional structured schema with formal consistency constraints;
-    \item We analyse the recoverability of the social state per component. A per-head analysis showing that affect and response policy are more reliably recovered from dialogue context than secrecy pressure and several relational-change heads.
+    \item We decompose NPC social state into a 29-dimensional structured schema with formal consistency constraints.
+    \item We analyse social-state recoverability per component, showing that affect and response policy are more reliably recovered from dialogue context than secrecy pressure and several relational-change heads.
     \item We design a fast/slow router that uses predicted $\hat{Z}_t$ to gate response generation and disclosure behaviour.
+    \item We evaluate operational utility through masking, oracle decomposition, decision-card compression, and episode-level temporal diagnostics.
     \item We audit the predictor through both human- and machine-based validation, showing which heads require stronger annotation protocols before human-grounded use.
 \end{enumerate}
 % (1) 
@@ -156,7 +157,9 @@ Many prior dialogue systems model one or two social dimensions rather than a mul
 
 Our formulation is also related to dialogue state tracking~\cite{mrksic2017neural,feng2023dialogue,jacqmin2024dialoguestate}, where a structured belief state is updated across turns.
 Recent social-agent work has introduced explicit social representations, including SOTOPIA~\cite{zhou2024sotopia}, Social World Models~\cite{zhou2025social}, and future-aware state-action chains in SAGE~\cite{sage2025steering}.
-Our contribution is narrower: we study an NPC-specific schema and evaluate recoverability, conditioning, and routing under a single synthetic dialogue pipeline.
+Unlike task-oriented DST, our state variables are not slot values for task completion; they are social and operational variables, such as trust, secrecy pressure, and disclosure policy, that can be inspected before generation.
+Unlike free-text memory in LLM agents, the representation is compact enough to support masking, compression, and deterministic routing.
+Our contribution is narrower than a general theory of social cognition: we study an NPC-specific schema and evaluate recoverability, conditioning, and routing under a single synthetic dialogue pipeline.
 Table~\ref{tab:novelty} (Appendix~\ref{app:positioning}) situates this work against four prior research lines.
 
 \subsection{Conditioning and Controllable Generation}
@@ -170,7 +173,7 @@ The placebo result motivates the structured $Z_t$ predictor: the prefix mechanis
 \section{Method}
 \label{sec:method}
 
-The full pipeline can be understood as a three-stage system (Figure~\ref{fig:pipeline}. 
+The full pipeline can be understood as a three-stage system (Figure~\ref{fig:pipeline}). 
 A latent predictor reads the dialogue context and produces a structured social-state estimate $\hat{Z}_t$; a rule-based router uses that estimate to choose between direct generation and state-conditioned generation with disclosure constraints; and a response generator produces the final NPC utterance. The design choice is to make the state available before decoding, so that routing and disclosure decisions can be inspected rather than inferred only from the generated text.
 
 % Figure~\ref{fig:pipeline} summarises the inference pipeline. Given a dialogue history, the current player utterance, and an NPC profile, the latent predictor produces a structured state estimate $\hat{Z}_t$. The predictor uses Qwen3-4B as the pretrained backbone, adapts it with LoRA, and applies 29 supervised classification heads to the final-token representation. Each head outputs a distribution over one component of the state schema, such as \texttt{secrecy\_pressure}, \texttt{response\_policy}, or \texttt{reveal\_decision}.
@@ -181,7 +184,7 @@ A latent predictor reads the dialogue context and produces a structured social-s
 \subsection{Social State Schema ($Z_t$)}
 \label{sec:schema}
 
-We define $Z_t$ as an operational control and inspection schema for NPC dialogue. It is a teacher-labelled annotation schema (see Table~\ref{tab:schema} over dialogue context and response policy over the following 29 classification targets: 
+We define $Z_t$ as an operational control and inspection schema for NPC dialogue. Table~\ref{tab:schema} lists the 29 teacher-labelled classification targets used to annotate each dialogue context and response:
 \begin{itemize}
     \item \textbf{$C_t$} (Conversational): dialogue act, tone, risk type
     \item \textbf{$A_t$} (Affect): valence, arousal, threat, control
@@ -200,9 +203,9 @@ Oatley and Johnson-Laird's view of emotion as appraisal for action motivates
 which describe the NPC's immediate affective stance toward the turn~\cite{oatley1987towards}. 
 Spencer-Oatey's rapport-management framework motivates relational stance variables, 
 including affection, respect, dominance, familiarity, trust, and obligation, each represented 
-as a current level and a per-turn delta~\cite{spencer2000rapport}. 
+as a current level and a per-turn delta~\cite{spencer2008politeness}. 
 Each dialogue turn $t$ is annotated with a structured social state $Z_t = (C_t, A_t, M_t, R_t, N_t, D_t)$.
- Before generation, the system exposes probability distributions over named variables, and downstream rules can inspect heads such as \texttt{reveal\_decision} to block or constrain secret disclosure. 
+Before generation, the system exposes probability distributions over named variables, and downstream rules can inspect heads such as \texttt{reveal\_decision} to block or constrain secret disclosure. 
 
 
 
@@ -359,9 +362,12 @@ The from-scratch SLM baselines and OCEAN+VAD encoders train on any GPU with 4\,G
 \textit{Generation quality} is reported with PPL, ROUGE-L, BLEU, and Distinct-$n$, but these are development diagnostics rather than measures of player experience.
 \textit{Routing trade-offs} are measured with precision, recall, F1, false positive rate, and slow-path rate, since a conservative router may improve disclosure control while increasing slow-path cost.
 \textit{Disclosure control} is measured with keyword-based gated and ungated leakage diagnostics; these heuristics indicate whether obvious secret strings appear, not whether leakage is absent in a validated safety sense.
+\textit{Episode-level dynamics} are measured with first-leak turn, secret persistence, and relational-head trajectories.
+For each episode, first-leak turn is the earliest turn with over-disclosure; secret persistence is the number of turns before that event, with no-leak episodes treated as persisting through the final turn.
+Relational trajectories compare predicted and gold relational heads across turns; in this paper we report trajectory shape and per-turn change rates as diagnostics because the current single-turn predictor produces near-constant relational predictions.
 BLEU-2, Distinct-1, and Distinct-3 are computed but omitted from the main tables for brevity; full metric logs will be released with the artifacts.
 
-\paragraph{Statistical reporting.} Multi-seed means are reported where experiments were repeated across seeds, such as the small-LM and soft-prefix baselines. The main Qwen3-4B Track-D pipeline results use single trained models selected by validation checkpoint and are labelled as such in the relevant table captions. Bootstrap 95\% confidence intervals ($n{=}1{,}000$ resamples) are reported for ROUGE-L and paired comparisons where indicated.
+\paragraph{Statistical reporting.} Multi-seed means are reported where experiments were repeated across seeds, such as the small-LM and soft-prefix baselines. The main Qwen3-4B Track-D pipeline results use single trained models selected by validation checkpoint and are labelled as such in the relevant table captions. Bootstrap 95\% confidence intervals ($n{=}1{,}000$ resamples) are reported for ROUGE-L and decision-card paired comparisons where indicated.
 
 \section{Results}
 \label{sec:results}
@@ -535,14 +541,14 @@ For RQ1, the 29-head predictor reveals a clear \textbf{recoverability gradient}:
 Affect is the strongest group. Valence and arousal both achieve $\kappa{\approx}0.69$, the highest values among the 28 evaluated single-label heads.
 Emotional language such as ``I am furious'' or ``That fills me with dread'' provides direct lexical cues.
 
-Decision policy is the most directly used group in the pipeline. The response\_policy head (10 classes) achieves $\kappa{=}0.632$, indicating that the model distinguishes labels such as ``answer'', ``evade'', ``threaten'', and ``negotiate'' more reliably than most heads.
+Decision policy is the most directly used group in the pipeline. The \texttt{response\_policy} head (10 classes) achieves $\kappa{=}0.632$, indicating that the model distinguishes labels such as ``answer'', ``evade'', ``threaten'', and ``negotiate'' more reliably than most heads.
 The router uses this head to choose between fast and slow paths.
 
-Relational deltas are mixed. Some per-turn relational changes are measurable: respect\_delta ($\kappa{=}0.584$), trust\_delta ($\kappa{=}0.484$), and obligation\_delta ($\kappa{=}0.443$). Familiarity\_delta ($\kappa{=}0.296$) and dominance\_delta ($\kappa{=}0.368$) are weak.
+Relational deltas are mixed. Some per-turn relational changes are measurable: \texttt{respect\_delta} ($\kappa{=}0.584$), \texttt{trust\_delta} ($\kappa{=}0.484$), and \texttt{obligation\_delta} ($\kappa{=}0.443$). \texttt{Familiarity\_delta} ($\kappa{=}0.296$) and \texttt{dominance\_delta} ($\kappa{=}0.368$) are weak.
 The results indicate that fine-grained social change can be inferred from a single turn for some dimensions, such as respect and trust. Familiarity and dominance may require longer conversational history.
 
-Normative pressure is difficult to recover. Despite high accuracy (0.727), mean $\kappa$ is only 0.364, indicating that accuracy is partly driven by class priors rather than reliable discriminative signal for heads such as secrecy\_pressure ($\kappa{=}0.176$).
-Because \texttt{secrecy_pressure} is poorly recoverable ($\kappa{=}0.176$), we do not treat it as a standalone safety gate; instead, the router treats it as an advisory signal and relies primarily on \texttt{reveal_decision} and \texttt{response_policy} for disclosure-related routing. This is an intentional engineering concession: a low-recoverability head should not be the sole determinant of a safety-critical path.
+Normative pressure is difficult to recover. Despite high accuracy (0.727), mean $\kappa$ is only 0.364, indicating that accuracy is partly driven by class priors rather than reliable discriminative signal for heads such as \texttt{secrecy\_pressure} ($\kappa{=}0.176$).
+Because \texttt{secrecy\_pressure} is poorly recoverable ($\kappa{=}0.176$), we do not treat it as a standalone safety gate; instead, the router treats it as an advisory signal and relies primarily on \texttt{reveal\_decision} and \texttt{response\_policy} for disclosure-related routing. This is an intentional engineering concession: a low-recoverability head should not be the sole determinant of a safety-critical path.
 
 Overall mean accuracy is 0.688 with true Cohen's $\kappa{=}0.484$ across 28 heads.
 Under the consistency check, the model produces zero high-secrecy/non-none-reveal conflicts on the validation set.
@@ -616,13 +622,14 @@ Figure~\ref{fig:head_utility} visualises the utility of every head in the schema
 Table~\ref{tab:head_utility_ranking} ranks the four routing heads by operational importance, combining $\Delta$ routing F1 with unsafe fast-path reduction. Only \texttt{secrecy\_pressure} qualifies as \textbf{Critical} ($\Delta$F1${>}0.05$); the remaining three heads provide modest but measurable gains. This ranking guides compression: the 24 non-routing heads can be dropped without degrading routing safety.
 
 \paragraph{Hypothesis test: H1 (Compression).}
-H1 predicts that a subset of the 29 heads suffices for routing F1 within 5\% of the gold-head oracle. Table~\ref{tab:masking_ablation} tests this: replacing \textit{all four} routing heads with gold labels achieves F1$=$0.893, only 10.7 pp below the oracle (F1$=$1.0) and well within the 5\% tolerance threshold. The remaining 24 heads contribute negligibly to routing---their gold replacement yields $\Delta$F1${\approx}0$. The retraining ablations (Table~\ref{tab:retraining_ablation}) confirm this: the 4-head routing-only model (M1) achieves routing F1$=$0.697, outperforming the full 29-head retrained model (M1: 0.574) by 12.3 pp. \textbf{H1 is supported:} compression to 4 heads not only preserves but improves routing performance by eliminating hard-to-predict heads that add noise to the routing decision.
+H1 predicts that a routing-focused subset of the 29 heads improves deployment routing trade-offs relative to the full predicted state while clarifying the residual gap to the gold-head oracle. Table~\ref{tab:masking_ablation} tests the upper bound: replacing \textit{all four} routing heads with gold labels achieves F1$=$0.893, leaving a 10.7 pp gap to the deterministic oracle (F1$=$1.0). The remaining 24 heads contribute negligibly to routing---their gold replacement yields $\Delta$F1${\approx}0$. The retraining ablations (Table~\ref{tab:retraining_ablation}) confirm the deployment benefit: the 4-head routing-only model (M1) achieves routing F1$=$0.697, outperforming the full 29-head retrained model (M0: 0.574) by 12.3 pp. \textbf{H1 is supported in the deployment setting:} compression to 4 heads improves routing performance by eliminating hard-to-predict heads that add noise, while the oracle decomposition shows that better prediction of those four heads remains necessary.
 
 \begin{table}[t]
 \centering
 \caption{Head utility ranking by operational importance ($n{=}683$ val turns). Ranked by composite score: $\Delta$ routing F1 + 0.5 $\times$ (unsafe FP reduction). Critical heads ($\Delta$F1${>}0.05$) are essential for routing; Low heads can be dropped without degrading safety.}
 \label{tab:head_utility_ranking}
 \small
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{@{}rlrrrrl@{}}
 \toprule
 \textbf{Rank} & \textbf{Head} & \textbf{Routing F1} & \textbf{$\Delta$F1} & \textbf{Unsafe FP} & \textbf{$\Delta$Unsafe} & \textbf{Importance} \\
@@ -634,7 +641,7 @@ H1 predicts that a subset of the 29 heads suffices for routing F1 within 5\% of 
 \midrule
 \multicolumn{2}{l}{\textbf{Baseline} (no mask)} & 0.672 & --- & 0.174 & --- & --- \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 Figure~\ref{fig:perhead_contribution} disaggregates the head-utility analysis by showing both the routing F1 gain and the unsafe fast-path reduction for each head under gold replacement. The figure confirms that only the four decision heads produce meaningful improvements on both axes; all other heads cluster near zero, reinforcing that compression can safely remove 24 of 29 heads.
@@ -642,7 +649,7 @@ Figure~\ref{fig:perhead_contribution} disaggregates the head-utility analysis by
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.95\linewidth]{figures/perhead_contribution.pdf}
-\caption{Per-head contribution to routing F1 (left bars, $\\Delta$F1 vs baseline) and unsafe fast-path reduction (right hatched bars). Only the four decision heads (green) show meaningful gains; affect (red) and relational (blue) heads contribute negligibly.}
+\caption{Per-head contribution to routing F1 (left bars, $\Delta$F1 vs baseline) and unsafe fast-path reduction (right hatched bars). Only the four decision heads (green) show meaningful gains; affect (red) and relational (blue) heads contribute negligibly.}
 \label{fig:perhead_contribution}
 \end{figure}
 
@@ -685,12 +692,13 @@ We test a \textit{decision card}: a compressed instruction containing only stanc
 \caption{Decision-card A/B evaluation ($n{=}683$ validation turns). Baseline: full 29-head XML state. Treatment: 4-field decision card. Episode-level bootstrap CI ($n{=}1{,}000$).}
 \label{tab:decision_card}
 \small
-\begin{tabularx}{\linewidth}{@{}Xrrrr@{}}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
 \textbf{Metric} & \textbf{Baseline} & \textbf{Treatment} & \textbf{$\Delta$ (T$-$B)} & \textbf{95\% CI} \\
 \midrule
 ROUGE-L & 0.1263 & 0.0797 & $-$0.0466 & [$-$0.0691, $-$0.0423] \\
-Policy consistency & 0.7349 & 0.8497 & $+$0.1148 & [$+$0.006, $+$0.101] \\
+Policy consistency & 0.7349 & 0.8497 & $+$0.1148 & see Table~\ref{tab:significance} \\
 Exact disclosure match & 0.3382 & 0.3104 & $-$0.0278 & N/A \\
 Over-disclosure rate & 0.0029 & 0.0015 & $-$0.0014 & [$-$0.008, $+$0.004] \\
 Under-disclosure rate & 0.6589 & 0.6881 & $+$0.0292 & [$-$0.009, $+$0.070] \\
@@ -700,7 +708,7 @@ Contradiction rate & 0.0000 & 0.0000 & 0.0000 & N/A \\
 Length ratio (gen/ref) & 0.909 & 0.727 & $-$0.182 & N/A \\
 Slow-path turns with card & --- & 519/683 & 76.0\% & --- \\
 \bottomrule
-\end{tabularx}
+\end{tabular}}
 \end{table}
 
 Compressing the slow-path prompt to a 4-field decision card improves policy consistency by \textbf{11.5 pp} (0.735$\to$0.850) while reducing secret leakage (gated 2.94\%$\to$2.45\%; ungated 4.98\%$\to$3.66\%) and maintaining zero contradictions (Table~\ref{tab:decision_card}).
@@ -710,7 +718,7 @@ This trade-off is expected: a compressed prompt focuses the generator on withhol
 We therefore frame the decision card as improving \textit{controllability}, not unqualified generation quality.
 
 \paragraph{Hypothesis test: H2 (Calibration).}
-H2 predicts that compressed decision-card prompts (4 fields) improve policy consistency without increasing over-disclosure relative to the full 29-head state dump. Table~\ref{tab:decision_card} tests this: policy consistency improves by \textbf{11.5 pp} (0.735$\to$0.850, 95\% CI [$+$0.006, $+$0.101]), while over-disclosure \textit{decreases} (0.29\%$\to$0.15\%, though the CI includes zero: [$-$0.008, $+$0.004]). The trade-off is increased under-disclosure (+2.9 pp), which is expected: a compressed prompt focuses the generator on withholding. Secret leakage also decreases (gated: 2.94\%$\to$2.45\%; ungated: 4.98\%$\to$3.66\%). \textbf{H2 is supported:} prompt compression improves controllability metrics without compromising safety, at the cost of generation fluency (ROUGE-L $-$0.047).
+H2 predicts that compressed decision-card prompts (4 fields) improve policy consistency without increasing over-disclosure relative to the full 29-head state dump. Table~\ref{tab:decision_card} tests this: policy consistency improves by \textbf{11.5 pp} (0.735$\to$0.850), while over-disclosure \textit{decreases} (0.29\%$\to$0.15\%, though the paired-bootstrap CI includes zero: [$-$0.008, $+$0.004]). The trade-off is increased under-disclosure (+2.9 pp), which is expected: a compressed prompt focuses the generator on withholding. Secret leakage also decreases (gated: 2.94\%$\to$2.45\%; ungated: 4.98\%$\to$3.66\%). \textbf{H2 is supported:} prompt compression improves controllability metrics without compromising safety, at the cost of generation fluency (ROUGE-L $-$0.047).
 
 Table~\ref{tab:significance} reports formal statistical significance tests for the decision-card effects. Two effects are statistically significant at $p{<}0.05$: the ROUGE-L decrease ($p{=}0.012$) and the policy consistency increase ($p{=}0.044$). Over-disclosure and under-disclosure changes are not significant, consistent with their CIs crossing zero; however, the point estimates favor safety (over-disclosure decreases, under-disclosure increases).
 
@@ -719,6 +727,7 @@ Table~\ref{tab:significance} reports formal statistical significance tests for t
 \caption{Statistical significance of decision-card effects (bootstrap $n{=}1{,}000$). $^*p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$, ns = not significant.}
 \label{tab:significance}
 \small
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{@{}lrrrrc@{}}
 \toprule
 \textbf{Metric} & \textbf{$\Delta$} & \textbf{95\% CI} & \textbf{$p$-value} & \textbf{Sig.} \\
@@ -730,7 +739,7 @@ Contradiction rate & +0.0000 & [+0.0000, +0.0000] & 1.000 & ns \\
 Over-disclosure & $-$0.0013 & [$-$0.0084, +0.0043] & 0.693 & ns \\
 Under-disclosure & +0.0288 & [$-$0.0085, +0.0697] & 0.257 & ns \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 Figure~\ref{fig:disclosure_stacked} visualises the disclosure-policy composition for both systems.
@@ -754,7 +763,8 @@ The remaining 10.7 pp is \textit{router aggregation error}: even with perfect he
 \caption{Oracle upper-bound decomposition ($n{=}683$ val turns). Predictor error = gap from predicted to gold-head oracle; router error = residual gap to deterministic oracle.}
 \label{tab:oracle}
 \small
-\begin{tabularx}{\linewidth}{@{}Xrrrr@{}}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
 \textbf{System} & \textbf{Routing F1} & \textbf{Unsafe FP} & \textbf{Slow-path rate} & \textbf{Gap to oracle} \\
 \midrule
@@ -763,7 +773,7 @@ Gold-head oracle (gold 4 routing heads) & 0.893 & 0.061 & 0.529 & 0.107 \\
 Current (predicted 29D) & 0.672 & 0.174 & 0.543 & 0.328 \\
 Decision card (predicted, compressed prompt) & — & — & — & — \\
 \bottomrule
-\end{tabularx}
+\end{tabular}}
 \end{table}
 
 Figure~\ref{fig:error_decomposition} visualises the error decomposition. The total gap to oracle (0.328) splits into \textit{router aggregation error} (10.7 pp, 32.6\%) and \textit{predictor error} (22.1 pp, 67.4\%). The predictor error is the dominant component: imperfect head classification accounts for twice as much of the routing F1 gap as the coarse fast/slow decision rule. The right panel shows that improving the four routing heads from predicted to gold labels reduces unsafe fast-path rate from 17.4\% to 6.1\%---a safety improvement that requires better head prediction, not router redesign.
@@ -784,6 +794,7 @@ To answer the latter, we train four ablated predictors from scratch with differe
 \caption{Retraining ablations ($n{=}683$ val turns). Each model is trained from scratch on the specified head subset; routing is evaluated with predicted states.}
 \label{tab:retraining_ablation}
 \small
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
 \textbf{System} & \textbf{Heads} & \textbf{Routing F1} & \textbf{Unsafe FP} & \textbf{Slow-path rate} & \textbf{Cost (5:1)} \\
@@ -793,7 +804,7 @@ M1: Routing only & 4 & 0.697 & 0.003 & 0.997 & 0.477 \\
 M2: +Affect & 7 & 0.695 & 0.012 & 0.975 & 0.508 \\
 M3: +Relational & 6 & 0.631 & 0.105 & 0.832 & 0.927 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 Figure~\ref{fig:retraining_ablation} compares the four retraining ablations.
@@ -819,6 +830,7 @@ Table~\ref{tab:summary_comparison} places all systems side-by-side. The oracle p
 \caption{Summary comparison across all systems ($n{=}683$ val turns). Routing metrics (F1, unsafe FP, cost) apply to predictor+router pipeline; generation metrics (policy consistency, over-disclosure, ROUGE-L) apply to response quality.}
 \label{tab:summary_comparison}
 \small
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}lccccccc@{}}
 \toprule
 \textbf{System} & \textbf{Routing F1} & \textbf{Unsafe FP} & \textbf{Slow-path} & \textbf{Cost (5:1)} & \textbf{Policy Cons.} & \textbf{Over-disl.} & \textbf{ROUGE-L} \\
@@ -829,17 +841,18 @@ Predicted 29D (current) & 0.672 & 0.174 & 0.543 & 1.051 & 0.735 & 0.003 & 0.126 
 4-head retrained (M1) & 0.697 & 0.003 & 0.997 & 0.477 & --- & --- & --- \\
 Decision card (compressed) & --- & --- & --- & --- & 0.850 & 0.002 & 0.080 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table*}
 
 \paragraph{Episode-level dynamics.}
-Routing and disclosure metrics reported so far are turn-level aggregates. Table~\ref{tab:episode_metrics} reports episode-level statistics computed across 69 test episodes. The mean episode length is 9.9 turns; the mean first-leak turn is 1.8, meaning secrets tend to leak early in interactions. Secret persistence---the number of turns before the first leak---is 2.2 turns on average. The decision card does not change episode-level leakage timing because routing (not generation) determines the slow-path turns; the card only compresses the prompt for those turns.
+Routing and disclosure metrics reported so far are turn-level aggregates, but secrecy is an episode-level property: one premature reveal can invalidate an otherwise controlled interaction. Table~\ref{tab:episode_metrics} therefore reports temporal statistics over 69 test episodes. The mean episode length is 9.9 turns; the mean first-leak turn is 1.8, meaning secrets tend to leak early in interactions. Secret persistence---the number of turns before the first leak, or the full episode length when no leak occurs---is 2.2 turns on average. The decision card does not change episode-level leakage timing because routing determines slow-path turns; the card only compresses the prompt for those turns.
 
 \begin{table}[t]
 \centering
 \caption{Episode-level temporal metrics ($n{=}69$ episodes).}
 \label{tab:episode_metrics}
 \small
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{@{}lrrr@{}}
 \toprule
 \textbf{System} & \textbf{Mean length} & \textbf{Mean first leak} & \textbf{Mean persistence} \\
@@ -847,7 +860,7 @@ Routing and disclosure metrics reported so far are turn-level aggregates. Table~
 Baseline (full state) & 9.9 & 1.8 & 2.2 \\
 Decision card & 9.9 & 1.8 & 2.2 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 Figure~\ref{fig:episode_level} shows the distribution of first-leak turns, secret persistence, and episode lengths. The concentration of first-leak turns at turns 1--2 suggests that secret-holding is fragile: most episodes leak secrets early. Longer episodes (10+ turns) are common, indicating sustained multi-turn negotiation despite early leakage.
@@ -860,7 +873,7 @@ Figure~\ref{fig:episode_level} shows the distribution of first-leak turns, secre
 \end{figure}
 
 \paragraph{Multi-turn relational analysis.}
-The single-turn predictor processes each dialogue turn independently, which may explain the low recoverability of relational-delta heads ($\kappa{<}0.3$). In the predicted validation data, relational levels (trust, dominance, familiarity, respect, affection, obligation) show a \textbf{0\% per-turn change rate}: the predictor outputs the same level for every turn within an episode, even when the dialogue context suggests relational dynamics should evolve. This confirms that the single-turn architecture cannot access episode-level trajectory information.
+Relational state is also temporal: familiarity, dominance, trust, and obligation should change through accumulated interaction rather than isolated turns. The single-turn predictor processes each dialogue turn independently, which may explain the low recoverability of relational-delta heads ($\kappa{<}0.3$). In the predicted validation data, relational levels (trust, dominance, familiarity, respect, affection, obligation) show a \textbf{0\% per-turn change rate}: the predictor outputs the same level for every turn within an episode, even when the dialogue context suggests relational dynamics should evolve. This makes episode-level trajectory correlation uninformative for the current model and identifies a concrete failure mode: the predictor recovers local affect and policy better than cumulative relationship change.
 
 We tested a simple memory-augmented baseline that concatenates the prior turn's relational state to the current input. The result is null: macro accuracy for relational heads is 0.6717 (baseline) vs 0.6698 (with memory), a statistically insignificant change ($\Delta{=}-0.0019$). This suggests that na\"ive memory concatenation is insufficient; richer architectures---GRU or attention-based episode encoders, or JEPA-style future-prediction objectives---may be needed to capture cumulative relational dynamics. Figure~\ref{fig:relational_trends} shows the flat trajectories: individual episodes (blue, $n{=}20$ sampled) and the mean trajectory (red) all remain horizontal, confirming the absence of within-episode relational variation in the predicted state.
 
@@ -903,7 +916,8 @@ Response policy F1$=$0.622 and reveal decision F1$=$0.656 indicate that the most
 The practical implication is that structured social state can serve as an inspectable control layer even when it is not perfectly recoverable. Because the audit shows that untrained annotators struggle to reproduce the labels, designer inspection of $\hat{Z}_t$ is meaningful only when the designer has internalised the teacher LLM's labelling conventions---for example, through calibration on annotated examples. A designer can enumerate the heads that are stable enough for routing (e.g., affect, response policy) and build deterministic constraints on top of them, while treating weaker heads as advisory signals that feed into higher-level narrative systems rather than hard safety gates. The placebo-controlled conditioning result further suggests that simply injecting personality vectors into a prompt is insufficient for semantic control; richer structured-state bottlenecks like $Z_t$ are needed.
 
 \paragraph{Comparison with prior approaches.}
-Our work sits at the intersection of three research lines: dialogue state tracking (DST), LLM-based social agents, and controllable generation. Traditional DST represents belief states as slot-value pairs for task completion~\cite{mrksic2017neural}, whereas our schema targets social dimensions (affect, trust, secrecy) without a predefined dialogue act ontology. Recent social-agent frameworks such as SOTOPIA~\cite{zhou2024sotopia} and Social World Models~\cite{zhou2025social} model social interaction dynamics, but do not expose a compact per-turn inspectable state for downstream control. Our contribution is the narrower focus on an \textit{operational} bottleneck: $Z_t$ is designed to be predicted, inspected, and used for routing decisions before generation occurs. This differs from persona-conditioned LLM agents~\cite{park2023generative,shao2023character} where control is prompt-level and post-hoc inspection requires parsing generated text. The masking ablations (Table~\ref{tab:masking_ablation}) and oracle decomposition (Table~\ref{tab:oracle}) provide a methodology for determining which heads are necessary for a specific operational task---a form of structured pruning that goes beyond generic soft prompting~\cite{lester2021power} or prefix tuning~\cite{li2021prefix}. We emphasise that our contribution is \textit{operational control}, not psychological modeling: $Z_t$ is an engineering bottleneck designed to be predicted, inspected, and pruned for a specific downstream task (routing and safety-critical disclosure gating), not a validated theory of human social cognition. The negative placebo result for OCEAN+VAD conditioning (Section~\ref{sec:results}) further motivates this structured approach: without explicit schema supervision, conditioning signals may fail to achieve semantic control even when they improve perplexity.
+Our work sits at the intersection of three research lines: dialogue state tracking (DST), LLM-based social agents, and controllable generation. Traditional DST represents belief states as slot-value pairs for task completion~\cite{mrksic2017neural}, whereas our schema targets social dimensions (affect, trust, secrecy) without a predefined dialogue act ontology. Recent social-agent frameworks such as SOTOPIA~\cite{zhou2024sotopia} and Social World Models~\cite{zhou2025social} model social interaction dynamics, but do not expose a compact per-turn inspectable state for downstream control. Persona-conditioned agents and generative-agent memory systems instead rely on prompts, retrieved memories, or generated reflections, where control is diffuse and post-hoc inspection requires parsing text~\cite{park2023generative,shao2023character}.
+Our contribution is the narrower focus on an \textit{operational} bottleneck: $Z_t$ is designed to be predicted, inspected, compressed, and used for routing decisions before generation occurs. The masking ablations (Table~\ref{tab:masking_ablation}) and oracle decomposition (Table~\ref{tab:oracle}) provide a methodology for determining which heads are necessary for a specific operational task---a form of structured pruning that goes beyond generic soft prompting~\cite{lester2021power} or prefix tuning~\cite{li2021prefix}. We emphasise that our contribution is \textit{operational control}, not psychological modeling: $Z_t$ is an engineering bottleneck designed to identify actionable latent variables for routing and safety-critical disclosure gating, not a validated theory of human social cognition. The negative placebo result for OCEAN+VAD conditioning (Section~\ref{sec:results}) further motivates this structured approach: without explicit schema supervision, conditioning signals may fail to achieve semantic control even when they improve perplexity.
 
 \paragraph{Secret-keeping.}
 Detected gated secret leakage---computed only over turns where \texttt{reveal\_decision=none}---is zero under our keyword-based heuristic detector across all 683 validation turns.

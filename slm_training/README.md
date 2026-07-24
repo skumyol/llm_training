@@ -2,6 +2,66 @@
 
 Trains small language models (5–50M parameters) from scratch for NPC dialogue — no pre-trained LLM required. Includes personality/affect encoders, a conditional dialogue model, and a benchmark suite of 6 architectures.
 
+## Paper-oriented matched benchmark
+
+The recommended scratch-model experiment uses one shared 8,192-token byte BPE,
+record-aware JSONL examples, NPC-response-only loss, an optional 10% short-example
+curriculum, aligned OCEAN/VAD masks, and parameter-matched 14.7–15.7M backbones.
+
+Run a fast end-to-end validation first:
+
+```bash
+./run_paper_small_lms.sh --smoke --seeds 42
+```
+
+Run the three-seed benchmark:
+
+```bash
+./run_paper_small_lms.sh \
+  --train-jsonl data/dialogue/from_gen_train.jsonl \
+  --val-jsonl data/dialogue/from_gen_val.jsonl \
+  --seeds 42 43 44 \
+  --epochs 30
+```
+
+For a merged JSONL containing multiple `metadata.source` values, optional sampling
+weights can be repeated:
+
+```bash
+./run_paper_small_lms.sh \
+  --source-weight personachat=1.25 \
+  --source-weight dailydialog=1.0 \
+  --source-weight empathetic_dialogues=1.0 \
+  --source-weight crd3=0.75 \
+  --source-weight generated=1.0
+```
+
+Each experiment directory contains per-run checkpoints and metrics plus
+`paper_results.{json,csv,md,tex}`, learning curves in PNG/PDF, and generated
+examples. The table reports target-only perplexity, bits/byte, diversity,
+repetition, parameter counts, throughput, peak accelerator memory, and mean ±
+standard deviation across seeds.
+
+Hardware selection is automatic (`CUDA → Apple MPS → CPU`) and can be made
+explicit for reproducible machine-specific runs:
+
+```bash
+# NVIDIA: float16 AMP, fused AdamW, TF32, pinned asynchronous transfers
+./run_paper_small_lms.sh --device cuda --amp --tf32 --fused-optimizer
+
+# Apple Silicon: MPS float16 AMP with macOS-safe DataLoader defaults
+./run_paper_small_lms.sh --device mps --amp
+```
+
+Use `--no-amp` if a particular macOS/PyTorch combination reports an unsupported
+MPS mixed-precision operation. Every run records the resolved device, precision,
+target tokens/second, and accelerator memory.
+
+The current generated JSONL has aligned valence/arousal but no OCEAN or dominance
+values. This is recorded as condition coverage in every run summary; PrefixGPT
+should not be described as fully OCEAN+VAD-conditioned until those fields are
+populated.
+
 The repo also keeps a small checkpoint registry for the existing baseline runs under `slm/npc_backend_scaffold/runs/`, plus a registry-based evaluator and a social-state probe script for the PrefixGPT baseline.
 
 ---

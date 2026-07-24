@@ -37,10 +37,22 @@ class LMOutput:
     hidden_states: Optional[torch.Tensor] = None  # last-layer hidden, before head
 
 
-def select_device() -> torch.device:
-    if torch.cuda.is_available():
+def select_device(preferred: str = "auto") -> torch.device:
+    """Select an accelerator, or fail clearly when an explicit one is unavailable."""
+    preferred = str(preferred).lower()
+    if preferred not in {"auto", "cuda", "mps", "cpu"}:
+        raise ValueError(f"Unknown device {preferred!r}; expected auto, cuda, mps, or cpu")
+    cuda_available = torch.cuda.is_available()
+    mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    if preferred == "cuda" and not cuda_available:
+        raise RuntimeError("CUDA was requested but is not available in this PyTorch runtime")
+    if preferred == "mps" and not mps_available:
+        raise RuntimeError("MPS was requested but is not available in this PyTorch runtime")
+    if preferred != "auto":
+        return torch.device(preferred)
+    if cuda_available:
         return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    if mps_available:
         return torch.device("mps")
     return torch.device("cpu")
 
@@ -209,12 +221,16 @@ class CausalSelfAttention(nn.Module):
         def reshape(t):
             return t.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         Q, K, V = reshape(Q), reshape(K), reshape(V)
-        scale = math.sqrt(self.head_dim)
-        att   = (Q @ K.transpose(-2, -1)) / scale
-        att   = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
-        att   = F.softmax(att, dim=-1)
-        att   = self.drop(att)
-        y     = (att @ V).transpose(1, 2).contiguous().view(B, T, C)
+        # Lets PyTorch select FlashAttention/memory-efficient CUDA kernels and
+        # the best available MPS/CPU implementation without changing the model.
+        y = F.scaled_dot_product_attention(
+            Q,
+            K,
+            V,
+            dropout_p=self.drop.p if self.training else 0.0,
+            is_causal=True,
+        )
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.proj(y)
 
 
@@ -315,6 +331,7 @@ class PrefixTinyGPTLM(nn.Module):
             nn.Tanh(),
             nn.Linear(cfg.n_embd, cfg.prefix_length * cfg.n_embd),
         )
+        self.missing_condition = nn.Parameter(torch.zeros(cfg.cond_dim))
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
@@ -328,11 +345,17 @@ class PrefixTinyGPTLM(nn.Module):
         x: torch.Tensor,
         cond_vec: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
+        cond_mask: Optional[torch.Tensor] = None,
     ) -> LMOutput:
         B, T = x.shape
         P    = self.cfg.prefix_length
 
         tok_h  = self.tok_emb(x)                                       # (B, T, E)
+        if cond_mask is not None:
+            cond_vec = (
+                cond_vec * cond_mask
+                + self.missing_condition.unsqueeze(0) * (1.0 - cond_mask)
+            )
         prefix = self.prefix_proj(cond_vec).view(B, P, self.cfg.n_embd) # (B, P, E)
         h      = torch.cat([prefix, tok_h], dim=1)                     # (B, P+T, E)
         pos    = torch.arange(P + T, device=x.device)
@@ -596,6 +619,16 @@ class MambaLikeLM(nn.Module):
 # =============================================================================
 
 RECOMMENDED_CONFIGS = {
+    "paper_16m": {
+        # Parameter-matched for the shared 8,192-token dialogue BPE.
+        # Actual counts are logged because changing vocab_size changes totals.
+        "gru":        dict(vocab_size=8192, embed_dim=512, hidden_size=512, num_layers=7, dropout=0.2),
+        "awdlstm":    dict(vocab_size=8192, embed_dim=512, hidden_size=512, num_layers=5, wdrop=0.3, dropout=0.2, dropouth=0.15, dropouti=0.15),
+        "gpt":        dict(vocab_size=8192, n_embd=384, n_head=6, n_layer=7, dropout=0.1, max_seq_len=256),
+        "prefix_gpt": dict(vocab_size=8192, n_embd=384, n_head=6, n_layer=6, dropout=0.1, max_seq_len=256, prefix_length=8, cond_dim=8, condition_mode="aligned"),
+        "moe":        dict(vocab_size=8192, n_embd=248, n_head=4, n_layer=6, num_experts=4, top_k=2, dropout=0.1, max_seq_len=256),
+        "mamba_like": dict(vocab_size=8192, n_embd=400, n_layer=12, d_state=16, d_conv=4, expand=2, dropout=0.1, max_seq_len=256),
+    },
     "m1_small": {
         # ~5-15M params; fits in 2 GB RAM, fast on MPS
         "gru":        dict(vocab_size=50257, embed_dim=256,  hidden_size=512,  num_layers=3, dropout=0.3),

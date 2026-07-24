@@ -239,6 +239,38 @@ def write_npc_profiles(path: Path, records: List[Dict]) -> None:
     print(f"  {len(seen):,} NPC profiles → {path}")
 
 
+def split_dialogue_records_by_episode(
+    records: List[Dict],
+    *,
+    val_frac: float,
+    seed: int,
+) -> tuple[List[Dict], List[Dict]]:
+    """Deterministically split whole episodes, never individual turns."""
+    groups: Dict[str, List[Dict]] = {}
+    for index, record in enumerate(records):
+        episode_id = str(record.get("metadata", {}).get("episode_id") or f"row_{index}")
+        groups.setdefault(episode_id, []).append(record)
+    episode_ids = sorted(groups)
+    random.Random(seed).shuffle(episode_ids)
+    if len(episode_ids) < 2:
+        return list(records), []
+    n_val = max(1, min(len(episode_ids) - 1, round(len(episode_ids) * val_frac)))
+    val_ids = set(episode_ids[:n_val])
+    train = [
+        record
+        for episode_id in episode_ids
+        if episode_id not in val_ids
+        for record in groups[episode_id]
+    ]
+    val = [
+        record
+        for episode_id in episode_ids
+        if episode_id in val_ids
+        for record in groups[episode_id]
+    ]
+    return train, val
+
+
 # ── Main conversion ───────────────────────────────────────────────────────────
 
 def convert(
@@ -286,14 +318,16 @@ def convert(
         return
 
     # ── Split ─────────────────────────────────────────────────────────────────
-    # Sort by episode_id + turn_idx for reproducibility, then split
+    # Sort for reproducibility, then split whole episodes to prevent turn leakage.
     dialogue_recs.sort(key=lambda r: (
         r["metadata"].get("episode_id", ""),
         r["metadata"].get("turn_idx", 0),
     ))
-
-    cut_d = max(1, int(len(dialogue_recs) * (1 - val_frac)))
-    train_d, val_d = dialogue_recs[:cut_d], dialogue_recs[cut_d:]
+    train_d, val_d = split_dialogue_records_by_episode(
+        dialogue_recs,
+        val_frac=val_frac,
+        seed=seed,
+    )
 
     cut_a = max(1, int(len(affect_rows) * (1 - val_frac)))
     random.shuffle(affect_rows)

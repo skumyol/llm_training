@@ -1,4 +1,4 @@
-\begin{thebibliography}{40}
+\begin{thebibliography}{32}
 \providecommand{\natexlab}[1]{#1}
 
 \bibitem[{Assran et~al.(2023)Assran, Duval, Misra, Bojanowski, Vincent, Rabbat,
@@ -19,16 +19,6 @@ Antoine Bordes, Y-Lan Boureau, and Jason Weston. 2017.
 Penelope Brown and Stephen~C Levinson. 1987.
 \newblock \emph{Politeness: Some universals in language usage}.
 \newblock Cambridge University Press.
-
-\bibitem[{Buakhaw et~al.(2025)Buakhaw, Kerdthaisong, Phenhiran, Khlaisamniang,
-  Vorathammathorn, Ittichaiwong, and
-  Yongsatianchot}]{buakhaw2025deflanderization}
-Pasin Buakhaw, Kun Kerdthaisong, Phuree Phenhiran, Pitikorn Khlaisamniang,
-  Supasate Vorathammathorn, Piyalitt Ittichaiwong, and Nutchanon
-  Yongsatianchot. 2025.
-\newblock Deflanderization for game dialogue: Balancing character authenticity
-  with task execution in {LLM}-based {NPCs}.
-\newblock \emph{arXiv preprint arXiv:2510.13586}.
 
 \bibitem[{Buechel and Hahn(2017)}]{buechel2017emobank}
 Sven Buechel and Udo Hahn. 2017.
@@ -56,14 +46,6 @@ John~M Digman. 1990.
 \newblock Personality structure: Emergence of the five-factor model.
 \newblock \emph{Annual Review of Psychology}, 41(1):417--440.
 
-\bibitem[{Feng et~al.(2022)Feng, Lipani, Ye, Zhang, and
-  Yilmaz}]{feng2023dialogue}
-Yue Feng, Aldo Lipani, Fanghua Ye, Qiang Zhang, and Emine Yilmaz. 2022.
-\newblock \href {https://doi.org/10.18653/v1/2022.acl-long.10} {Dynamic schema
-  graph fusion network for multi-domain dialogue state tracking}.
-\newblock In \emph{Proceedings of the 60th Annual Meeting of the Association
-  for Computational Linguistics (Volume 1: Long Papers)}, pages 115--126.
-
 \bibitem[{Gosling et~al.(2023)Gosling, Dale, and Zheng}]{gosmar2022pippa}
 Tear Gosling, Alpin Dale, and Yinhe Zheng. 2023.
 \newblock \href {https://arxiv.org/abs/2308.05884} {{PIPPA}: A partially
@@ -82,14 +64,6 @@ Edward~J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
   Wang, Lu~Wang, and Weizhu Chen. 2022.
 \newblock {LoRA}: Low-rank adaptation of large language models.
 \newblock In \emph{International Conference on Learning Representations}.
-
-\bibitem[{Jacqmin et~al.(2022)Jacqmin, Rojas-Barahona, and
-  Favre}]{jacqmin2024dialoguestate}
-L{\'e}o Jacqmin, Lina~M. Rojas-Barahona, and Benoit Favre. 2022.
-\newblock \href {https://doi.org/10.18653/v1/2022.sigdial-1.33} {{``Do you
-  follow me?''}: A survey of recent approaches in dialogue state tracking}.
-\newblock In \emph{Proceedings of the 23rd Annual Meeting of the Special
-  Interest Group on Discourse and Dialogue}, pages 336--350.
 
 \bibitem[{Keskar et~al.(2019)Keskar, McCann, Varshney, Xiong, and
   Socher}]{keskar2019ctrl}
@@ -126,14 +100,6 @@ Jiangnan Li, Zheng Lin, Peng Fu, and Weiping Wang. 2021.
 \newblock In \emph{Findings of the Association for Computational Linguistics:
   EMNLP 2021}, pages 1201--1211.
 
-\bibitem[{Li et~al.(2016)Li, Galley, Brockett, Spithourakis, Gao, and
-  Dolan}]{li2016persona}
-Jiwei Li, Michel Galley, Chris Brockett, Georgios Spithourakis, Jianfeng Gao,
-  and Bill Dolan. 2016.
-\newblock A persona-based neural conversation model.
-\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association
-  for Computational Linguistics}, pages 994--1003.
-
 \bibitem[{Li and Liang(2021)}]{li2021prefix}
 Xiang~Lisa Li and Percy Liang. 2021.
 \newblock Prefix-tuning: Optimizing continuous prompts for generation.
@@ -145,14 +111,6 @@ Xiaodong Liu, Pengcheng He, Weizhu Chen, and Jianfeng Gao. 2019.
 \newblock Multi-task deep neural networks for natural language understanding.
 \newblock In \emph{Proceedings of the 57th Annual Meeting of the Association
   for Computational Linguistics}, pages 4487--4496.
-
-\bibitem[{Mairesse et~al.(2007)Mairesse, Walker, Mehl, and
-  Moore}]{mairesse2007using}
-Fran{\c{c}}ois Mairesse, Marilyn~A Walker, Matthias~R Mehl, and Roger~K Moore.
-  2007.
-\newblock Using linguistic cues for the automatic recognition of personality in
-  conversation and text.
-\newblock \emph{Journal of Artificial Intelligence Research}, 30:457--500.
 
 \bibitem[{Mrk{\v{s}}i{\'c} et~al.(2017)Mrk{\v{s}}i{\'c}, {\'O}~S{\'e}aghdha,
   Wen, Thomson, and Young}]{mrksic2017neural}
@@ -176,14 +134,6 @@ Joon~Sung Park, Joseph~C O'Brien, Carrie~J Cai, Meredith~Ringel Morris, Percy
 \newblock In \emph{Proceedings of the 36th Annual ACM Symposium on User
   Interface Software and Technology}.
 
-\bibitem[{Ploug et~al.(2025)Ploug, Rimer, Petersen, and Scirea}]{ploug2025open}
-Rasmus Ploug, Emil Rimer, Anthon Kristian~Skov Petersen, and Marco Scirea.
-  2025.
-\newblock \href {https://doi.org/10.1109/COG64752.2025.11114150} {Open-ended
-  {NPC} dialogue favors casual players: A pilot comparison of three
-  {LLM}-driven dialogue systems}.
-\newblock In \emph{2025 IEEE Conference on Games (CoG)}. IEEE.
-
 \bibitem[{Raheja and Tetreault(2019)}]{raheja2019dialogue}
 Vipul Raheja and Joel Tetreault. 2019.
 \newblock Dialogue act classification with context-aware self-attention.
@@ -197,14 +147,6 @@ Hannah Rashkin, Eric~Michael Smith, Margaret Li, and Y-Lan Boureau. 2019.
   and dataset.
 \newblock In \emph{Proceedings of the 57th Annual Meeting of the Association
   for Computational Linguistics}, pages 5370--5381.
-
-\bibitem[{Rimer et~al.(2025)Rimer, Ploug, Petersen, and
-  Scirea}]{rimer2025talking}
-Emil Rimer, Rasmus Ploug, Anthon Kristian~Skov Petersen, and Marco Scirea.
-  2025.
-\newblock \href {https://doi.org/10.1109/COG64752.2025.11114413} {Talking to
-  {NPCs}: Three {LLM}-driven approaches to dynamic {RPG} dialogue}.
-\newblock In \emph{2025 IEEE Conference on Games (CoG)}. IEEE.
 
 \bibitem[{Russell(1980)}]{russell1980circumplex}
 James~A Russell. 1980.
@@ -270,14 +212,6 @@ Yizhe Zhang and Navdeep Jaitly. 2025.
   augmentation.
 \newblock In \emph{Findings of the Association for Computational Linguistics:
   NLPerspectives}, pages 148--162.
-
-\bibitem[{Zhou et~al.(2018)Zhou, Huang, Zhang, Zhu, and
-  Liu}]{zhou2018emotional}
-Hao Zhou, Minlie Huang, Tianyang Zhang, Xiaoyan Zhu, and Bing Liu. 2018.
-\newblock Emotional chatting machine: Emotional conversation generation with
-  internal and external memory.
-\newblock In \emph{Proceedings of the AAAI Conference on Artificial
-  Intelligence}.
 
 \bibitem[{Zhou et~al.(2025)Zhou, Liu, Yerukola, Kim, and Sap}]{zhou2025social}
 Xuhui Zhou, Jiarui Liu, Akhila Yerukola, Hyunwoo Kim, and Maarten Sap. 2025.

@@ -39,17 +39,21 @@ import csv
 import json
 import logging
 import math
+import os
+import platform
 import random
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
-from torch.utils.data import DataLoader, Dataset
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src" / "train"))  # for small_lm_architectures
@@ -64,6 +68,7 @@ from small_lm_architectures import (
 )
 from conditioning import build_condition_vector, load_partial_state_dict
 from metrics_report import log_metrics_to_mlflow, write_metrics_bundle
+from src.data.small_lm_dialogue import DialogueRecordDataset, DialogueTokenizer
 
 try:
     import tiktoken
@@ -85,6 +90,9 @@ DEFAULTS: Dict[str, Any] = {
     "hardware_profile":  "m1_small",
     "train_text":        "data/dialogue/train.txt",
     "val_text":          "data/dialogue/val.txt",
+    "train_jsonl":       None,
+    "val_jsonl":         None,
+    "tokenizer_path":    None,
     "seq_len":           256,
     "batch_size":        16,
     "grad_accum":        4,
@@ -97,13 +105,35 @@ DEFAULTS: Dict[str, Any] = {
     "output_dir":        "artifacts/small_lm",
     "cond_dim":          8,    # OCEAN(5)+VAD(3); used by prefix_gpt only
     "condition_mode":    "ocean_vad",  # ocean_vad | social_state | zero
+    "condition_dropout": 0.1,
+    "profile_max_tokens": 48,
+    "max_turns":         4,
+    "deduplicate":       True,
+    "source_weights":    {},
+    "curriculum_ratio":  0.1,
+    "curriculum_max_target_tokens": 48,
+    "curriculum_max_turns": 2,
     "init_from":         None,
     "use_amp":           True,
+    "device":            "auto",  # auto | cuda | mps | cpu
+    "num_workers":       None,    # None selects a backend-safe default
+    "pin_memory":        None,    # None enables it only for CUDA
+    "prefetch_factor":   2,
+    "persistent_workers": True,
+    "allow_tf32":        True,
+    "cudnn_benchmark":   True,
+    "fused_optimizer":   True,
     # Embedding model for semantic conditioning (A/B testing)
     "embedding_model":   None,  # e.g., "Qwen/Qwen3-Embedding-4B" or "sentence-transformers/all-MiniLM-L6-v2"
     "embedding_cache":   True,  # Cache extracted embeddings to disk
     # Scheduler: cosine warm restarts to escape local minima
-    "scheduler":         "cosine_warm_restarts",  # cosine_warm_restarts | none
+    "scheduler":         "warmup_cosine",  # warmup_cosine | cosine_warm_restarts | none
+    "warmup_ratio":      0.02,
+    "min_lr_ratio":      0.1,
+    "adam_betas":        [0.9, 0.95],
+    "max_steps":         None,
+    "early_stop_patience": 5,
+    "early_stop_min_delta": 0.005,
     "T_0":               5,       # restart period in epochs
     "T_mult":            2,       # multiply period after each restart
     "eta_min":           1e-6,    # minimum LR
@@ -111,6 +141,100 @@ DEFAULTS: Dict[str, Any] = {
     "mlflow_experiment": "small_lm",
     "mlflow_enabled":    True,
 }
+
+
+def resolve_device_type(
+    requested: str,
+    cuda_available: bool,
+    mps_available: bool,
+) -> str:
+    """Resolve an explicit/automatic device request without touching hardware."""
+    requested = str(requested).lower()
+    if requested not in {"auto", "cuda", "mps", "cpu"}:
+        raise ValueError(
+            f"Unknown device {requested!r}; expected auto, cuda, mps, or cpu"
+        )
+    if requested == "cuda" and not cuda_available:
+        raise RuntimeError("CUDA was requested but is not available")
+    if requested == "mps" and not mps_available:
+        raise RuntimeError("MPS was requested but is not available")
+    if requested != "auto":
+        return requested
+    if cuda_available:
+        return "cuda"
+    if mps_available:
+        return "mps"
+    return "cpu"
+
+
+def runtime_policy(
+    device_type: str,
+    *,
+    use_amp: bool,
+    num_workers: Optional[int] = None,
+    pin_memory: Optional[bool] = None,
+    fused_optimizer: bool = True,
+) -> Dict[str, Any]:
+    """Return conservative fast defaults for CUDA, Apple MPS, and CPU."""
+    if device_type not in {"cuda", "mps", "cpu"}:
+        raise ValueError(f"Unsupported device type: {device_type}")
+    if num_workers is None:
+        num_workers = min(4, os.cpu_count() or 1) if device_type == "cuda" else 0
+    if num_workers < 0:
+        raise ValueError("num_workers must be >= 0")
+    if pin_memory is None:
+        pin_memory = device_type == "cuda"
+    amp_enabled = bool(use_amp and device_type in {"cuda", "mps"})
+    return {
+        "amp_enabled": amp_enabled,
+        "amp_dtype": "float16" if amp_enabled else "float32",
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+        "non_blocking": bool(pin_memory and device_type == "cuda"),
+        "fused_optimizer": bool(fused_optimizer and device_type == "cuda"),
+    }
+
+
+def _synchronize(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
+
+
+def _device_name(device: torch.device) -> str:
+    if device.type == "cuda":
+        return torch.cuda.get_device_name(device)
+    if device.type == "mps":
+        return "Apple Metal Performance Shaders"
+    return platform.processor() or platform.machine() or "CPU"
+
+
+def _peak_memory_mb(device: torch.device) -> Optional[float]:
+    if device.type == "cuda":
+        return torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+    if device.type == "mps" and hasattr(torch, "mps"):
+        return torch.mps.current_allocated_memory() / (1024 ** 2)
+    return None
+
+
+def warmup_cosine_multiplier(
+    step: int,
+    total_steps: int,
+    warmup_steps: int,
+    min_lr_ratio: float,
+) -> float:
+    """Linear warm-up followed by one cosine decay."""
+    total_steps = max(1, int(total_steps))
+    warmup_steps = max(0, min(int(warmup_steps), total_steps))
+    step = max(0, min(int(step), total_steps))
+    min_lr_ratio = float(min_lr_ratio)
+    if warmup_steps and step < warmup_steps:
+        return step / warmup_steps
+    decay_steps = max(1, total_steps - warmup_steps)
+    progress = (step - warmup_steps) / decay_steps
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
 
 
 def load_config(config_path: Optional[str], overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -130,6 +254,8 @@ def setup_logger(log_dir: Path, name: str) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    logger.handlers.clear()
     fmt = logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     ch  = logging.StreamHandler(sys.stdout); ch.setLevel(logging.INFO); ch.setFormatter(fmt)
     fh  = logging.FileHandler(log_dir / "run.log", mode="w"); fh.setLevel(logging.DEBUG); fh.setFormatter(fmt)
@@ -276,8 +402,8 @@ class TokenDataset(Dataset):
 # ── AMP context ───────────────────────────────────────────────────────────────
 
 def amp_ctx(device: torch.device, enabled: bool):
-    if enabled and device.type == "cuda":
-        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    if enabled and device.type in {"cuda", "mps"}:
+        return torch.autocast(device_type=device.type, dtype=torch.float16)
     return torch.autocast(device_type="cpu", enabled=False)
 
 
@@ -292,28 +418,144 @@ def evaluate(
     tokenizer: Optional[Any] = None,
 ) -> Dict[str, float]:
     model.eval()
-    losses = []
-    for bi, (x, y) in enumerate(loader):
+    total_nll = 0.0
+    total_tokens = 0
+    total_bytes = 0
+    source_nll: Dict[str, float] = {}
+    source_tokens: Dict[str, int] = {}
+    for bi, batch in enumerate(loader):
         if bi >= max_batches:
             break
-        x, y = x.to(device), y.to(device)
+        if isinstance(batch, dict):
+            x, y = batch["input_ids"], batch["labels"]
+            aligned_cond = batch["condition"]
+            condition_mask = batch["condition_mask"]
+            batch_sources = list(batch["source"])
+            total_bytes += int(batch["target_bytes"].sum().item())
+        else:
+            x, y = batch
+            aligned_cond = condition_mask = None
+            batch_sources = ["legacy_text"] * x.size(0)
+        x = x.to(device, non_blocking=device.type == "cuda")
+        y = y.to(device, non_blocking=device.type == "cuda")
         with amp_ctx(device, use_amp):
             if isinstance(model, PrefixTinyGPTLM):
-                batch_texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))] if tokenizer is not None else [""] * x.size(0)
-                cond = build_condition_vector(
-                    batch_texts,
-                    condition_mode,
-                    cond_dim,
-                    extractor=extractor,
-                    tokenizer=tokenizer,
-                    device=device,
-                )
-                out  = model(x, cond, y)
+                if aligned_cond is not None:
+                    cond = aligned_cond.to(device, non_blocking=device.type == "cuda")
+                    mask = condition_mask.to(device, non_blocking=device.type == "cuda")
+                    cond = cond * mask
+                else:
+                    batch_texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))] if tokenizer is not None else [""] * x.size(0)
+                    cond = build_condition_vector(
+                        batch_texts,
+                        condition_mode,
+                        cond_dim,
+                        extractor=extractor,
+                        tokenizer=tokenizer,
+                        device=device,
+                    )
+                    mask = None
+                out  = model(x, cond, y, cond_mask=mask)
             else:
                 out  = model(x, y)
-        losses.append(out.loss.item())
-    mean = sum(losses) / max(len(losses), 1)
-    return {"val_loss": mean, "val_ppl": math.exp(min(mean, 20))}
+        token_losses = F.cross_entropy(
+            out.logits.reshape(-1, out.logits.size(-1)),
+            y.reshape(-1),
+            ignore_index=-100,
+            reduction="none",
+        ).view_as(y)
+        valid = y != -100
+        total_nll += float(token_losses[valid].sum().item())
+        total_tokens += int(valid.sum().item())
+        for row_index, source in enumerate(batch_sources):
+            row_valid = valid[row_index]
+            row_tokens = int(row_valid.sum().item())
+            if not row_tokens:
+                continue
+            source_nll[source] = source_nll.get(source, 0.0) + float(
+                token_losses[row_index][row_valid].sum().item()
+            )
+            source_tokens[source] = source_tokens.get(source, 0) + row_tokens
+    mean = total_nll / max(total_tokens, 1)
+    metrics: Dict[str, float] = {
+        "val_loss": mean,
+        "val_ppl": math.exp(min(mean, 20)),
+        "val_tokens": float(total_tokens),
+    }
+    if total_bytes:
+        metrics["val_bits_per_byte"] = total_nll / (math.log(2) * total_bytes)
+    for source, nll in sorted(source_nll.items()):
+        metrics[f"source_ppl/{source}"] = math.exp(
+            min(nll / max(source_tokens[source], 1), 20)
+        )
+    return metrics
+
+
+@torch.no_grad()
+def evaluate_generation(
+    model: nn.Module,
+    dataset: DialogueRecordDataset,
+    tokenizer: DialogueTokenizer,
+    device: torch.device,
+    *,
+    max_examples: int = 32,
+    max_new_tokens: int = 48,
+) -> Dict[str, Any]:
+    """Greedy response generation metrics for the record-aware validation set."""
+    model.eval()
+    generated_texts: List[str] = []
+    samples: List[Dict[str, str]] = []
+    for record in dataset.records[:max_examples]:
+        encoded = dataset.encode_record(record)
+        ids = list(encoded["prompt_ids"])
+        cond = encoded["condition"].unsqueeze(0).to(device)
+        cond_mask = encoded["condition_mask"].unsqueeze(0).to(device)
+        cond = cond * cond_mask
+        generated: List[int] = []
+        for _ in range(max_new_tokens):
+            context = ids[-dataset.seq_len :]
+            x = torch.tensor(context, dtype=torch.long, device=device).unsqueeze(0)
+            if isinstance(model, PrefixTinyGPTLM):
+                out = model(x, cond, cond_mask=cond_mask)
+            else:
+                out = model(x)
+            next_id = int(out.logits[0, -1].argmax().item())
+            if next_id in (tokenizer.eot_id, tokenizer.eos_id):
+                break
+            ids.append(next_id)
+            generated.append(next_id)
+        text = tokenizer.decode(generated).strip()
+        generated_texts.append(text)
+        if len(samples) < 8:
+            samples.append(
+                {
+                    "prompt": tokenizer.decode(encoded["prompt_ids"]).strip(),
+                    "reference": str(record.get("target_response", "")).strip(),
+                    "generated": text,
+                }
+            )
+
+    tokens = [word for text in generated_texts for word in text.lower().split()]
+
+    def distinct(n: int) -> float:
+        ngrams = list(zip(*(tokens[offset:] for offset in range(n))))
+        return len(set(ngrams)) / len(ngrams) if ngrams else 0.0
+
+    def repetition(n: int) -> float:
+        ngrams = list(zip(*(tokens[offset:] for offset in range(n))))
+        return 1.0 - len(set(ngrams)) / len(ngrams) if ngrams else 0.0
+
+    return {
+        "num_examples": len(generated_texts),
+        "distinct_1": distinct(1),
+        "distinct_2": distinct(2),
+        "repetition_3": repetition(3),
+        "repetition_4": repetition(4),
+        "empty_response_rate": (
+            sum(not text for text in generated_texts) / max(len(generated_texts), 1)
+        ),
+        "samples": samples,
+    }
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -341,40 +583,146 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     with open(out_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)
 
+    requested_device = str(cfg.get("device", "auto")).lower()
+    resolved_device = resolve_device_type(
+        requested_device,
+        torch.cuda.is_available(),
+        hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
+    )
+    device = select_device(resolved_device)
+    policy = runtime_policy(
+        device.type,
+        use_amp=bool(cfg.get("use_amp", True)),
+        num_workers=cfg.get("num_workers"),
+        pin_memory=cfg.get("pin_memory"),
+        fused_optimizer=bool(cfg.get("fused_optimizer", True)),
+    )
+    if device.type == "cuda":
+        torch.set_float32_matmul_precision(
+            "high" if bool(cfg.get("allow_tf32", True)) else "highest"
+        )
+        torch.backends.cudnn.benchmark = bool(cfg.get("cudnn_benchmark", True))
+        torch.cuda.reset_peak_memory_stats(device)
+
     # ── Data ──────────────────────────────────────────────────────────────────
-    for key in ("train_text", "val_text"):
-        p = Path(cfg[key])
-        if not p.exists():
-            log.error(f"Missing text file: {p}")
-            log.error("Run prepare_dialogue_data.py first to produce .txt splits.")
-            raise FileNotFoundError(str(p))
-
-    train_text = Path(cfg["train_text"]).read_text(encoding="utf-8")
-    val_text   = Path(cfg["val_text"]).read_text(encoding="utf-8")
-
-    tokenizer  = build_tokenizer(train_text)
+    use_records = bool(cfg.get("train_jsonl") or cfg.get("val_jsonl"))
+    if use_records:
+        for key in ("train_jsonl", "val_jsonl", "tokenizer_path"):
+            value = cfg.get(key)
+            if not value or not Path(str(value)).exists():
+                raise FileNotFoundError(
+                    f"Missing required JSONL-pipeline path: {key}={value!r}"
+                )
+        tokenizer = DialogueTokenizer.from_file(cfg["tokenizer_path"])
+        train_ds = DialogueRecordDataset(
+            cfg["train_jsonl"],
+            tokenizer,
+            cfg["seq_len"],
+            profile_max_tokens=cfg.get("profile_max_tokens", 48),
+            max_turns=cfg.get("max_turns", 4),
+            deduplicate=cfg.get("deduplicate", True),
+        )
+        val_ds = DialogueRecordDataset(
+            cfg["val_jsonl"],
+            tokenizer,
+            cfg["seq_len"],
+            profile_max_tokens=cfg.get("profile_max_tokens", 48),
+            max_turns=cfg.get("max_turns", 4),
+            deduplicate=cfg.get("deduplicate", True),
+        )
+        train_ids: List[int] = []
+        val_ids: List[int] = []
+        train_token_count = train_ds.target_token_count
+        val_token_count = val_ds.target_token_count
+        log.info(
+            "Records — train: %s (%s target tokens)  val: %s (%s target tokens)",
+            f"{len(train_ds):,}",
+            f"{train_token_count:,}",
+            f"{len(val_ds):,}",
+            f"{val_token_count:,}",
+        )
+    else:
+        for key in ("train_text", "val_text"):
+            p = Path(cfg[key])
+            if not p.exists():
+                log.error(f"Missing text file: {p}")
+                log.error("Run prepare_dialogue_data.py first to produce .txt splits.")
+                raise FileNotFoundError(str(p))
+        train_text = Path(cfg["train_text"]).read_text(encoding="utf-8")
+        val_text   = Path(cfg["val_text"]).read_text(encoding="utf-8")
+        tokenizer  = build_tokenizer(train_text)
+        train_ids  = tokenizer.encode(train_text)
+        val_ids    = tokenizer.encode(val_text)
+        train_token_count = len(train_ids)
+        val_token_count = len(val_ids)
+        train_ds   = TokenDataset(train_ids, cfg["seq_len"])
+        val_ds     = TokenDataset(val_ids,   cfg["seq_len"])
+        log.info(f"Tokens — train: {len(train_ids):,}  val: {len(val_ids):,}")
     log.info(f"Tokenizer: {tokenizer.name}  vocab={tokenizer.vocab_size:,}")
-
-    train_ids  = tokenizer.encode(train_text)
-    val_ids    = tokenizer.encode(val_text)
-    log.info(f"Tokens — train: {len(train_ids):,}  val: {len(val_ids):,}")
-
-    train_ds   = TokenDataset(train_ids, cfg["seq_len"])
-    val_ds     = TokenDataset(val_ids,   cfg["seq_len"])
-    # Use multiple workers + pinned memory to hide data-loading latency on GPU
-    _cuda_available = torch.cuda.is_available()
-    num_workers = 4 if _cuda_available else 0
-    pin_memory  = _cuda_available
+    num_workers = int(policy["num_workers"])
+    pin_memory = bool(policy["pin_memory"])
+    loader_runtime: Dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": bool(
+            cfg.get("persistent_workers", True) and num_workers > 0
+        ),
+    }
+    if num_workers > 0:
+        loader_runtime["prefetch_factor"] = int(cfg.get("prefetch_factor", 2))
+    source_sampler = None
+    if use_records and cfg.get("source_weights"):
+        source_weights = {
+            str(key): float(value)
+            for key, value in cfg["source_weights"].items()
+        }
+        sample_weights = [
+            source_weights.get(
+                str(record.get("metadata", {}).get("source", "unknown")),
+                1.0,
+            )
+            for record in train_ds.records
+        ]
+        source_sampler = WeightedRandomSampler(
+            sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        log.info("Source sampling weights: %s", source_weights)
     train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=True,
-        num_workers=num_workers, pin_memory=pin_memory,
-        persistent_workers=num_workers > 0,
+        train_ds,
+        batch_size=cfg["batch_size"],
+        shuffle=source_sampler is None,
+        sampler=source_sampler,
+        **loader_runtime,
     )
     val_loader = DataLoader(
         val_ds,   batch_size=cfg["batch_size"], shuffle=False,
-        num_workers=num_workers, pin_memory=pin_memory,
-        persistent_workers=num_workers > 0,
+        **loader_runtime,
     )
+    curriculum_loader = None
+    curriculum_epochs = 0
+    if use_records and float(cfg.get("curriculum_ratio", 0.0)) > 0:
+        easy_indices = train_ds.easy_indices(
+            max_target_tokens=int(cfg.get("curriculum_max_target_tokens", 48)),
+            max_turns=int(cfg.get("curriculum_max_turns", 2)),
+        )
+        if easy_indices:
+            curriculum_epochs = max(
+                1,
+                math.ceil(int(cfg["epochs"]) * float(cfg["curriculum_ratio"])),
+            )
+            curriculum_loader = DataLoader(
+                Subset(train_ds, easy_indices),
+                batch_size=cfg["batch_size"],
+                shuffle=True,
+                **loader_runtime,
+            )
+            log.info(
+                "Curriculum warm-up: %d epochs on %d short examples",
+                curriculum_epochs,
+                len(easy_indices),
+            )
 
     # ── Embedding Extractor (for semantic conditioning A/B testing) ────────────
     extractor: Optional[EmbeddingExtractor] = None
@@ -387,7 +735,6 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             log.warning(f"Failed to load embedding model: {e}. Using zero conditioning.")
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    device  = select_device()
     profile = RECOMMENDED_CONFIGS.get(cfg["hardware_profile"], {})
     params  = dict(profile.get(arch, {}))
     params["vocab_size"] = tokenizer.vocab_size
@@ -402,7 +749,17 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     model   = build_model(arch, params).to(device)
     total   = sum(p.numel() for p in model.parameters())
-    log.info(f"Device: {device}  |  Parameters: {total:,} ({total/1e6:.1f} M)")
+    log.info(
+        "Device: %s (%s) | precision=%s | workers=%d | pin_memory=%s | "
+        "Parameters: %s (%.1f M)",
+        device,
+        _device_name(device),
+        policy["amp_dtype"],
+        num_workers,
+        pin_memory,
+        f"{total:,}",
+        total / 1e6,
+    )
 
     init_from = cfg.get("init_from")
     if init_from and Path(str(init_from)).exists():
@@ -419,13 +776,56 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # Ensure numeric types (YAML may load as strings)
     lr = float(cfg["lr"])
     weight_decay = float(cfg["weight_decay"])
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler    = torch.amp.GradScaler(device.type, enabled=(cfg["use_amp"] and device.type == "cuda"))
+    decay_params, no_decay_params = [], []
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        if parameter.ndim < 2 or name.endswith(".bias") or "ln" in name.lower() or "norm" in name.lower():
+            no_decay_params.append(parameter)
+        else:
+            decay_params.append(parameter)
+    optimizer_kwargs: Dict[str, Any] = {
+        "lr": lr,
+        "betas": tuple(float(x) for x in cfg.get("adam_betas", [0.9, 0.95])),
+    }
+    if policy["fused_optimizer"]:
+        optimizer_kwargs["fused"] = True
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        **optimizer_kwargs,
+    )
+    scaler = torch.amp.GradScaler(
+        device.type,
+        enabled=bool(policy["amp_enabled"]),
+    )
 
-    # ── LR Scheduler (cosine warm restarts to escape local minima) ─────────
+    updates_per_epoch = max(1, math.ceil(len(train_loader) / int(cfg["grad_accum"])))
+    planned_steps = updates_per_epoch * int(cfg["epochs"])
+    if cfg.get("max_steps") is not None:
+        planned_steps = min(planned_steps, int(cfg["max_steps"]))
+
+    # ── LR Scheduler ────────────────────────────────────────────────────────
     scheduler = None
     sched_name = cfg.get("scheduler", "none")
-    if sched_name == "cosine_warm_restarts":
+    if sched_name == "warmup_cosine":
+        warmup_steps = int(planned_steps * float(cfg.get("warmup_ratio", 0.02)))
+        min_lr_ratio = float(cfg.get("min_lr_ratio", 0.1))
+        scheduler = LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: warmup_cosine_multiplier(
+                step, planned_steps, warmup_steps, min_lr_ratio
+            ),
+        )
+        log.info(
+            "Scheduler: warmup_cosine (steps=%d, warmup=%d, min_ratio=%.3f)",
+            planned_steps,
+            warmup_steps,
+            min_lr_ratio,
+        )
+    elif sched_name == "cosine_warm_restarts":
         T_0 = int(cfg.get("T_0", 5))
         T_mult = int(cfg.get("T_mult", 2))
         eta_min = float(cfg.get("eta_min", 1e-6))
@@ -450,12 +850,17 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "seed": str(cfg["seed"]),
         "task": "dialogue_lm",
         "embedding_model": str(cfg.get("embedding_model", "none")),
+        "device": device.type,
+        "precision": str(policy["amp_dtype"]),
     })
     tracker.log_params(cfg)
 
     # ── Metric writers ────────────────────────────────────────────────────────
     step_writer  = MetricsWriter(out_dir / "step_metrics.csv",  ["epoch", "global_step", "train_loss", "grad_norm"])
-    epoch_writer = MetricsWriter(out_dir / "epoch_metrics.csv", ["epoch", "val_loss", "val_ppl"])
+    epoch_writer = MetricsWriter(
+        out_dir / "epoch_metrics.csv",
+        ["epoch", "global_step", "val_loss", "val_ppl", "val_bits_per_byte"],
+    )
 
     best_val  = math.inf
     best_path = out_dir / "best_model.pt"
@@ -466,7 +871,32 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "hyperparams": {k: v for k, v in cfg.items() if k not in ("run_id",)},
         "model_params": total,
         "tokenizer":   tokenizer.name,
-        "data":        {"train_tokens": len(train_ids), "val_tokens": len(val_ids)},
+        "runtime": {
+            "requested_device": requested_device,
+            "device_type": device.type,
+            "device_name": _device_name(device),
+            "torch_version": torch.__version__,
+            "precision": policy["amp_dtype"],
+            "amp_enabled": policy["amp_enabled"],
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "non_blocking_transfers": policy["non_blocking"],
+            "fused_optimizer": policy["fused_optimizer"],
+            "allow_tf32": bool(cfg.get("allow_tf32", True))
+            if device.type == "cuda"
+            else False,
+            "cudnn_benchmark": bool(cfg.get("cudnn_benchmark", True))
+            if device.type == "cuda"
+            else False,
+        },
+        "data":        {
+            "format": "jsonl_records" if use_records else "plain_text_stream",
+            "train_examples": len(train_ds),
+            "val_examples": len(val_ds),
+            "train_tokens": train_token_count,
+            "val_tokens": val_token_count,
+            "condition_coverage": train_ds.condition_coverage if use_records else {},
+        },
         "embedding":   {
             "model": cfg.get("embedding_model"),
             "dim":   extractor.dim if extractor else None,
@@ -476,38 +906,85 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         },
         "init_from": cfg.get("init_from"),
         "epochs":      [],
+        "generation":  {},
         "best":        {},
     }
 
     global_step  = 0
     running_loss = 0.0
     running_n    = 0
+    epochs_without_improvement = 0
+    stop_training = False
+    train_loop_seconds = 0.0
+    train_examples_seen = 0
+    train_target_tokens_seen = 0
 
     for epoch in range(1, cfg["epochs"] + 1):
         log.info(f"── Epoch {epoch}/{cfg['epochs']} ──────────────────────────────────")
         model.train()
         optimizer.zero_grad(set_to_none=True)
+        active_train_loader = (
+            curriculum_loader
+            if curriculum_loader is not None and epoch <= curriculum_epochs
+            else train_loader
+        )
+        _synchronize(device)
+        epoch_train_started = time.perf_counter()
+        epoch_eval_seconds = 0.0
 
-        for bi, (x, y) in enumerate(train_loader, start=1):
-            x, y = x.to(device), y.to(device)
+        for bi, batch in enumerate(active_train_loader, start=1):
+            if isinstance(batch, dict):
+                x, y = batch["input_ids"], batch["labels"]
+                aligned_cond = batch["condition"]
+                condition_mask = batch["condition_mask"]
+            else:
+                x, y = batch
+                aligned_cond = condition_mask = None
+            train_examples_seen += int(x.size(0))
+            train_target_tokens_seen += int((y != -100).sum().item())
+            x = x.to(device, non_blocking=bool(policy["non_blocking"]))
+            y = y.to(device, non_blocking=bool(policy["non_blocking"]))
 
-            with amp_ctx(device, cfg["use_amp"]):
+            with amp_ctx(device, bool(policy["amp_enabled"])):
                 if isinstance(model, PrefixTinyGPTLM):
-                    texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))]
-                    cond = build_condition_vector(
-                        texts,
-                        cfg.get("condition_mode", "ocean_vad"),
-                        cfg["cond_dim"],
-                        extractor=extractor,
-                        tokenizer=tokenizer,
-                        device=device,
-                    )
-                    out  = model(x, cond, y)
+                    if aligned_cond is not None:
+                        mask = condition_mask.to(
+                            device, non_blocking=bool(policy["non_blocking"])
+                        )
+                        cond = aligned_cond.to(
+                            device, non_blocking=bool(policy["non_blocking"])
+                        ) * mask
+                        if cfg.get("condition_mode") == "zero":
+                            cond = torch.zeros_like(cond)
+                            mask = torch.ones_like(mask)
+                        elif model.training and float(cfg.get("condition_dropout", 0.0)) > 0:
+                            keep = (
+                                torch.rand(cond.size(0), 1, device=device)
+                                >= float(cfg["condition_dropout"])
+                            ).to(cond.dtype)
+                            mask = mask * keep
+                    else:
+                        texts = [tokenizer.decode(x[i].tolist()) for i in range(x.size(0))]
+                        cond = build_condition_vector(
+                            texts,
+                            cfg.get("condition_mode", "ocean_vad"),
+                            cfg["cond_dim"],
+                            extractor=extractor,
+                            tokenizer=tokenizer,
+                            device=device,
+                        )
+                        mask = None
+                    out  = model(x, cond, y, cond_mask=mask)
                 else:
                     out  = model(x, y)
-                loss = out.loss / cfg["grad_accum"]
+                group_first = ((bi - 1) // int(cfg["grad_accum"])) * int(cfg["grad_accum"]) + 1
+                group_size = min(
+                    int(cfg["grad_accum"]),
+                    len(active_train_loader) - group_first + 1,
+                )
+                loss = out.loss / group_size
 
-            if cfg["use_amp"] and device.type == "cuda":
+            if policy["amp_enabled"]:
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
@@ -515,8 +992,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             running_loss += out.loss.item()
             running_n    += 1
 
-            if bi % cfg["grad_accum"] == 0:
-                if cfg["use_amp"] and device.type == "cuda":
+            if bi % cfg["grad_accum"] == 0 or bi == len(active_train_loader):
+                if policy["amp_enabled"]:
                     scaler.unscale_(optimizer)
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
                     scaler.step(optimizer); scaler.update()
@@ -524,7 +1001,10 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
                     optimizer.step()
                 if scheduler is not None:
-                    scheduler.step(epoch - 1 + bi / len(train_loader))
+                    if sched_name == "cosine_warm_restarts":
+                        scheduler.step(epoch - 1 + bi / len(active_train_loader))
+                    else:
+                        scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
@@ -538,35 +1018,48 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     running_loss = 0.0; running_n = 0
 
                 if global_step % cfg["eval_every_steps"] == 0:
+                    _synchronize(device)
+                    eval_started = time.perf_counter()
                     vm = evaluate(
                         model,
                         val_loader,
                         device,
                         cfg["cond_dim"],
-                        cfg["use_amp"],
+                        bool(policy["amp_enabled"]),
                         condition_mode=cfg.get("condition_mode", "ocean_vad"),
                         extractor=extractor,
                         tokenizer=tokenizer,
                     )
+                    _synchronize(device)
+                    epoch_eval_seconds += time.perf_counter() - eval_started
                     log.info(f"  [eval] val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
                     model.train()
 
+                if cfg.get("max_steps") is not None and global_step >= int(cfg["max_steps"]):
+                    stop_training = True
+                    break
+
+        _synchronize(device)
+        train_loop_seconds += max(
+            0.0, time.perf_counter() - epoch_train_started - epoch_eval_seconds
+        )
         # ── End-of-epoch validation ───────────────────────────────────────────
         vm = evaluate(
             model,
             val_loader,
             device,
             cfg["cond_dim"],
-            cfg["use_amp"],
+            bool(policy["amp_enabled"]),
             condition_mode=cfg.get("condition_mode", "ocean_vad"),
             extractor=extractor,
             tokenizer=tokenizer,
         )
         log.info(f"  epoch {epoch} end → val_loss={vm['val_loss']:.4f}  val_ppl={vm['val_ppl']:.2f}")
-        epoch_writer.write({"epoch": epoch, **vm})
-        summary["epochs"].append({"epoch": epoch, **vm})
-        tracker.log_metrics({"val_loss": vm["val_loss"], "val_ppl": vm["val_ppl"]}, step=epoch)
+        epoch_writer.write({"epoch": epoch, "global_step": global_step, **vm})
+        summary["epochs"].append({"epoch": epoch, "global_step": global_step, **vm})
+        tracker.log_metrics(vm, step=global_step)
 
+        improvement = best_val - vm["val_loss"]
         if vm["val_loss"] < best_val:
             best_val = vm["val_loss"]
             _state = model.state_dict()
@@ -580,23 +1073,75 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "arch":   arch, "params": params,
                 "state":  _state,
                 "epoch":  epoch, "val_loss": best_val,
+                "tokenizer_path": cfg.get("tokenizer_path"),
+                "data_format": "jsonl_records" if use_records else "plain_text_stream",
             }, best_path)
             log.info(f"  ✓ Best checkpoint saved  (val_loss={best_val:.4f})")
 
+        if improvement > float(cfg.get("early_stop_min_delta", 0.005)):
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+        patience = int(cfg.get("early_stop_patience", 0))
+        if patience and epochs_without_improvement >= patience:
+            log.info("Early stopping after %d epochs without material improvement", patience)
+            stop_training = True
+        if stop_training:
+            break
+
     best_ep = min(summary["epochs"], key=lambda e: e["val_loss"])
     summary["best"] = {"epoch": best_ep["epoch"], "val_loss": best_val, "val_ppl": best_ep["val_ppl"]}
+    if "val_bits_per_byte" in best_ep:
+        summary["best"]["val_bits_per_byte"] = best_ep["val_bits_per_byte"]
+    summary["best"]["global_step"] = best_ep.get("global_step")
+    if use_records and best_path.exists():
+        checkpoint = torch.load(best_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["state"], strict=False)
+        summary["generation"] = evaluate_generation(
+            model,
+            val_ds,
+            tokenizer,
+            device,
+            max_examples=int(cfg.get("generation_eval_examples", 32)),
+            max_new_tokens=int(cfg.get("generation_max_new_tokens", 48)),
+        )
+
+    summary["runtime"].update(
+        {
+            "train_loop_seconds": train_loop_seconds,
+            "train_examples_seen": train_examples_seen,
+            "train_target_tokens_seen": train_target_tokens_seen,
+            "train_examples_per_second": (
+                train_examples_seen / train_loop_seconds
+                if train_loop_seconds > 0
+                else None
+            ),
+            "train_target_tokens_per_second": (
+                train_target_tokens_seen / train_loop_seconds
+                if train_loop_seconds > 0
+                else None
+            ),
+            "peak_memory_mb": _peak_memory_mb(device),
+        }
+    )
 
     with open(out_dir / "run_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     write_metrics_bundle(out_dir, "run_summary", summary, title="Small LM Run Summary")
 
     # ── MLflow: log final metrics and artifacts ──────────────────────────────────
-    log_metrics_to_mlflow(tracker, {
+    final_tracking_metrics = {
         "best_val_loss": best_val,
         "best_val_ppl":  best_ep["val_ppl"],
         "best_epoch":    best_ep["epoch"],
         "num_params":    total,
-    })
+        "train_target_tokens_per_second": summary["runtime"][
+            "train_target_tokens_per_second"
+        ],
+    }
+    if summary["runtime"]["peak_memory_mb"] is not None:
+        final_tracking_metrics["peak_memory_mb"] = summary["runtime"]["peak_memory_mb"]
+    log_metrics_to_mlflow(tracker, final_tracking_metrics)
     tracker.log_artifact(out_dir / "run_summary.json")
     tracker.log_artifact(out_dir / "run_summary.md")
     tracker.log_artifact(out_dir / "epoch_metrics.csv")
@@ -617,9 +1162,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--arch",             type=str, choices=["gru", "awdlstm", "gpt", "prefix_gpt", "moe", "mamba_like"])
     p.add_argument("--run-id",           type=str,   dest="run_id")
     p.add_argument("--hardware-profile", type=str,   dest="hardware_profile",
-                   choices=["m1_small", "rtx4070_small"])
+                   choices=["paper_16m", "m1_small", "rtx4070_small"])
     p.add_argument("--train-text",       type=str,   dest="train_text")
     p.add_argument("--val-text",         type=str,   dest="val_text")
+    p.add_argument("--train-jsonl",      type=str,   dest="train_jsonl")
+    p.add_argument("--val-jsonl",        type=str,   dest="val_jsonl")
+    p.add_argument("--tokenizer-path",   type=str,   dest="tokenizer_path")
     p.add_argument("--seq-len",          type=int,   dest="seq_len")
     p.add_argument("--batch-size",       type=int,   dest="batch_size")
     p.add_argument("--grad-accum",       type=int,   dest="grad_accum")
@@ -629,20 +1177,48 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--log-every",        type=int,   dest="log_every")
     p.add_argument("--eval-every-steps", type=int,   dest="eval_every_steps")
     p.add_argument("--seed",             type=int)
-    p.add_argument("--amp",              action="store_true", dest="use_amp")
     p.add_argument("--embedding-model",  type=str,   dest="embedding_model",
                    help="Pre-trained model for semantic conditioning (e.g., Qwen/Qwen3-Embedding-4B)")
     p.add_argument("--condition-mode",   type=str,   dest="condition_mode",
-                   choices=["ocean_vad", "social_state", "zero"])
+                   choices=["ocean_vad", "aligned", "social_state", "zero"])
     p.add_argument("--init-from",        type=str,   dest="init_from",
                    help="Checkpoint path to warm-start from; compatible tensors are loaded.")
+    p.add_argument("--max-steps",         type=int,   dest="max_steps")
+    p.add_argument(
+        "--device",
+        choices=["auto", "cuda", "mps", "cpu"],
+        help="Training device. 'auto' prefers CUDA, then Apple MPS, then CPU.",
+    )
+    p.add_argument("--num-workers", type=int, dest="num_workers")
+    p.add_argument(
+        "--pin-memory",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="pin_memory",
+    )
+    p.add_argument(
+        "--amp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="use_amp",
+    )
+    p.add_argument(
+        "--tf32",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="allow_tf32",
+    )
+    p.add_argument(
+        "--fused-optimizer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="fused_optimizer",
+    )
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args      = parse_args()
     overrides = {k: v for k, v in vars(args).items() if k != "config"}
-    if overrides.get("use_amp") is False:
-        overrides.pop("use_amp")
     cfg = load_config(args.config, overrides)
     train(cfg)

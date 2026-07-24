@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main_emnlp_edited"] 1780844667.31301 "main_emnlp_edited.aux" "main_emnlp_edited.bbl" "main_emnlp_edited" 1780844669.12753 0
+["bibtex main_emnlp_8page"] 1781346192.4882 "main_emnlp_8page.aux" "main_emnlp_8page.bbl" "main_emnlp_8page" 1781346194.28017 0
   "./acl_natbib.bst" 1779510864.92145 45186 3d1af46d62cc9172ef6e42b56c1cd613 ""
   "./references.bib" 1779765268.9925 17163 b270592a01d9f02f12d60dc1030f5b75 ""
-  "main_emnlp_edited.aux" 1780844668.71752 74250 28ca6168032244ff65a5d45ea425812d "pdflatex"
+  "main_emnlp_8page.aux" 1781346193.82169 48045 2b36f4148e670ee628f7f835044ac839 "pdflatex"
   (generated)
-  "main_emnlp_edited.bbl"
-  "main_emnlp_edited.blg"
+  "main_emnlp_8page.bbl"
+  "main_emnlp_8page.blg"
   (rewritten before read)
-["pdflatex"] 1780844667.45196 "main_emnlp_edited.tex" "main_emnlp_edited.pdf" "main_emnlp_edited" 1780844669.12785 0
+["pdflatex"] 1781346192.63798 "main_emnlp_8page.tex" "main_emnlp_8page.pdf" "main_emnlp_8page" 1781346194.28043 0
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc" 1558214095 7631 5169ff1acd97ff1c4ab83563c99f96f4 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
@@ -66,7 +66,6 @@
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb" 1248133631 32726 0a1aea6fcd6468ee2cf64d891f5c43c8 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb" 1248133631 33993 9b89b85fd2d9df0482bd47194d1d3bf3 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb" 1248133631 32569 5e5ddc8df908dea60932f3c484a54c0d ""
-  "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb" 1248133631 32587 1788b0c1c5b39540c96f5e42ccd6dae8 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb" 1248133631 32716 08e384dc442464e7285e891af9f45947 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb" 1248133631 32626 4f5c1b83753b1dd3a97d1b399a005b4b ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb" 1248133631 32442 c975af247b6702f7ca0c299af3616b80 ""
@@ -188,27 +187,24 @@
   "figures/ConditionalDialogue soft-prefix.png" 1780759450.75371 1286824 76331f0ab7fc8786f0aedf8d84aa9b09 ""
   "figures/Data flow from scenario specifications.png" 1780759450.75712 1281832 5a0289a48562e3f91a3cc9976d63ab2f ""
   "figures/disclosure_stacked_bar.pdf" 1780759450.77079 20439 a0e31af0f896003de0593518efb7dba5 ""
-  "figures/episode_level_metrics.pdf" 1780759450.77123 28121 b7049e9a186ed4499d47cb59e8ff3059 ""
   "figures/error_decomposition.pdf" 1780759450.7716 28887 1e77c7b40568655150b88f630ad0c4d9 ""
   "figures/flowchart_of_llm_pipeline_stages.png" 1780759450.77387 1096437 a448aba149806d0bc0a4b61450e248c8 ""
   "figures/head_utility_delta_f1.pdf" 1780759450.77455 21333 4283c17ba30de919fdaeb4da91d5d25a ""
   "figures/latent_head_heatmap.pdf" 1780759450.77714 28459 6f6a5d542701abce45564ea9e99159b6 ""
   "figures/latent_social_state_prediction_by_group.png" 1780759450.78146 995222 3969792f7bff88ac8a27dd19b95fa0bc ""
-  "figures/perhead_contribution.pdf" 1780759450.78367 26791 c366fee185736f54717168c354f16a2e ""
   "figures/pipeline2.png" 1780759450.78819 1086482 069827c634bb4c96fa2de31b16c2a916 ""
   "figures/qwen_latent_training.pdf" 1780759450.79126 20881 e84ed5e888c1c6d7b1897438ac5bfcc9 ""
   "figures/relational_trends.pdf" 1780759450.79317 32548 fd5964662c771915bd608ac391f17d1c ""
   "figures/response_ppl_comparison.pdf" 1780759450.79436 21139 3c42fdb4ec85a5c9e13caa38dfbd29b1 ""
-  "figures/retraining_ablation_comparison.pdf" 1780759450.79627 17806 1df8509cec1e4bbe33aa79688cac66ce ""
   "figures/slm_ppl_comparison.pdf" 1780759450.79762 21835 9c72e2d208ab3ff962b84dc65599772b ""
   "figures/technical_architecture_with_predicted_social_state.png" 1780759450.80453 1116485 1e1392fa5fef7c3fec807acc892d0c74 ""
-  "main_emnlp_edited.aux" 1780844668.71752 74250 28ca6168032244ff65a5d45ea425812d "pdflatex"
-  "main_emnlp_edited.bbl" 1780844667.4475 14418 196ffa6a063ea9f62476f40963418d80 "bibtex main_emnlp_edited"
-  "main_emnlp_edited.out" 1780844668.72117 8502 e6621d7a89b0390a108f55c364f23d23 "pdflatex"
-  "main_emnlp_edited.tex" 1780844654.50297 133096 635afebf69ae28d6d120a83587e02a01 ""
+  "main_emnlp_8page.aux" 1781346193.82169 48045 2b36f4148e670ee628f7f835044ac839 "pdflatex"
+  "main_emnlp_8page.bbl" 1781346192.63274 11146 8f433e9454e727902d12f59104313f84 "bibtex main_emnlp_8page"
+  "main_emnlp_8page.out" 1781346193.82487 7748 a77e192d2da95b5e4152972035c0e29d "pdflatex"
+  "main_emnlp_8page.tex" 1781346185.26307 82012 27f1743fb777ed2b60420bcc7300a3d1 ""
   (generated)
-  "main_emnlp_edited.aux"
-  "main_emnlp_edited.log"
-  "main_emnlp_edited.out"
-  "main_emnlp_edited.pdf"
+  "main_emnlp_8page.aux"
+  "main_emnlp_8page.log"
+  "main_emnlp_8page.out"
+  "main_emnlp_8page.pdf"
   (rewritten before read)
