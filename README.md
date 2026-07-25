@@ -6,16 +6,63 @@
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Architecture Stack](#architecture-stack)
-3. [Environment Setup](#environment-setup)
-4. [Data Preparation](#data-preparation)
-5. [Training Pipeline](#training-pipeline)
-6. [Evaluation](#evaluation)
-7. [Slurm / HPC Operations](#slurm--hpc-operations)
-8. [Results & Paper](#results--paper)
-9. [Code Fixes Applied](#code-fixes-applied)
-10. [Troubleshooting](#troubleshooting)
+1. [Cloning with Git LFS](#cloning-with-git-lfs)
+2. [Quick Start](#quick-start)
+3. [Architecture Stack](#architecture-stack)
+4. [Environment Setup](#environment-setup)
+5. [Data Preparation](#data-preparation)
+6. [Training Pipeline](#training-pipeline)
+7. [Evaluation](#evaluation)
+8. [Slurm / HPC Operations](#slurm--hpc-operations)
+9. [Results & Paper](#results--paper)
+10. [Code Fixes Applied](#code-fixes-applied)
+11. [Troubleshooting](#troubleshooting)
+
+---
+
+## Cloning with Git LFS
+
+This repo uses **Git LFS** for large data files (`.jsonl`, `.txt`, `.csv`, `.pt`, `.arrow`, `.zip`, `.png`, `.pdf`). Install LFS before cloning:
+
+```bash
+# One-time: install git-lfs
+# On HPC (no sudo):
+wget https://github.com/git-lfs/git-lfs/releases/download/v3.5.1/git-lfs-linux-amd64-v3.5.1.tar.gz
+tar xzf git-lfs-linux-amd64-v3.5.1.tar.gz
+export PATH="$PWD/git-lfs-3.5.1:$PATH"
+git lfs install
+
+# On macOS (with Homebrew):
+brew install git-lfs && git lfs install
+
+# Clone (LFS files download automatically):
+git clone https://github.com/skumyol/llm_training.git
+cd llm_training
+
+# Verify all LFS files are downloaded:
+git lfs pull
+git lfs ls-files | wc -l    # should show ~360 files
+```
+
+### If you already have the repo (existing clone on HPC)
+
+```bash
+cd ~/llm_training
+git lfs install              # enable LFS for this repo
+git pull origin main         # pull latest commit
+git lfs pull origin main     # download all LFS objects
+```
+
+### Data files included via LFS
+
+| Directory | Size | Contents |
+|-----------|------|----------|
+| `slm_training/data/external/` | 1.6 GB | Merged dialogue/personality (PersonaChat, PIPPA, Light, Empathetic) |
+| `slm_training/data/raw/` | 88 MB | Essays Big5, GoEmotions, PAN15 (arrow/zip) |
+| `slm_training/data/dialogue/` | 10 MB | Train/val text + generated dialogues |
+| `slm_training/data/personality/` | 7.8 MB | OCEAN-labelled training data |
+| `slm_training/data/affect/` | 3 MB | VAD affect training data |
+| `data/scenario_bank/` | 36 KB | 7 scenario YAML configs |
 
 ---
 
@@ -26,13 +73,17 @@
 ssh skumyol@hpc4.ust.hk
 cd ~/llm_training
 
-# 2. Run smoke test (verifies everything works)
+# 2. Pull latest + LFS data
+git pull origin main
+git lfs pull origin main
+
+# 3. Run smoke test (verifies everything works)
 cd slm_training && bash smoke_test.sh
 
-# 3. Submit full training pipeline
+# 4. Submit full training pipeline
 bash scripts/resume_training.sh
 
-# 4. Monitor
+# 5. Monitor
 squeue -u $USER
 tail -f /scratch/$USER/logs/t_gpt_*.out
 ```
