@@ -90,6 +90,39 @@ path rather than `run_small_lm.py`. It does mean any Track-C claim resting on th
 
 ## Edit 2 — Track D headline and `response_policy`
 
+### 2.0 Why the validation numbers in these edits differ slightly from the chapter's
+
+The chapter and these edits quote the *same validation split* with small differences. This is not
+rounding, and it should be understood before inserting anything, because a reader comparing the two
+will notice.
+
+| quantity | chapter (archived June run) | recomputed | cause |
+|---|---:|---:|---|
+| mean macro-$F_1$ | 0.5425 | 0.5409 | **metric definition** |
+| `response_policy` macro-$F_1$ | 0.6210 | 0.6218 | **metric definition** |
+| mean accuracy | 0.6875 | 0.6880 | numerical non-determinism |
+| mean $\kappa$ | 0.4833 | 0.4843 | numerical non-determinism |
+
+Two independent causes:
+
+1. **Macro-$F_1$ definition.** The archived run used scikit-learn's default, which averages over
+   the union of gold and predicted classes. The recomputation averages over classes with gold
+   support. For `response_policy` the default counts a class the model predicts but which never
+   occurs in gold, scoring it 0 and *depressing* the average — hence the corrected value is slightly
+   higher. Across 29 heads the net effect goes the other way.
+2. **Numerical non-determinism.** Accuracy and $\kappa$ do not depend on the label set at all, so
+   their movement has a different source: the two runs executed on different GPU models, and
+   borderline `argmax` ties can flip under different kernels. The shift is ~0.0005 on a mean over
+   29 heads × 683 turns, i.e. roughly ten flipped predictions out of ~19,800.
+
+**Recommendation:** quote the recomputed values throughout for internal consistency, and add:
+
+```latex
+\footnote{Validation figures were recomputed for this revision under the macro-$F_1$ definition described above; they differ from earlier archived values by at most $0.002$. Accuracy and $\kappa$, which are independent of that definition, differ by $\le 0.001$, consistent with tie-breaking in \texttt{argmax} under different GPU kernels.}
+```
+
+Do **not** present the two as though the model changed. It did not.
+
 ### 2a. Line 38, `tab:signals-track-qa`
 
 **Current:** "mean accuracy $0.688$, $\kappa=0.483$ ... predicted state supports selective routing
@@ -112,9 +145,29 @@ Field-level behaviour does not follow the aggregate. \texttt{response\_policy}, 
 \texttt{risk\_type} is diagnostic of the failure mode: it reaches $0.869$ accuracy but only $0.407$ macro-$F_1$ and $0.398$ balanced accuracy, the signature of a head that predicts the majority class and little else. The pattern is consistent---fields with balanced label distributions are recovered, while rare-class and relationship-change fields collapse toward the majority. This occurs despite the training procedure applying three imbalance corrections simultaneously: inverse-frequency class weights, a weighted sampler, and focal loss. The sampler assigns each training record the maximum class weight taken across all 28 single-label fields, so oversampling driven by whichever field happens to be rarest in a record also reshapes the marginal distribution seen by every other head. Whether this contributes to the collapse rather than mitigating it is tested directly in \cref{sec:eval:socialstate:imbalance}.
 ```
 
-> [SINGLE-SEED] caveat: the test `response_policy` figure is one training run. Either add
-> "(single training run)" or wait for the seeded re-runs. A 31\% drop quoted without an error bar
-> invites a question you cannot currently answer.
+> [SINGLE-SEED] caveat: the test `response_policy` figure is one training run. A 31\% drop quoted
+> without an error bar invites a question you cannot currently answer.
+>
+> **Status:** seeded re-runs are now possible and queued. `llm_finetuning` had no seeding at all —
+> the configs carried `seed: 42` but nothing read it, so LoRA init, dropout, sampler draws and
+> shuffling were unseeded and repeated runs could not serve as error bars. `train_latent.py` now
+> seeds `random`, `torch`, `numpy` and CUDA from `cfg["seed"]`, and the control is queued at seeds
+> 43 and 44. When they report, replace the point estimate with mean ± sd over three seeds.
+>
+> If they have not reported before submission, use the inline hedge:
+> ```latex
+> macro-$F_1=0.427$ (single training run; seeded replications in progress)
+> ```
+
+### 2d. Dangling cross-reference (reviewer item 2)
+
+Edit 2b ends with `\cref{sec:eval:socialstate:imbalance}`, which exists only if Edit 5 lands. If
+L1--L4 have not reported before submission, replace that final sentence with a self-contained one
+that makes the same point without forward-referencing:
+
+```latex
+Whether these corrections contribute to the collapse rather than mitigating it is not established by the present analysis and is left to future work.
+```
 
 ### 2c. Metric definition footnote
 

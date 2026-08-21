@@ -54,9 +54,35 @@ def _save_jepa_head(jepa_head: SocialJEPAHead | None, save_dir: Path, cfg: dict)
     )
 
 
+def _set_seed(seed: int) -> None:
+    """Seed every RNG that affects a run.
+
+    The configs have carried `seed: 42` since the beginning but nothing read it,
+    so LoRA init, dropout, WeightedRandomSampler draws and shuffling were all
+    unseeded — runs were not reproducible and repeated runs could not be used as
+    error bars, because nothing distinguished a seed from a re-run.
+    """
+    import random as _random
+
+    _random.seed(seed)
+    torch.manual_seed(seed)
+    try:
+        import numpy as _np
+
+        _np.random.seed(seed)
+    except ImportError:
+        pass
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def train_latent(config_path: str, debug: bool = False) -> None:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
+
+    seed = int(cfg.get("seed", 42))
+    _set_seed(seed)
+    print(f"Seed: {seed}")
 
     import mlflow
     from src.mlflow_utils import setup_mlflow, log_config
