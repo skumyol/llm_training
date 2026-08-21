@@ -60,6 +60,13 @@ class LatentStatePredictor(nn.Module):
             for name, spec in head_specs.items()
         })
         self.head_specs = head_specs
+        # Registered here, not lazily inside forward(): a Parameter created during
+        # the first forward is absent from the optimizer's param groups (already
+        # built) and from state_dict at save time, so it would never train and
+        # never persist.
+        self.attention_vector = (
+            nn.Parameter(torch.randn(hidden_size)) if pooling == "attention" else None
+        )
 
     def forward(
         self,
@@ -93,9 +100,7 @@ class LatentStatePredictor(nn.Module):
             return sum_hidden / mask_expanded.sum(dim=1).clamp(min=1)
         elif self.pooling == "attention":
             # Learnable attention pooling (simple single-vector attention)
-            if not hasattr(self, "attention_vector"):
-                self.attention_vector = nn.Parameter(torch.randn(self.hidden_size))
-            scores = torch.matmul(last_hidden, self.attention_vector)  # (batch, seq)
+            scores = torch.matmul(last_hidden, self.attention_vector.to(last_hidden.dtype))  # (batch, seq)
             scores = scores.masked_fill(~attention_mask.bool(), float('-inf'))
             weights = torch.softmax(scores, dim=1).unsqueeze(-1)  # (batch, seq, 1)
             return (last_hidden * weights).sum(dim=1)
@@ -193,7 +198,13 @@ def save_predictor(predictor: LatentStatePredictor, save_dir: str) -> None:
         for k, v in predictor.heads.items()
     }
     torch.save(head_state, save_dir / "heads.pt")
-    print(f"Saved predictor to {save_dir}")
+    # Persist pooling: load_predictor used to hardcode "last", so a model trained
+    # with mean/attention pooling was silently evaluated with a different pooling
+    # than it was trained with — the heads read a vector built a different way.
+    (save_dir / "predictor_config.json").write_text(
+        json.dumps({"pooling": predictor.pooling, "hidden_size": predictor.hidden_size}, indent=2)
+    )
+    print(f"Saved predictor to {save_dir} (pooling={predictor.pooling})")
 
 
 def load_predictor(
@@ -236,7 +247,17 @@ def load_predictor(
                 device_map="auto",
             )
 
-    predictor = LatentStatePredictor(backbone, hidden_size)
+    # Restore the pooling the checkpoint was trained with. Defaults to "last"
+    # for checkpoints saved before predictor_config.json existed.
+    pooling = "last"
+    cfg_path = save_dir / "predictor_config.json"
+    if cfg_path.exists():
+        try:
+            pooling = json.loads(cfg_path.read_text()).get("pooling", "last")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling)
     heads_path = save_dir / "heads.pt"
     if heads_path.exists():
         head_state = torch.load(heads_path, map_location="cpu")

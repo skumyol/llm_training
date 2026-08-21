@@ -348,7 +348,16 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
             # Resolve the metric used for best-model selection
             metric_key = best_metric_name.replace("val/", "")
-            current_metric = val_metrics.get("summary", {}).get(metric_key, val_loss)
+            summary_metrics = val_metrics.get("summary", {})
+            if metric_key not in summary_metrics:
+                # Falling back to val_loss here would be silently wrong:
+                # higher_is_better was derived from the metric NAME, so a
+                # misspelled key selected the checkpoint with the WORST loss.
+                raise KeyError(
+                    f"metric_for_best_model={best_metric_name!r} not found in val summary. "
+                    f"Available: {sorted(summary_metrics)}"
+                )
+            current_metric = summary_metrics[metric_key]
 
             summary_parts = [f"train_loss={epoch_loss/max(1, len(train_loader)):.4f}", f"val_loss={val_loss:.4f}"]
             if jepa_head is not None:
