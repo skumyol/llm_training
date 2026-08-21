@@ -74,3 +74,4 @@ slm_training/smoke_artifacts/
 paper/frontend/.next/
 paper/frontend/node_modules/
 .venv_slm/
+.venv/

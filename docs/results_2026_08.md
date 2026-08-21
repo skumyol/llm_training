@@ -1,0 +1,214 @@
+# Experimental Results — August 2026
+
+Two independent result sets, both produced on HKUST HPC (`gpu-a30`, `xrimlab`):
+
+1. **Small LM (from-scratch NPC dialogue LM)** — perplexity reduced 42.18 → 18.11 on held-out test.
+2. **29-head latent state predictor (Qwen3-4B + LoRA)** — first evaluation on a genuinely held-out test split.
+
+Both sections report numbers on data that was **never used for checkpoint selection**. Where an
+earlier reported number differs, the discrepancy is decomposed rather than silently replaced.
+
+---
+
+## 1. Small LM — dialogue language modelling
+
+### 1.1 Setup
+
+| item | value |
+|---|---|
+| architecture | `TinyGPTLM`, 6 layers, `n_embd` 512, 8 heads, 44.77 M params, weights tied |
+| tokenizer | GPT-2 BPE via tiktoken, vocab 50257 (identical across all runs) |
+| context | 256 tokens |
+| in-domain train | `data/dialogue/train.txt` — 545,223 tokens (2,184 blocks) |
+| selection set | `data/dialogue/val_sel.txt` — 12,455 tokens (46 blocks, 8 openers) |
+| **test set** | `data/dialogue/test.txt` — 15,744 tokens (69 blocks, 17 openers) |
+| external corpus | `data/external/merged_dialogue.txt` — 107,338,428 tokens (402 MB) |
+| seeds | 42 / 43 / 44 (3 per config) |
+
+The val/test split is produced by `slm_training/scripts/make_val_test_split.py`, which groups blocks
+by their opening PLAYER line before splitting. The corpus expands each dialogue into growing-prefix
+blocks that share an opener, so a naive per-block split would place a block and its own prefix on
+opposite sides. The script asserts that openers and NPC lines are disjoint across the two halves;
+neither half shares an NPC line with `train.txt`.
+
+### 1.2 Results
+
+Perplexity, mean ± population standard deviation over 3 seeds. **`test_ppl` is the number to quote**;
+`val_ppl` selected the checkpoint and is therefore optimistically biased.
+
+| config | change from baseline | val_ppl | **test_ppl** | test_bpc | best epoch |
+|---|---|---:|---:|---:|---:|
+| `slm_D_finetune` | **pretrain on 107 M external tokens → fine-tune** | 14.65 ± 0.03 | **18.11 ± 0.01** | 1.036 | 10–12 |
+| `slm_F_reg` | dropout 0.35, weight decay 0.3 | 29.97 ± 0.41 | 39.39 ± 0.45 | 1.314 | 5–6 |
+| `slm_G_reg2` | dropout 0.45, weight decay 0.5 | 29.79 ± 0.89 | 39.58 ± 1.12 | 1.316 | 7–8 |
+| `slm_H_stride` | F + stride 64 (4× windows) | 29.81 ± 0.28 | 39.84 ± 0.99 | 1.318 | 3 |
+| `slm_B_improved` | warmup+cosine, stride 128, dropout 0.2 | 31.49 ± 0.49 | 40.98 ± 0.89 | 1.328 | 4 |
+| `slm_A_baseline` | previous best recipe (control) | 33.17 ± 0.53 | 42.18 ± 0.80 | 1.339 | 12 |
+| `slm_E_small` | 16 M params (`n_embd` 256, 4 layers) | 32.20 ± 0.70 | 43.41 ± 0.46 | 1.349 | 7–9 |
+| `slm_C_pretrain` | external corpus only, zero-shot in-domain | 50.57 | 51.83 | 1.412 | 5 |
+
+Relative to the `slm_A_baseline` control, on test perplexity:
+
+- `slm_D_finetune` **−57.1 %**
+- `slm_F_reg` −6.6 %, `slm_G_reg2` −6.2 %, `slm_H_stride` −5.5 %, `slm_B_improved` −2.9 %
+- `slm_E_small` +2.9 % (worse)
+
+`test_bpc` (bits per character) is reported alongside perplexity because it is tokenizer-invariant:
+unlike perplexity it remains comparable if the vocabulary is ever changed.
+
+### 1.3 Interpretation
+
+**The from-scratch ceiling is a data limit, not a capacity or recipe limit.** Three independent
+observations support this:
+
+1. Recipe and regularisation improvements saturate. `slm_F_reg`, `slm_G_reg2` and `slm_H_stride`
+   (39.39 / 39.58 / 39.84) are statistically indistinguishable given seed spreads of ±0.45–1.12.
+   Pushing dropout from 0.35 to 0.45, or quadrupling window overlap, buys nothing further.
+2. Reducing capacity makes results *worse* (`slm_E_small`, 43.41), ruling out over-parameterisation
+   as the binding constraint.
+3. Every from-scratch configuration peaks at **epoch 3–6** of 20–30 and then overfits, whereas the
+   pretrained model keeps improving through **epoch 10–12**. Pretraining regularises more
+   effectively than any dropout setting tested.
+
+The binding constraint is 545 K in-domain tokens against 44.77 M parameters. Pretraining on 107 M
+external tokens breaks it, yielding a **54 % improvement over the best from-scratch run** (39.39 →
+18.11) and 57 % over the control.
+
+Notably, the pretrained model *before* fine-tuning is **worse** in-domain than any from-scratch model
+(`slm_C_pretrain`, 51.83), because the external corpus is anime/roleplay dialogue while the target is
+medieval-fantasy NPC dialogue. Its value is entirely as an initialisation. In-domain validation
+perplexity nonetheless improved monotonically across pretraining epochs (65.17 → 58.60 → 53.78 →
+51.67 → 50.57), indicating transferable dialogue structure rather than source-domain memorisation.
+
+### 1.4 Threats to validity
+
+- **`slm_D_finetune`'s ±0.01 is not a full error bar.** All three seeds fine-tune from the *same*
+  `slm_C_pretrain_s42` checkpoint, so the spread measures fine-tuning variance only; pretraining is
+  effectively n = 1. Independent error bars require 2–3 separate pretraining runs.
+- **The test set is small** (15,744 tokens, 69 blocks). Differences below roughly 1 perplexity point
+  are not meaningful. The 24-point D-vs-control gap is far outside that margin; the F/G/H ordering
+  is not.
+- **Contamination was checked, not assumed.** All 67 unique test NPC lines of ≥ 40 characters were
+  searched against the full 402 MB external corpus: 0 matches. 0 of 215 test NPC lines appear in
+  `train.txt`.
+- The numbers above were produced by the code as it stood on the cluster at the time of the runs.
+  The merged `main` uses the `warmup_cosine` scheduler, which decays to `min_lr_ratio` 0.1 rather
+  than to `eta_min/lr` ≈ 0.003. A re-run should land close but is not guaranteed bit-identical.
+
+### 1.5 Code changes underlying the improvement
+
+| change | file | effect |
+|---|---|---|
+| GPT-2 residual init scaling `0.02/√(2·n_layer)` | `small_lm_architectures.py` | early gradient norms 300–500 → 43–78; previously the clipper (max_norm 1.0) renormalised away nearly all early signal |
+| fused `scaled_dot_product_attention` | `small_lm_architectures.py` | throughput; avoids materialising the (B,H,T,T) matrix |
+| full-val evaluation (`max_batches` 200 → 0) | `run_small_lm.py` | validation previously scored only the first 200 batches — always the same prefix, since val is unshuffled — and that truncated number drove checkpoint selection |
+| token-weighted validation loss | `run_small_lm.py` | a short final batch can no longer skew the mean |
+| `train_stride` (overlapping windows) | `run_small_lm.py` | more training examples per epoch from the same corpus |
+| warmup + single cosine decay | `run_small_lm.py` | `cosine_warm_restarts` (T_0 = 5, T_mult = 2) restarts at epochs 5/15/35, so a 20-epoch run ended mid-cycle at high LR and was never annealed |
+| held-out test evaluation of the best checkpoint | `run_small_lm.py` | previously no test split existed at all |
+| `device` selected before the embedding extractor | `run_small_lm.py` | fixed an `UnboundLocalError` swallowed by a bare `except`, which silently fell back to zero conditioning — every prior "semantic conditioning" A/B compared zero against zero |
+| full RNG seeding | `run_small_lm.py` | reproducibility |
+
+Reproduce with `bash scripts/push_slm_to_hpc.sh` (sync + submit) and
+`python slm_training/scripts/aggregate_slm_push.py` (table). Raw per-run data:
+`slm_training/artifacts/slm_push_results.json` (untracked — `artifacts/` is gitignored).
+
+---
+
+## 2. 29-head latent state predictor
+
+### 2.1 Setup
+
+Qwen3-4B, 4-bit NF4 quantisation, LoRA r = 16 on `q,v,k,o,gate,up,down`, 29 classification heads
+(17 schema fields + 6 stance dimensions × {level, delta}), last-token pooling, `max_seq_len` 512.
+Checkpoint `checkpoints/latent_predictor_best`.
+
+| split | episodes | turns |
+|---|---:|---:|
+| train | 587 | 6,175 |
+| val (selection) | 69 | 683 |
+| **test (held out)** | 80 | **884** |
+
+Splits are episode-level (`src/packaging/splitter.py`), so no turn from a training episode appears in
+val or test. **The test split existed but had never been evaluated** — all previously reported latent
+numbers are val numbers, and val also drove early stopping and best-checkpoint selection.
+
+### 2.2 Results
+
+| metric | val (as previously reported) | val (corrected metric) | **test (corrected metric)** |
+|---|---:|---:|---:|
+| mean accuracy | 0.6875 | 0.6880 | 0.6735 |
+| mean macro-F1 | 0.5425 | 0.5409 | 0.5341 |
+| mean balanced accuracy | 0.5489 | 0.5474 | 0.5516 |
+| mean MCC | 0.4879 | 0.4890 | 0.4663 |
+| **`response_policy` macro-F1** | 0.6210 | 0.6218 | **0.4268** |
+| stance-delta accuracy | 0.5961 | 0.5946 | 0.5711 |
+
+Against the project's own acceptance thresholds, **on test**:
+
+| check | value | threshold | verdict |
+|---|---:|---:|---|
+| `response_policy_f1` | 0.4268 | ≥ 0.75 | **FAIL** |
+| `stance_delta_accuracy` | 0.5711 | ≥ 0.70 | **FAIL** |
+| `secret_leakage_rate` | 0.0000 | ≤ 0.05 | PASS |
+
+### 2.3 Interpretation
+
+**The aggregate system generalises; the decision head does not.** Mean macro-F1 moves only
+0.5409 → 0.5341 from val to test and balanced accuracy actually rises slightly — across 80 unseen
+episodes that is a stable result. But `response_policy`, the head the routing layer depends on,
+drops **31 % relative** (0.6218 → 0.4268; accuracy 0.716 → 0.623). Both splits contain 9 of its 10
+classes in gold, so this is not a class-mix artefact.
+
+Per-head macro-F1 on test, extremes:
+
+| weakest | | strongest | |
+|---|---:|---|---:|
+| `tone` | 0.376 | `valence` | 0.802 |
+| `familiarity_delta` | 0.388 | `duty_pressure` | 0.777 |
+| `risk_type` | 0.407 | `face_pressure` | 0.731 |
+| `dominance_level` | 0.410 | `affection_level` | 0.699 |
+| `dominance_delta` | 0.415 | | |
+| `response_policy` | 0.427 | | |
+
+`risk_type` is diagnostic: **86.9 % accuracy but 0.407 macro-F1 and 0.398 balanced accuracy** — a
+head predicting the majority class and little else. The pattern is consistent across the weak heads:
+balanced-class heads work, rare-class and stance-*delta* heads collapse toward the majority class.
+This occurs despite the training pipeline applying three imbalance corrections simultaneously
+(inverse-frequency class weights, a `WeightedRandomSampler`, and focal loss with γ = 1.5). The
+sampler assigns each record the maximum class weight across all 28 single-label heads, so it
+reshapes the marginal distribution of every other head as a side effect — a plausible contributor
+rather than a remedy.
+
+### 2.4 Correction to the macro-F1 metric
+
+`compute_latent_metrics` previously called `f1_score(..., average="macro")` without `labels=`,
+letting scikit-learn infer the label set from the values present. Two variants are now reported:
+
+- **`macro_f1`** — averaged over classes with gold support in the split. The standard choice and the
+  one quoted above: a class that never occurs cannot be scored, and counting it as 0 would penalise
+  the model for the split's composition. (This still differs from the scikit-learn default, which
+  averages over gold ∪ pred and so also counts classes the model hallucinates but that never occur.)
+- **`macro_f1_schema`** — averaged over the head's full label schema with absent classes scored 0.
+  Pessimistic, but the only variant comparable across splits and ablations, since its denominator
+  does not shift with the class mix. For `response_policy`: 0.560 val, 0.384 test.
+
+The correction's effect on previously reported figures is **negligible** (0.6210 → 0.6218 for
+`response_policy` on val). The val → test change is what matters.
+
+### 2.5 Caveats carried forward
+
+- These are **latent-head numbers only**. `eval_response` conditions the generator on gold Z_t, so
+  response-quality and leakage figures measure an oracle-conditioned upper bound, not the end-to-end
+  pipeline. `routing_mode: predicted` in the eval config is read only by `eval_routing`.
+- The head-ablation script defaults its training file to `cfg["data"]["test_heads_file"]` when
+  `train_heads_file` is absent, and no invocation in `scripts/experiments.sh` or
+  `scripts/slurm_experiments.sh` passes it — so previously reported ablation rows were trained on
+  their own evaluation split.
+- Temperature/isotonic calibration is documented as being fit on `train_heads.jsonl`, i.e. data the
+  model has already fitted, which under-corrects confidence.
+- Single seed: the latent predictor has not been run with multiple seeds, so no error bars.
+
+Reproduce: `python llm_finetuning/run_eval.py --stage latent --config llm_finetuning/configs/eval_test.yaml`
+(writes `eval_results/test_honest/`). The val-with-corrected-metric comparison uses
+`configs/eval_val_fixedmetric.yaml`.

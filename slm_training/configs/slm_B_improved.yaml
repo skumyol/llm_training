@@ -18,7 +18,7 @@ batch_size: 16
 grad_accum: 4
 lr: 6.0e-4
 epochs: 20
-scheduler: cosine
-warmup_frac: 0.02
+scheduler: warmup_cosine
+warmup_ratio: 0.02
 train_stride: 128
 arch_params: {dropout: 0.2, max_seq_len: 256, n_embd: 512, n_head: 8, n_layer: 6}

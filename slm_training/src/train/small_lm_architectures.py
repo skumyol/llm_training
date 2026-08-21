@@ -37,6 +37,24 @@ class LMOutput:
     hidden_states: Optional[torch.Tensor] = None  # last-layer hidden, before head
 
 
+def _scale_residual_init(model: nn.Module, n_layer: int) -> None:
+    """GPT-2 residual scaling for the projections that write into the residual stream.
+
+    Without it, n_layer residual additions each initialised at std=0.02 compound
+    into large activations, producing the 300-500 early gradient norms that
+    grad-clipping (max_norm=1.0) then renormalises away — so the first few
+    hundred steps carry almost no usable signal.
+    """
+    std = 0.02 / math.sqrt(2 * max(1, n_layer))
+    n = 0
+    for name, p in model.named_parameters():
+        # attention output projection, and the FFN's second (down) projection
+        if name.endswith("attn.proj.weight") or name.endswith("ffn.2.weight"):
+            nn.init.normal_(p, mean=0.0, std=std)
+            n += 1
+    assert n > 0, f"residual init matched no parameters in {type(model).__name__}"
+
+
 def select_device(preferred: str = "auto") -> torch.device:
     """Select an accelerator, or fail clearly when an explicit one is unavailable."""
     preferred = str(preferred).lower()
@@ -266,6 +284,7 @@ class TinyGPTLM(nn.Module):
         if cfg.tie_weights:
             self.head.weight = self.tok_emb.weight
         self.apply(self._init_weights)
+        _scale_residual_init(self, cfg.n_layer)
 
     def _init_weights(self, m: nn.Module) -> None:
         if isinstance(m, (nn.Linear, nn.Embedding)):
@@ -333,6 +352,7 @@ class PrefixTinyGPTLM(nn.Module):
         )
         self.missing_condition = nn.Parameter(torch.zeros(cfg.cond_dim))
         self.apply(self._init_weights)
+        _scale_residual_init(self, cfg.n_layer)
 
     def _init_weights(self, m: nn.Module) -> None:
         if isinstance(m, (nn.Linear, nn.Embedding)):
@@ -461,6 +481,7 @@ class TinyMoELM(nn.Module):
         if cfg.tie_weights:
             self.head.weight = self.tok_emb.weight
         self.apply(self._init_weights)
+        _scale_residual_init(self, cfg.n_layer)
 
     def _init_weights(self, m: nn.Module) -> None:
         if isinstance(m, (nn.Linear, nn.Embedding)):

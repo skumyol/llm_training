@@ -13,6 +13,7 @@ from sklearn.metrics import (
     matthews_corrcoef,
 )
 
+from src.training.dataset import LABEL_MAPS
 from src.training.loss import GROUP_FIELDS
 
 
@@ -59,14 +60,38 @@ def compute_latent_metrics(
             }
             continue
 
+        # Two macro-F1 variants, because they answer different questions and the
+        # difference is large on rare-class heads:
+        #
+        #   macro_f1        averaged over classes with gold support in this split.
+        #                   The standard choice, and the one to quote: a class that
+        #                   never occurs here cannot be scored, and counting it as
+        #                   0 would penalise the model for the split's composition.
+        #                   Note this still differs from sklearn's default, which
+        #                   averages over gold UNION pred and so also counts
+        #                   classes the model hallucinates but that never occur.
+        #
+        #   macro_f1_schema averaged over the head's full label schema, with absent
+        #                   classes scored 0. Pessimistic, but the only variant that
+        #                   is comparable across splits and ablations, since it does
+        #                   not silently change denominator with the class mix.
+        n_classes = len(LABEL_MAPS.get(field, []))
+        gold_labels = sorted(set(golds))
+        schema_labels = list(range(n_classes)) if n_classes else None
+
         fields[field] = {
             "accuracy": float(accuracy_score(golds, preds)),
             "balanced_accuracy": float(balanced_accuracy_score(golds, preds)),
             "cohen_kappa": float(cohen_kappa_score(golds, preds)),
-            "macro_f1": float(f1_score(golds, preds, average="macro", zero_division=0)),
-            "weighted_f1": float(f1_score(golds, preds, average="weighted", zero_division=0)),
+            "macro_f1": float(f1_score(golds, preds, average="macro", labels=gold_labels, zero_division=0)),
+            "macro_f1_schema": float(
+                f1_score(golds, preds, average="macro", labels=schema_labels, zero_division=0)
+            ) if schema_labels else 0.0,
+            "weighted_f1": float(f1_score(golds, preds, average="weighted", labels=gold_labels, zero_division=0)),
             "mcc": float(matthews_corrcoef(golds, preds)),
             "support": float(len(golds)),
+            "n_classes": float(n_classes),
+            "n_classes_in_gold": float(len(gold_labels)),
         }
 
     groups: dict[str, dict[str, float]] = {}

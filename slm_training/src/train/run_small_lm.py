@@ -381,15 +381,24 @@ def build_tokenizer(text: str):
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 class TokenDataset(Dataset):
-    def __init__(self, ids: List[int], seq_len: int) -> None:
-        self.t   = torch.tensor(ids, dtype=torch.long)
-        self.seq = seq_len
+    """Chunks a token stream into (x, y) next-token pairs.
+
+    stride < seq_len yields overlapping windows: the same corpus produces
+    seq_len/stride times more training examples, and every token is seen at
+    many context positions instead of exactly one. Use stride == seq_len
+    (the default) for validation so each token is scored exactly once.
+    """
+
+    def __init__(self, ids: List[int], seq_len: int, stride: Optional[int] = None) -> None:
+        self.t      = torch.tensor(ids, dtype=torch.long)
+        self.seq    = seq_len
+        self.stride = stride or seq_len
 
     def __len__(self) -> int:
-        return max(0, (len(self.t) - 1) // self.seq)
+        return max(0, (len(self.t) - 1 - self.seq) // self.stride + 1)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        s = idx * self.seq
+        s = idx * self.stride
         x = self.t[s:s + self.seq]
         y = self.t[s + 1:s + self.seq + 1]
         if len(x) < self.seq:
@@ -412,7 +421,7 @@ def amp_ctx(device: torch.device, enabled: bool):
 @torch.no_grad()
 def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
-    cond_dim: int, use_amp: bool, max_batches: int = 200,
+    cond_dim: int, use_amp: bool, max_batches: int = 0,
     condition_mode: str = "ocean_vad",
     extractor: Optional[EmbeddingExtractor] = None,
     tokenizer: Optional[Any] = None,
@@ -424,7 +433,10 @@ def evaluate(
     source_nll: Dict[str, float] = {}
     source_tokens: Dict[str, int] = {}
     for bi, batch in enumerate(loader):
-        if bi >= max_batches:
+        # max_batches=0 means "no cap". The previous default of 200 silently
+        # scored only the first 200 batches — always the same prefix, since val
+        # is unshuffled — and that truncated number drove checkpoint selection.
+        if max_batches and bi >= max_batches:
             break
         if isinstance(batch, dict):
             x, y = batch["input_ids"], batch["labels"]
@@ -655,8 +667,12 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         val_ids    = tokenizer.encode(val_text)
         train_token_count = len(train_ids)
         val_token_count = len(val_ids)
-        train_ds   = TokenDataset(train_ids, cfg["seq_len"])
+        # Overlapping windows for training (stride < seq_len multiplies the number
+        # of examples); non-overlapping for val so every token is scored once.
+        train_stride = int(cfg.get("train_stride") or cfg["seq_len"])
+        train_ds   = TokenDataset(train_ids, cfg["seq_len"], stride=train_stride)
         val_ds     = TokenDataset(val_ids,   cfg["seq_len"])
+        log.info(f"Windows — train: {len(train_ds):,} (stride={train_stride})  val: {len(val_ds):,}")
         log.info(f"Tokens — train: {len(train_ids):,}  val: {len(val_ids):,}")
     log.info(f"Tokenizer: {tokenizer.name}  vocab={tokenizer.vocab_size:,}")
     num_workers = int(policy["num_workers"])

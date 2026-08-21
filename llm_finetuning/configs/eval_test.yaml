@@ -45,7 +45,7 @@ predicted_zt_file: eval_results/predicted_zt_test.jsonl
 routing_missing_predictions: error
 
 output:
-  results_dir: eval_results
+  results_dir: eval_results/test_honest
   save_confusion_matrices: true
   save_sample_generations: true
   n_sample_generations: 100

@@ -18,8 +18,8 @@ batch_size: 16
 grad_accum: 4
 lr: 1.0e-4
 epochs: 12
-scheduler: cosine
-warmup_frac: 0.05
+scheduler: warmup_cosine
+warmup_ratio: 0.05
 train_stride: 128
 init_from: artifacts/slm_push/slm_C_pretrain_s42/best_model.pt
 arch_params: {dropout: 0.35, max_seq_len: 256, n_embd: 512, n_head: 8, n_layer: 6}
