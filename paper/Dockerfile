@@ -19,12 +19,15 @@ FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
+# Enable pnpm via corepack
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 # Install dependencies and build
-COPY frontend/package.json ./
-RUN npm install
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./
-RUN npm run build
+RUN pnpm run build
 
 # ---------------------------------------------------------------------------
 # Stage 2: Python runtime + run both backend and frontend
