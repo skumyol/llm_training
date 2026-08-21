@@ -102,7 +102,22 @@ def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, bat
     })
     predictor.to(predictor.backbone.device)
 
-    train_file = args.train_heads_file or cfg["data"].get("train_heads_file", cfg["data"]["test_heads_file"])
+    # Defaulting to test_heads_file (as this did) trains the ablated heads on the
+    # very split they are then scored on. eval.yaml has no train_heads_file key and
+    # no caller in scripts/experiments.sh or scripts/slurm_experiments.sh passes
+    # --train-heads-file, so every ablation row produced before this was train-on-eval.
+    train_file = args.train_heads_file or cfg["data"].get("train_heads_file")
+    if not train_file:
+        raise ValueError(
+            "No training split for the ablation. Pass --train-heads-file "
+            "(e.g. data/splits/train_heads.jsonl) or set data.train_heads_file in the config. "
+            "Refusing to fall back to the evaluation split."
+        )
+    eval_file = cfg["data"].get("test_heads_file")
+    if eval_file and Path(train_file).resolve() == Path(eval_file).resolve():
+        raise ValueError(
+            f"Ablation train file == eval file ({train_file}); results would be train-on-eval."
+        )
     train_ds = HeadSupervisionDataset(
         train_file,
         tokenizer,
