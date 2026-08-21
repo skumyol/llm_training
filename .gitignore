@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Environments
+.venv/
+.env
+
+# Editors/OS
+.DS_Store
+.vscode/
+*.swp
+
+# Generated artifacts
+mlruns/
+logs/
+*.log
+*.pid
+
+# Eval results — canonical files tracked, generated artifacts ignored
+eval_results/cm_*.png
+eval_results/eval_*.csv
+eval_results/predicted_zt*.jsonl
+eval_results/comprehensive_results_*.json
+
+# Data (regeneratable)
+data/raw_episodes/
+data/validated_turns/
+data/counterfactuals/
+data/packaged/
+data/merged_validated/
+data/splits/
+data/npc_profiles/
+*.tmp
+
+# Model weights
+checkpoints/
+outputs/
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+
+# Compiled caches
+unsloth_compiled_cache/
+.pytest_cache/
+*.pyc
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# SLM training artifacts
+slm_training/artifacts/
+# slm_training/
+slm_training/models/
+slm_training/logs/
+slm_training/mlruns/
+slm_training/*.cache*
+slm_training/*.faiss
+# slm_training/
+# slm_training/
+# slm_training/IMPROVEMENT_PLAN.md
+
+# Archive docs
+docs/archive/
+docs/_build/
+sshpass
+slurm_logs
+artifacts/
+slm_training/smoke_artifacts/
+paper/frontend/.next/
+paper/frontend/node_modules/
+.venv_slm/

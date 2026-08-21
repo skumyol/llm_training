@@ -1,0 +1,24 @@
+arch: gpt
+hardware_profile: m1_small
+train_text: data/dialogue/train.txt
+val_text:   data/dialogue/val_sel.txt
+test_text:  data/dialogue/test.txt
+seq_len: 256
+weight_decay: 0.1
+log_every: 50
+eval_every_steps: 100000
+output_dir: artifacts/slm_push
+cond_dim: 8
+condition_mode: zero
+use_amp: true
+eta_min: 1.0e-6
+mlflow_enabled: true
+mlflow_experiment: slm_push
+batch_size: 16
+grad_accum: 4
+lr: 6.0e-4
+epochs: 20
+scheduler: cosine
+warmup_frac: 0.02
+train_stride: 128
+arch_params: {dropout: 0.2, max_seq_len: 256, n_embd: 512, n_head: 8, n_layer: 6}
