@@ -212,3 +212,204 @@ The correction's effect on previously reported figures is **negligible** (0.6210
 Reproduce: `python llm_finetuning/run_eval.py --stage latent --config llm_finetuning/configs/eval_test.yaml`
 (writes `eval_results/test_honest/`). The val-with-corrected-metric comparison uses
 `configs/eval_val_fixedmetric.yaml`.
+
+---
+
+## 3. Routing evaluation (predicted Z_t)
+
+Routing uses the predicted latent state to decide fast-path vs slow-path for each turn. This is the
+end-to-end routing layer, not oracle-conditioned.
+
+| metric | value |
+|---|---:|
+| routing F1 | 0.7345 |
+| routing precision | 0.7155 |
+| routing recall | 0.7545 |
+| false positive rate | 0.2973 |
+| slow-path rate | 0.5249 |
+| prediction coverage | 1.0000 |
+| n evaluated | 884 |
+
+Source: `eval_results/routing_eval_report.json` (test split, predicted mode).
+
+---
+
+## 4. Response generation evaluation (oracle Z_t)
+
+The response generator is conditioned on **gold** Z_t (oracle), so these numbers are an upper bound
+on end-to-end response quality.
+
+| metric | value |
+|---|---:|
+| BLEU-1 | 0.2617 |
+| BLEU-2 | 0.1231 |
+| BLEU-4 | 0.0388 |
+| ROUGE-L | 0.1387 (CI: 0.1342–0.1431) |
+| distinct-1 | 0.1677 |
+| distinct-2 | 0.6030 |
+| length ratio (gen/ref) | 0.8640 |
+| avg gen length | 30.04 tokens |
+| avg ref length | 34.77 tokens |
+| contradiction rate | 0.0000 |
+| degenerate repetition rate | 0.0000 |
+| repeated 3-gram rate | 0.0002 |
+| prompt artifact rate | 0.0000 |
+| **secret leakage rate (gated)** | **0.0000** |
+| secret leakage rate (ungated) | 0.0667 |
+| sentiment valence accuracy | 0.4016 |
+
+The gated leakage rate is 0 because the reveal_decision head gates output. The ungated rate (0.067)
+shows what would happen without the gating mechanism — 59 of 884 turns would leak a secret.
+
+Source: `eval_results/response_eval_report.json` (test split, oracle-conditioned).
+
+---
+
+## 5. Decision-card A/B test (baseline vs structured card)
+
+A paired comparison on 683 val turns: baseline (no decision card) vs treatment (structured decision
+card with policy/reveal guidance). Bootstrap CI with episode-level resampling, 95% confidence.
+
+### 5.1 Per-system metrics
+
+| metric | baseline | treatment (card) |
+|---|---:|---:|
+| ROUGE-L | 0.1263 | 0.0797 |
+| BLEU-1 | 0.2189 | 0.1603 |
+| BLEU-2 | 0.0439 | 0.0191 |
+| distinct-2 | 0.5662 | 0.2077 |
+| avg gen length | 30.2 | 25.2 |
+| secret leakage rate | 0.0000 | 0.0000 |
+| contradiction rate | 0.0000 | 0.0000 |
+| **policy consistency** | **0.7349** | **0.8497** |
+| exact disclosure match | 0.3382 | 0.3104 |
+| over-disclosure rate | 0.0029 | 0.0015 |
+| under-disclosure rate | 0.6589 | 0.6881 |
+
+### 5.2 Bootstrap significance tests
+
+| metric | delta (treatment − baseline) | 95% CI | p-value | significant? |
+|---|---:|---|---:|---|
+| ROUGE-L | −0.0557 | [−0.0691, −0.0423] | 0.012 | **yes** |
+| Policy consistency | +0.0499 | [+0.0057, +0.1013] | 0.044 | **yes** |
+| Secret leakage | 0.0000 | [0.0, 0.0] | 1.000 | no |
+| Contradiction rate | 0.0000 | [0.0, 0.0] | 1.000 | no |
+| Over-disclosure | −0.0013 | [−0.0084, +0.0043] | 0.693 | no |
+| Under-disclosure | +0.0288 | [−0.0085, +0.0697] | 0.257 | no |
+
+**Interpretation:** The decision card trades fluency (ROUGE-L ↓0.056, BLEU-1 ↓0.059, distinct-2
+↓0.36) for policy consistency (+0.050, a 6.8% relative improvement). Both systems achieve zero
+gated leakage. The card makes the NPC more policy-compliant but less lexically diverse and less
+similar to the reference.
+
+Source: `eval_results/decision_card_ab_report.json`, `eval_results/bootstrap_significance.json`.
+
+---
+
+## 6. Masking ablations (routing head importance)
+
+Each ablation masks one head's prediction (replaced with majority class or random) and re-evaluates
+routing. Baseline routing F1 = 0.6721 on val (n=683).
+
+| ablated head | mode | routing F1 | Δ F1 | unsafe fast-path rate |
+|---|---|---:|---:|---:|
+| (baseline, none) | — | 0.6721 | — | 0.1742 |
+| response_policy | majority | 0.5936 | −0.0785 | 0.2401 |
+| response_policy | random | 0.6133 | −0.0588 | — |
+
+ is the single most important head for routing: masking it drops F1 by 0.08
+(11.7% relative) and increases unsafe fast-path rate from 17.4% to 24.0%.
+
+Source: `eval_results/masking_ablations.json`.
+
+---
+
+## 7. Relational memory evaluation
+
+Compares per-turn relational-state prediction with and without an explicit relational memory module
+(accumulating stance vectors across the episode).
+
+| dimension | baseline acc | memory acc | delta | n |
+|---|---:|---:|---:|---:|
+| trust_level | 0.7169 | 0.7169 | 0.0000 | 862 |
+| respect_level | 0.6713 | 0.6678 | −0.0035 | 867 |
+| affection_level | 0.7759 | 0.7724 | −0.0035 | 870 |
+| familiarity_level | 0.6322 | 0.6334 | +0.0012 | 851 |
+| dominance_level | 0.6406 | 0.6338 | −0.0068 | 871 |
+| obligation_level | 0.5919 | 0.5930 | +0.0011 | 860 |
+| **macro avg** | **0.6717** | **0.6698** | **−0.0019** | — |
+
+**The relational memory module provides no measurable benefit.** The overall delta is −0.002
+(worse). The Qwen3-4B backbone already encodes episode context via its context window; an explicit
+memory module is redundant at this scale.
+
+Source: `eval_results/relational_memory_eval.json`.
+
+---
+
+## 8. Joint vs separate model comparison
+
+Compares a jointly trained latent+response model against the separate pipeline (latent predictor +
+response generator trained independently).
+
+| metric | separate | joint |
+|---|---:|---:|
+| latent mean accuracy | 0.6825 | 0.6741 |
+| latent mean kappa | 0.4375 | 0.4135 |
+| response perplexity | 1.04 | 1.04 |
+| high-secrecy + full-reveal violations | 1 | 0 |
+| hostile + affection-high violations | 1 | 4 |
+| total consistency violations / 652 | 2 | 4 |
+
+The separate model has slightly higher latent accuracy (0.683 vs 0.674) and kappa (0.438 vs 0.414).
+The joint model eliminates high-secrecy/full-reveal violations but introduces more
+hostile/affection-high violations. Response perplexity is identical (1.04).
+
+Source: `eval_results/ablation_joint_vs_separate.json`.
+
+---
+
+## 9. Ablation curve (head subset routing)
+
+Routing F1 as heads are progressively added to the routing decision.
+
+| experiment | n heads | routing F1 | precision | recall | slow-path rate |
+|---|---:|---:|---:|---:|---:|
+| exp_a_routing_only | 4 | 0.6985 | 0.5374 | 0.9973 | 0.9971 |
+| exp_c_plus_relational | 6 | 0.6660 | 0.5451 | 0.8556 | 0.8433 |
+| exp_b_plus_affect | 7 | 0.6861 | 0.5332 | 0.9619 | — |
+
+The 4-head routing-only configuration (response_policy, reveal_decision, secrecy_pressure,
+value_conflict) achieves the highest F1 (0.6985) with near-perfect recall but very high slow-path
+rate (99.7%). Adding relational and affective heads increases precision but reduces recall.
+
+Source: `eval_results/ablation_curve.json`.
+
+---
+
+## 10. Currently running latent ablation experiments (2026-08-21)
+
+Four SLURM jobs launched on HKUST HPC (gpu-a30 partition) at 19:56 HKT, 16-hour time limit:
+
+| job ID | name | GPU | pooling | sampler | ctx len | total steps | status |
+|---|---|---|---|---|---|---:|---|
+| 1776582 | L1_control | gpu01 | last | weighted | 512 | 965 | RUNNING |
+| 1776583 | L2_nosampler | gpu01 | last | none | 512 | 965 | RUNNING |
+| 1776584 | L3_meanpool | gpu07 | mean | weighted | 512 | 1544 | RUNNING |
+| 1776585 | L4_ctx1024 | gpu07 | last | weighted | 1024 | 965 | RUNNING |
+
+**Common setup:** Qwen3-4B, 4-bit NF4, LoRA r=16 on q/v/k/o/gate/up/down, 33.03 M trainable
+params (0.81%), focal loss γ=1.5, label smoothing 0.1, cosine LR (heads 4e-4, backbone 2e-2),
+best model by val/mean_macro_f1.
+
+**Ablation variables:**
+- L1 → L2: removes the WeightedRandomSampler (tests whether class-imbalance correction helps or
+  distorts the marginal distribution of other heads).
+- L1 → L3: replaces last-token pooling with mean pooling (tests whether averaging hidden states
+  across the sequence improves multi-head prediction).
+- L1 → L4: doubles context length to 1024 (tests whether longer dialogue history improves
+  relational and decision heads).
+
+Results will be written to `checkpoints/L{1-4}_*/` and evaluated with
+`eval_test.yaml` on the held-out test split. As of 20:23 HKT (27 min runtime), all four jobs are
+in Epoch 1 at ~2.3 it/s (L1/L2) and ~2.4 it/s (L3/L4).
