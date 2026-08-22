@@ -916,9 +916,38 @@ attention projections are square, so a single Muon learning rate cannot be right
 `adjust_lr_fn="match_rms_adamw"` rescales the step per parameter to match AdamW's RMS update, which
 is what makes one LR meaningful across shapes.
 
-**Running:** a 2,200-step sweep (job 1778367) over `match_rms_adamw` at lr ∈ {0.01, 0.02, 0.05},
-scored against the AdamW curve above. Job 1778314 continues to completion as the naive-settings
-row.
+**Sweep result (2,200 steps, job 1778367 fp16 / job 1778399 bf16).** Train loss, lower is better;
+`nan` means the run diverged and every subsequent step was garbage:
+
+| step | AdamW fp16 | Muon 0.01 rms fp16 | Muon 0.02 rms | Muon 0.05 rms | AdamW bf16 | Muon 0.01 rms bf16 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 800 | **3.2460** | 3.2918 | nan | nan | 3.3177 | 3.2974 |
+| 1200 | **3.0164** | 3.0959 | nan | nan | | |
+| 1600 | **2.8467** | 2.8938 | nan | nan | | |
+| 2000 | 2.7263 | **2.7103** | nan | nan | | |
+| 2200 | 2.6478 | **2.6301** | nan | nan | | |
+
+Three findings:
+
+1. **`match_rms_adamw` at lr 0.01 crosses over and wins.** It trails AdamW for the first ~1,800
+   steps and then overtakes it, ending 0.018 nats ahead with the gap still widening. This is the
+   opposite crossover from the naive `original` setting, which led early and then fell behind — and
+   it is the shape one wants, because the lead grows with training rather than decaying.
+2. **lr 0.02 and 0.05 diverge to NaN under both precisions** (grad norm 33--154, then NaN). The
+   instability is the learning rate, not fp16: bf16 at lr 0.02 diverges the same way. Only 0.01 is
+   usable.
+3. **bfloat16 is worse than float16 for this model.** Within the same optimizer, every bf16 number
+   is behind its fp16 counterpart (AdamW 3.3177 vs 3.2460 at step 800). bf16 buys exponent range
+   this model does not need at the cost of mantissa precision it does. Muon still beats AdamW inside
+   bf16, so the optimizer ranking is precision-independent — but the comparison must be made within
+   a precision, and fp16 is the right one here.
+
+An earlier reading of this sweep, taken at step 1,400, recorded lr 0.01 as "stable but consistently
+behind AdamW". That was premature: the crossover had not happened yet.
+
+**Running:** full 6-epoch pretrain with fp16 + Muon lr 0.01 + `match_rms_adamw`
+(`slm_G_pretrain_muonrms`, job 1778404), and `slm_H_finetune_muonrms` to follow. Job 1778314
+continues as the naive-settings row.
 
 ### 15.2.1 A float16 overflow was silently capping `val_loss` at inf
 
