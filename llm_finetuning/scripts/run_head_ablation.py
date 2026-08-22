@@ -154,10 +154,18 @@ def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, bat
     # run is another way to measure the recipe instead of the head set.
     ablation_seq_len = int(tcfg.get("max_seq_len", cfg.get("generation", {}).get("max_seq_len", 1024)))
     print(f"Ablation max_seq_len={ablation_seq_len} batch_size={batch_size}")
+    # The packaged train split is 59% counterfactual variants that share a
+    # byte-identical context with their original while carrying different labels;
+    # training on those forces every affected head to the majority class, which is
+    # what the routing heads did in all three previous ablation attempts.
+    exclude_cf = train_cfg.get("data", {}).get("exclude_counterfactual", False)
+    if exclude_cf:
+        print("[ablation] counterfactual records EXCLUDED")
     train_ds = HeadSupervisionDataset(
         train_file,
         tokenizer,
         max_seq_len=ablation_seq_len,
+        exclude_counterfactual=exclude_cf,
     )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -170,7 +178,8 @@ def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, bat
     from src.training.dataset import LABEL_MAPS
     from src.training.loss import MultiHeadLoss, compute_class_weights
 
-    class_weights = compute_class_weights(train_file, LABEL_MAPS)
+    class_weights = compute_class_weights(train_file, LABEL_MAPS,
+                                          exclude_counterfactual=exclude_cf)
     loss_fn = MultiHeadLoss(
         train_cfg.get("loss_weights", cfg.get("loss_weights", {})),
         class_weights=class_weights,
