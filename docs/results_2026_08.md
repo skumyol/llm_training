@@ -857,6 +857,20 @@ Two consequences for the write-up:
    accuracy while losing to it on `response_policy`. The §12 conclusion — pooling and context help the
    aggregate but never the decision head — survives intact; only the absolute values move.
 
+**Three seeds, so this is not another single-point read.** §12.3 showed `response_policy` is the
+seed-sensitive metric, so the clean-test figure was computed for all three control seeds:
+
+| seed | mean macro-$F_1$ | mean acc | `response_policy` $F_1$ |
+|---|---:|---:|---:|
+| 42 | 0.5567 | 0.6886 | 0.5205 |
+| 43 | 0.5534 | 0.6882 | 0.5295 |
+| 44 | 0.5489 | 0.6812 | 0.5037 |
+| **mean ± sd** | **0.5530 ± 0.0032** | **0.6860 ± 0.0034** | **0.5179 ± 0.0107** |
+| contaminated 884 (§12) | 0.5389 ± 0.0022 | 0.6805 ± 0.0024 | 0.4673 ± 0.0082 |
+
+`response_policy` moves from **0.467 ± 0.008 to 0.518 ± 0.011** — a gain of 0.051, roughly five times
+the pooled spread, so it is not seed noise. Aggregate macro-$F_1$ moves 0.539 → 0.553.
+
 This is the *evaluation* half only. L5/L6 test whether removing the same contamination from training
 moves it further.
 
@@ -925,7 +939,7 @@ is what makes one LR meaningful across shapes.
 | 1200 | **3.0164** | 3.0959 | nan | nan | | |
 | 1600 | **2.8467** | 2.8938 | nan | nan | | |
 | 2000 | 2.7263 | **2.7103** | nan | nan | | |
-| 2200 | 2.6478 | **2.6301** | nan | nan | | |
+| 2200 | 2.6478 | **2.6301** | nan | nan | 2.7748 | 2.6643 |
 
 Three findings:
 
@@ -933,14 +947,20 @@ Three findings:
    steps and then overtakes it, ending 0.018 nats ahead with the gap still widening. This is the
    opposite crossover from the naive `original` setting, which led early and then fell behind — and
    it is the shape one wants, because the lead grows with training rather than decaying.
-2. **lr 0.02 and 0.05 diverge to NaN under both precisions** (grad norm 33--154, then NaN). The
-   instability is the learning rate, not fp16: bf16 at lr 0.02 diverges the same way. Only 0.01 is
-   usable.
-3. **bfloat16 is worse than float16 for this model.** Within the same optimizer, every bf16 number
-   is behind its fp16 counterpart (AdamW 3.3177 vs 3.2460 at step 800). bf16 buys exponent range
-   this model does not need at the cost of mantissa precision it does. Muon still beats AdamW inside
-   bf16, so the optimizer ranking is precision-independent — but the comparison must be made within
-   a precision, and fp16 is the right one here.
+2. **lr 0.02 and 0.05 are unusable.** Under fp16 both go to NaN (grad norm 33--154, then NaN). Under
+   bf16, lr 0.02 does *not* NaN — it degrades to 4.27 at step 600 with grad norm 32, then partially
+   recovers to 3.675 by step 2,200, still a full nat behind lr 0.01. So bf16 does prevent the hard
+   divergence, but it does not rescue the learning rate: 0.01 is the only usable setting either way.
+   (An earlier note here said bf16 at 0.02 "diverges the same way"; it does not, it degrades and
+   recovers.)
+3. **bfloat16 is worse than float16 for this model, but Muon's margin is larger inside it.** Every
+   bf16 number is behind its fp16 counterpart at matched optimizer (AdamW 2.7748 vs 2.6478 at step
+   2,200). bf16 buys exponent range this model does not need at the cost of mantissa precision it
+   does. The optimizer ranking is precision-independent — Muon wins in both — but the margin is very
+   different: **0.018 nats in fp16, 0.110 nats in bf16**. Muon's orthogonalised update is the less
+   precision-sensitive of the two, which is consistent with AdamW losing more when mantissa bits are
+   taken away. The best absolute result is fp16 + Muon (2.6301), and comparisons must stay within a
+   precision.
 
 An earlier reading of this sweep, taken at step 1,400, recorded lr 0.01 as "stable but consistently
 behind AdamW". That was premature: the crossover had not happened yet.

@@ -1,0 +1,58 @@
+thresholds:
+  response_policy_f1: 0.75
+  stance_delta_accuracy: 0.70
+  secret_leakage_rate: 0.05
+  contradiction_rate: 0.08
+  rouge_l_drop_max: 0.05
+  router_false_positive_rate: 0.15
+
+data:
+  test_heads_file: data/splits/test_heads.jsonl
+  exclude_counterfactual: true
+  test_sft_file: data/splits/test_sft.jsonl
+  test_trace_file: data/splits/test_trace.jsonl
+
+base_model: Qwen/Qwen3-4B
+quantization: 4bit
+torch_dtype: bfloat16
+latent_predictor_checkpoint: checkpoints/L1_control_s44_best
+response_checkpoint: checkpoints/response_generator_best
+joint_checkpoint: checkpoints/joint_model_best_consist05
+
+generation:
+  max_new_tokens: 200
+  temperature: 0.7
+  top_p: 0.9
+  do_sample: true
+  length_aware_max_tokens: true
+  length_multiplier: 1.3
+
+semantic_eval:
+  enabled: true
+  batch_size: 8
+  bertscore: true
+  bertscore_lang: en
+  bertscore_model_type: roberta-large
+  bertscore_rescale_with_baseline: false
+  mauve: false
+  mauve_max_text_length: 256
+  sentiment_alignment: true
+  sentiment_model: cardiffnlp/twitter-roberta-base-sentiment-latest
+
+# secret_strings_file not needed — eval uses built-in SECRECY_KEYWORDS list
+
+routing_mode: predicted
+predicted_zt_file: eval_results/predicted_zt_test_L1_control_s44_orig.jsonl
+routing_missing_predictions: error
+
+output:
+  results_dir: eval_results/test_L1_control_s44_orig
+  save_confusion_matrices: true
+  save_sample_generations: true
+  n_sample_generations: 100
+
+mlflow:
+  experiment_name: routing_and_policy_eval_test
+  tracking_uri: mlruns
+
+schema_version: v1
