@@ -827,7 +827,11 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         muon_lr = float(cfg.get("muon_lr", 0.02))
         optimizers = [
             torch.optim.Muon(muon_params, lr=muon_lr, weight_decay=weight_decay,
-                             momentum=float(cfg.get("muon_momentum", 0.95))),
+                             momentum=float(cfg.get("muon_momentum", 0.95)),
+                             # "original" leaves the update magnitude shape-independent,
+                             # which mis-scales wide matrices (our FFN is 512->2048);
+                             # "match_rms_adamw" rescales per parameter to AdamW's RMS.
+                             adjust_lr_fn=cfg.get("muon_adjust_lr") or None),
             torch.optim.AdamW(
                 [
                     {"params": adamw_decay, "weight_decay": weight_decay},
@@ -836,8 +840,9 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 **optimizer_kwargs,
             ),
         ]
-        log.info("Optimizer: Muon(%d tensors, lr=%.4g) + AdamW(%d tensors, lr=%.4g)",
-                 len(muon_params), muon_lr, len(adamw_decay) + len(no_decay_params), lr)
+        log.info("Optimizer: Muon(%d tensors, lr=%.4g, adjust_lr=%s) + AdamW(%d tensors, lr=%.4g)",
+                 len(muon_params), muon_lr, cfg.get("muon_adjust_lr") or "original",
+                 len(adamw_decay) + len(no_decay_params), lr)
     else:
         optimizers = [torch.optim.AdamW(
             [

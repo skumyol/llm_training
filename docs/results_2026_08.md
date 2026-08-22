@@ -845,9 +845,31 @@ path is byte-identical when the flag is absent. Routing is covered by
 | AdamW (`slm_C_smoke`) | 6.099 | 445.2 | 0.393 |
 | **Muon (`slm_E_smoke`)** | **5.056** | **156.9** | 0.391 |
 
-Muon is a full nat ahead after 40 steps with matched grad norms, so it is converging faster rather
-than taking larger steps. Forty steps is not a result — it is a go/no-go — but it is enough to
-justify the full run. Full pretrain submitted as job 1778314.
+Forty steps is a go/no-go, not a result, and taking it for more than that would have been wrong.
+The full run (job 1778314) shows the early lead does not hold:
+
+| step | AdamW (`slm_C_pretrain`) | Muon lr 0.02, `original` | Muon − AdamW |
+|---:|---:|---:|---:|
+| 200 | 4.3229 | **4.1140** | −0.209 |
+| 400 | 3.6721 | **3.5114** | −0.161 |
+| 800 | 3.2460 | **3.1407** | −0.105 |
+| 1200 | 3.0164 | **2.9787** | −0.038 |
+| 1600 | **2.8467** | 2.8727 | +0.026 |
+| 2000 | **2.7263** | 2.8236 | +0.097 |
+
+Muon leads for the first ~1,400 steps and is then overtaken, and the gap keeps widening. The shape
+of that curve — a large early advantage that decays and reverses — is the signature of an update
+magnitude that is too large for the later, finer phase of training rather than of a bad optimizer.
+
+The likely cause is that `torch.optim.Muon` defaults to `adjust_lr_fn="original"`, which makes the
+update magnitude independent of the parameter's shape. Our FFN matrices are 512×2048 while the
+attention projections are square, so a single Muon learning rate cannot be right for both.
+`adjust_lr_fn="match_rms_adamw"` rescales the step per parameter to match AdamW's RMS update, which
+is what makes one LR meaningful across shapes.
+
+**Running:** a 2,200-step sweep (job 1778367) over `match_rms_adamw` at lr ∈ {0.01, 0.02, 0.05},
+scored against the AdamW curve above. Job 1778314 continues to completion as the naive-settings
+row.
 
 ### 15.2.1 A float16 overflow was silently capping `val_loss` at inf
 
