@@ -135,6 +135,16 @@ numbers are val numbers, and val also drove early stopping and best-checkpoint s
 
 ### 2.2 Results
 
+> **Superseded — read §12.3 and §15.1.1 before quoting anything below.** Two later findings change
+> how this table must be read. (1) This checkpoint was selected with
+> `metric_for_best_model: val/response_policy_f1`, i.e. by maximising the very metric reported here
+> over epochs; three seeds of the identical recipe give val `response_policy` of 0.5519 / 0.3988 /
+> 0.3989 (sd 0.072) against test values of 0.4731 / 0.4731 / 0.4557 (sd 0.008). The val figure of
+> 0.62 is a selection artefact, not a measurement (§12.3). (2) The test column was computed on the
+> 884-record split, 60% of which is counterfactual duplicates carrying conflicting gold labels; on
+> the 358 clean turns the same recipe scores `response_policy` 0.5205 (§15.1.1). The unbiased figure
+> is ~0.47--0.52 on both splits.
+
 | metric | val (as previously reported) | val (corrected metric) | **test (corrected metric)** |
 |---|---:|---:|---:|
 | mean accuracy | 0.6875 | 0.6880 | 0.6735 |
@@ -154,11 +164,16 @@ Against the project's own acceptance thresholds, **on test**:
 
 ### 2.3 Interpretation
 
-**The aggregate system generalises; the decision head does not.** Mean macro-F1 moves only
-0.5409 → 0.5341 from val to test and balanced accuracy actually rises slightly — across 80 unseen
-episodes that is a stable result. But `response_policy`, the head the routing layer depends on,
-drops **31 % relative** (0.6218 → 0.4268; accuracy 0.716 → 0.623). Both splits contain 9 of its 10
-classes in gold, so this is not a class-mix artefact.
+**The aggregate system generalises.** Mean macro-F1 moves only 0.5409 → 0.5341 from val to test and
+balanced accuracy actually rises slightly — across 80 unseen episodes that is a stable result.
+
+~~But `response_policy`, the head the routing layer depends on, drops **31 % relative**
+(0.6218 → 0.4268), a generalisation gap.~~ **This reading is retracted.** The drop is not a
+generalisation gap: the val figure was obtained by selecting the epoch that maximised it, and the
+test figure was measured on a set where the same input recurs with conflicting labels. Correcting
+both, `response_policy` sits at ~0.47--0.52 on *both* splits and there is no gap to explain
+(§12.3, §15.1.1). What remains true is that the head is weak in absolute terms — though against its
+0.349 majority-class floor it is the strongest signal of any head, not the weakest (§15.3).
 
 Per-head macro-F1 on test, extremes:
 
@@ -172,7 +187,8 @@ Per-head macro-F1 on test, extremes:
 | `response_policy` | 0.427 | | |
 
 `risk_type` is diagnostic: **86.9 % accuracy but 0.407 macro-F1 and 0.398 balanced accuracy** — a
-head predicting the majority class and little else. The pattern is consistent across the weak heads:
+head predicting the majority class and little else. Its majority-class floor is 0.835 (§15.3), so
+the 86.9 % is 3.4 points of signal; the accuracy figure should never be quoted without the floor. The pattern is consistent across the weak heads:
 balanced-class heads work, rare-class and stance-*delta* heads collapse toward the majority class.
 This occurs despite the training pipeline applying three imbalance corrections simultaneously
 (inverse-frequency class weights, a `WeightedRandomSampler`, and focal loss with γ = 1.5). The
@@ -585,20 +601,20 @@ the noisier `val/response_policy_f1`. Test = 884 records.
 | L3_meanpool | + mean pooling | 0.5550 | 0.5502 | 0.6972 | 0.4525 | 0.6126 |
 | **L4_ctx1024** | + 1024 context, 8 epochs | **0.5590** | **0.5531** | **0.7066** | 0.4310 | **0.6283** |
 
-### 4.1 The sampler hypothesis is rejected
+### 12.1 The sampler hypothesis is rejected
 
 Removing the `WeightedRandomSampler` (L2) did **not** improve the weak heads: test macro-$F_1$ falls
 slightly (0.5348 vs 0.5407) and `response_policy` falls (0.4575 vs 0.4731). The earlier conjecture
 that the sampler distorts other heads' marginals by oversampling on the per-record rarest field is
 **not supported**. The limitation is not a sampler artefact.
 
-### 4.2 Pooling and context help the aggregate, not the decision head
+### 12.2 Pooling and context help the aggregate, not the decision head
 
 Mean pooling (L3) and longer context (L4) improve mean macro-$F_1$ by 1.8% and 2.3%, accuracy by
 2.2% and 3.6%, and stance-delta accuracy by 3.3% and 6.0%. None improves `response_policy`; L4 is in
 fact the worst on it (0.4310). Across all six runs `response_policy` stays in **0.43--0.47** on test.
 
-### 4.3 The chapter's 0.621 is a selection artefact, not a generalisation gap
+### 12.3 The chapter's 0.621 is a selection artefact, not a generalisation gap
 
 This is the most consequential result of the sweep. Three seeds of the identical control
 configuration:
@@ -811,6 +827,39 @@ is run as an ablation rather than assumed.
 **Blocked on this:** the head-subset routing ablation (§9). All three of its versions collapse to a
 majority class on the four routing heads, which are among the most contaminated.
 
+### 15.1.1 Scoring the existing checkpoints on the clean test set
+
+Before any new run finishes, the checkpoints from §12 were re-scored on the 358 counterfactual-free
+test turns instead of the 884-record split. Same model, same weights, different evaluation set — so
+this isolates the evaluation half of the contamination from the training half.
+
+| checkpoint | test set | mean macro-$F_1$ | mean acc | `response_policy` $F_1$ |
+|---|---|---:|---:|---:|
+| L1_control (s42) | 884 (contaminated) | 0.5407 | 0.6819 | 0.4731 |
+| L1_control (s42) | **358 (clean)** | **0.5567** | **0.6886** | **0.5205** |
+| L3_meanpool | 884 (contaminated) | 0.5502 | 0.6972 | 0.4525 |
+| L3_meanpool | **358 (clean)** | **0.5649** | **0.7032** | **0.4891** |
+| L4_ctx1024 | 884 (contaminated) | 0.5531 | 0.7066 | 0.4310 |
+| L4_ctx1024 | **358 (clean)** | **0.5629** | **0.7108** | **0.4740** |
+
+Removing counterfactuals from the evaluation set alone is worth **+1.0 to +1.6 macro-$F_1$ points**
+and **+8 to +10% relative on `response_policy`** — 0.4731 → 0.5205 for the control, and L4's
+0.4310 → 0.4740, the largest relative gain of the three. This confirms the
++9% estimated in §11 and extends it to the aggregate metric.
+
+Two consequences for the write-up:
+
+1. **The clean figure is the one to quote.** `response_policy` on the control is 0.52, not 0.43. The
+   contaminated number is not a conservative estimate of the model — it is an estimate of a different
+   quantity, because the same input appears several times with conflicting gold labels and no
+   deterministic classifier can score above the resulting ceiling.
+2. **Ordering is preserved.** On both evaluation sets L3 and L4 beat L1 on aggregate macro-$F_1$ and
+   accuracy while losing to it on `response_policy`. The §12 conclusion — pooling and context help the
+   aggregate but never the decision head — survives intact; only the absolute values move.
+
+This is the *evaluation* half only. L5/L6 test whether removing the same contamination from training
+moves it further.
+
 ### 15.2 Small LM — Muon on the transformer matrices
 
 §1 concluded the SLM is data-limited rather than capacity-limited. Two facts sharpen that:
@@ -893,39 +942,6 @@ ceiling at 93% of it). Every published number is finite and correct. What the bu
 first epoch or two of every run, and any future run or larger validation set that crosses the
 threshold — a config genuinely worse than ppl 193 would have been recorded as `inf` and quietly
 dropped from best-checkpoint selection rather than reported as bad.
-
-### 15.1.1 Scoring the existing checkpoints on the clean test set
-
-Before any new run finishes, the checkpoints from §12 were re-scored on the 358 counterfactual-free
-test turns instead of the 884-record split. Same model, same weights, different evaluation set — so
-this isolates the evaluation half of the contamination from the training half.
-
-| checkpoint | test set | mean macro-$F_1$ | mean acc | `response_policy` $F_1$ |
-|---|---|---:|---:|---:|
-| L1_control (s42) | 884 (contaminated) | 0.5407 | 0.6819 | 0.4731 |
-| L1_control (s42) | **358 (clean)** | **0.5567** | **0.6886** | **0.5205** |
-| L3_meanpool | 884 (contaminated) | 0.5502 | 0.6972 | 0.4525 |
-| L3_meanpool | **358 (clean)** | **0.5649** | **0.7032** | **0.4891** |
-| L4_ctx1024 | 884 (contaminated) | 0.5531 | 0.7066 | 0.4310 |
-| L4_ctx1024 | **358 (clean)** | **0.5629** | **0.7108** | **0.4740** |
-
-Removing counterfactuals from the evaluation set alone is worth **+1.0 to +1.6 macro-$F_1$ points**
-and **+8 to +10% relative on `response_policy`** — 0.4731 → 0.5205 for the control, and L4's
-0.4310 → 0.4740, the largest relative gain of the three. This confirms the
-+9% estimated in §11 and extends it to the aggregate metric.
-
-Two consequences for the write-up:
-
-1. **The clean figure is the one to quote.** `response_policy` on the control is 0.52, not 0.43. The
-   contaminated number is not a conservative estimate of the model — it is an estimate of a different
-   quantity, because the same input appears several times with conflicting gold labels and no
-   deterministic classifier can score above the resulting ceiling.
-2. **Ordering is preserved.** On both evaluation sets L3 and L4 beat L1 on aggregate macro-$F_1$ and
-   accuracy while losing to it on `response_policy`. The §12 conclusion — pooling and context help the
-   aggregate but never the decision head — survives intact; only the absolute values move.
-
-This is the *evaluation* half only. L5/L6 test whether removing the same contamination from training
-moves it further.
 
 ### 15.3 Integrity checks that came back clean
 
