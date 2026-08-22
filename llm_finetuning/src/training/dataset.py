@@ -87,6 +87,7 @@ class HeadSupervisionDataset(Dataset):
         jepa_horizons: Optional[list[int]] = None,
         shuffle_future_labels: bool = False,
         shuffle_seed: int = 42,
+        exclude_counterfactual: bool = False,
     ):
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
@@ -95,11 +96,25 @@ class HeadSupervisionDataset(Dataset):
         self.shuffle_future_labels = shuffle_future_labels
         self._shuffle_rng = random.Random(shuffle_seed) if shuffle_future_labels else None
         self.records: list[dict] = []
+        n_dropped = 0
         with open(jsonl_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    self.records.append(json.loads(line))
+                if not line:
+                    continue
+                rec = json.loads(line)
+                # Counterfactual variants share a byte-identical `context` with their
+                # original (the flipped variable lives in C_t/M_t/N_t, none of which
+                # packager._context_str renders) while carrying different gold labels.
+                # Keeping them trains the model to emit different outputs for the same
+                # input, whose loss-minimiser is the majority class.
+                if exclude_counterfactual and rec.get("counterfactual"):
+                    n_dropped += 1
+                    continue
+                self.records.append(rec)
+        if n_dropped:
+            print(f"[dataset] {Path(jsonl_path).name}: dropped {n_dropped} counterfactual "
+                  f"records, kept {len(self.records)}")
         self._future_index: dict[tuple[str, int], dict] = {}
         self._all_label_records: list[dict] = []  # used for shuffling
         if self.jepa_fields and self.jepa_horizons:

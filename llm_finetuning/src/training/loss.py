@@ -24,15 +24,24 @@ GROUP_FIELDS: dict[str, list[str]] = {
 }
 
 
-def compute_class_weights(train_file: str, label_maps: dict) -> dict[str, torch.Tensor]:
-    """Compute inverse-frequency class weights from training data."""
+def compute_class_weights(train_file: str, label_maps: dict,
+                          exclude_counterfactual: bool = False) -> dict[str, torch.Tensor]:
+    """Compute inverse-frequency class weights from training data.
+
+    `exclude_counterfactual` must match the dataset's setting, or the weights
+    describe a different label distribution than the one being trained on.
+    """
     from src.training.dataset import LABEL_TO_IDX
     records = []
     with open(train_file) as f:
         for line in f:
             line = line.strip()
-            if line:
-                records.append(json.loads(line))
+            if not line:
+                continue
+            r = json.loads(line)
+            if exclude_counterfactual and r.get("counterfactual"):
+                continue
+            records.append(r)
 
     weights = {}
     for field, idx_map in LABEL_TO_IDX.items():

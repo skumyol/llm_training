@@ -120,6 +120,10 @@ def train_latent(config_path: str, debug: bool = False) -> None:
     if train_cfg.get("gradient_checkpointing", False):
         predictor.backbone.gradient_checkpointing_enable()
 
+    exclude_cf = cfg["data"].get("exclude_counterfactual", False)
+    if exclude_cf:
+        print("[data] counterfactual records EXCLUDED from train and val")
+
     train_ds = HeadSupervisionDataset(
         cfg["data"]["train_file"],
         tokenizer,
@@ -127,6 +131,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         jepa_fields=jepa_fields if jepa_enabled else None,
         jepa_horizons=jepa_horizons if jepa_enabled else None,
         shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
+        exclude_counterfactual=exclude_cf,
     )
     val_ds = HeadSupervisionDataset(
         cfg["data"]["val_file"],
@@ -135,10 +140,12 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         jepa_fields=jepa_fields if jepa_enabled else None,
         jepa_horizons=jepa_horizons if jepa_enabled else None,
         shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
+        exclude_counterfactual=exclude_cf,
     )
 
     # Compute class weights early (needed for sampler and loss)
-    class_weights = compute_class_weights(cfg["data"]["train_file"], LABEL_MAPS)
+    class_weights = compute_class_weights(cfg["data"]["train_file"], LABEL_MAPS,
+                                          exclude_counterfactual=exclude_cf)
     print(f"Computed class weights for {len(class_weights)} heads")
 
     batch_size = train_cfg.get("batch_size", 4)

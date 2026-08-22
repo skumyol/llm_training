@@ -806,13 +806,42 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
     if policy["fused_optimizer"]:
         optimizer_kwargs["fused"] = True
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay_params, "weight_decay": weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ],
-        **optimizer_kwargs,
-    )
+    if str(cfg.get("optimizer", "adamw")).lower() == "muon":
+        # torch.optim.Muon (torch>=2.11) orthogonalises the update, which only makes
+        # sense for the hidden weight matrices — it rejects 1-D tensors outright, and
+        # embeddings/tied LM head are excluded by convention because their rows get
+        # sparse gradients. Those stay on AdamW, so two optimizers are unavoidable.
+        muon_params, adamw_decay = [], []
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad or parameter.ndim < 2:
+                continue
+            if any(k in name.lower() for k in ("emb", "wte", "wpe", "lm_head", "head.weight")):
+                adamw_decay.append(parameter)
+            else:
+                muon_params.append(parameter)
+        muon_lr = float(cfg.get("muon_lr", 0.02))
+        optimizers = [
+            torch.optim.Muon(muon_params, lr=muon_lr, weight_decay=weight_decay,
+                             momentum=float(cfg.get("muon_momentum", 0.95))),
+            torch.optim.AdamW(
+                [
+                    {"params": adamw_decay, "weight_decay": weight_decay},
+                    {"params": no_decay_params, "weight_decay": 0.0},
+                ],
+                **optimizer_kwargs,
+            ),
+        ]
+        log.info("Optimizer: Muon(%d tensors, lr=%.4g) + AdamW(%d tensors, lr=%.4g)",
+                 len(muon_params), muon_lr, len(adamw_decay) + len(no_decay_params), lr)
+    else:
+        optimizers = [torch.optim.AdamW(
+            [
+                {"params": decay_params, "weight_decay": weight_decay},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ],
+            **optimizer_kwargs,
+        )]
+    optimizer = optimizers[0]  # for logging the primary LR
     scaler = torch.amp.GradScaler(
         device.type,
         enabled=bool(policy["amp_enabled"]),
@@ -824,17 +853,20 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         planned_steps = min(planned_steps, int(cfg["max_steps"]))
 
     # ── LR Scheduler ────────────────────────────────────────────────────────
-    scheduler = None
+    schedulers: List[Any] = []
     sched_name = cfg.get("scheduler", "none")
     if sched_name == "warmup_cosine":
         warmup_steps = int(planned_steps * float(cfg.get("warmup_ratio", 0.02)))
         min_lr_ratio = float(cfg.get("min_lr_ratio", 0.1))
-        scheduler = LambdaLR(
-            optimizer,
-            lr_lambda=lambda step: warmup_cosine_multiplier(
-                step, planned_steps, warmup_steps, min_lr_ratio
-            ),
-        )
+        schedulers = [
+            LambdaLR(
+                opt,
+                lr_lambda=lambda step: warmup_cosine_multiplier(
+                    step, planned_steps, warmup_steps, min_lr_ratio
+                ),
+            )
+            for opt in optimizers
+        ]
         log.info(
             "Scheduler: warmup_cosine (steps=%d, warmup=%d, min_ratio=%.3f)",
             planned_steps,
@@ -845,12 +877,10 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         T_0 = int(cfg.get("T_0", 5))
         T_mult = int(cfg.get("T_mult", 2))
         eta_min = float(cfg.get("eta_min", 1e-6))
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=T_0,
-            T_mult=T_mult,
-            eta_min=eta_min,
-        )
+        schedulers = [
+            CosineAnnealingWarmRestarts(opt, T_0=T_0, T_mult=T_mult, eta_min=eta_min)
+            for opt in optimizers
+        ]
         log.info(f"Scheduler: CosineAnnealingWarmRestarts (T_0={T_0}, T_mult={T_mult})")
     else:
         log.info("Scheduler: none (constant LR)")
@@ -938,7 +968,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for epoch in range(1, cfg["epochs"] + 1):
         log.info(f"── Epoch {epoch}/{cfg['epochs']} ──────────────────────────────────")
         model.train()
-        optimizer.zero_grad(set_to_none=True)
+        for _opt in optimizers:
+            _opt.zero_grad(set_to_none=True)
         active_train_loader = (
             curriculum_loader
             if curriculum_loader is not None and epoch <= curriculum_epochs
@@ -1010,18 +1041,23 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
             if bi % cfg["grad_accum"] == 0 or bi == len(active_train_loader):
                 if policy["amp_enabled"]:
-                    scaler.unscale_(optimizer)
+                    for _opt in optimizers:
+                        scaler.unscale_(_opt)
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
-                    scaler.step(optimizer); scaler.update()
+                    for _opt in optimizers:
+                        scaler.step(_opt)
+                    scaler.update()
                 else:
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
-                    optimizer.step()
-                if scheduler is not None:
+                    for _opt in optimizers:
+                        _opt.step()
+                for _sched in schedulers:
                     if sched_name == "cosine_warm_restarts":
-                        scheduler.step(epoch - 1 + bi / len(active_train_loader))
+                        _sched.step(epoch - 1 + bi / len(active_train_loader))
                     else:
-                        scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                        _sched.step()
+                for _opt in optimizers:
+                    _opt.zero_grad(set_to_none=True)
                 global_step += 1
 
                 if global_step % cfg["log_every"] == 0:

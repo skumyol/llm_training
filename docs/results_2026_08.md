@@ -402,13 +402,45 @@ lr 2e-5, on the proper train split. Results on the held-out test split:
 fresh LoRA + 3 epochs at lr 2e-5 vs the main recipe's lr 2e-4/4e-4 over 5 epochs. The model never
 learns to route; it just plays safe.
 
-### 9.3 Verdict
+### 9.3 Third re-run under the main recipe (opposite degenerate pole)
 
-Neither version supports any claim about head subsets and routing quality. The original is
-train-on-eval; the corrected version is an under-trained degenerate baseline. A **warm-start
+The §9.2 protocol was too weak, so it was re-run with the main training recipe transplanted in
+(`--train-config train_latent.yaml`: LoRA r=16, lr 2e-4 / head_lr 4e-4, 5 epochs, `MultiHeadLoss`
+with inverse-frequency weights + focal $\gamma$=1.5 + label smoothing 0.1). Jobs 1777894--97,
+~2.5 h each, evaluated on the 884-record test split:
+
+| experiment | n heads | routing F1 | precision | recall | slow-path rate | unsafe fast-path |
+|---|---:|---:|---:|---:|---:|---:|
+| exp_a (routing only) | 4 | 0.000 | 0.000 | 0.000 | 0.0000 | 0.498 |
+| exp_b (+affect) | 7 | 0.000 | 0.000 | 0.000 | 0.0000 | 0.498 |
+| exp_c (+relational) | 6 | 0.000 | 0.000 | 0.000 | 0.0000 | 0.498 |
+| exp_d (full 29) | 28 | 0.009 | 1.000 | 0.005 | 0.0023 | 0.496 |
+
+The stronger recipe did not fix the degeneracy — it moved it to the **opposite pole**. §9.2 routed
+*everything* to the slow path (recall 1.0, F1 0.667); §9.3 routes *nothing* to it (recall 0.0,
+F1 0.0), sending 49.8% of genuinely unsafe turns down the fast path. Precision 1.0 at recall 0.005
+in exp_d is four correct calls out of 884.
+
+This is the majority-class trap: the router's decision is read off `response_policy`,
+`reveal_decision`, `secrecy_pressure` and `value_conflict`, and each of those heads has collapsed to
+its most frequent class. Which pole it collapses to is decided by the loss weighting, not by the
+head subset — which is why all three subsets give identical numbers to four decimal places.
+
+**These heads are exactly the ones with the highest counterfactual label-conflict rate in training**
+(§11.1: 19--22% of duplicate groups conflict on `response_policy`, `secrecy_pressure` and
+`trust_delta`). The ablation is not blocked on protocol; it is blocked on the training data. It
+should be re-run only after a counterfactual-free predictor exists (§15).
+
+### 9.4 Verdict
+
+None of the three versions supports any claim about head subsets and routing quality. The original
+is train-on-eval; the second is an under-trained always-slow baseline; the third is a
+never-slow collapse under the full recipe. All three subsets score identically, which is itself the
+evidence that the head subset is not what determines the outcome. A **warm-start
 protocol** is needed before this ablation can be quoted: initialise from the full 29-head
 checkpoint, freeze the backbone, and fine-tune only the ablated head subset for a few epochs at
-the main recipe's learning rate. This is left as future work.
+the main recipe's learning rate — **on counterfactual-free data**, without which the routing heads
+collapse regardless of protocol.
 
 Source: `eval_results/test_honest/ablation/exp_{a,b,c,d}_*/`.
 
@@ -447,8 +479,9 @@ val/mean_macro_f1.
 
 ### 10.3 Caveats
 
-- These are **val numbers**, not test. The held-out test evaluation has not been run on these
-  checkpoints yet.
+- These are **val numbers**. The test evaluation of the same checkpoints was subsequently run and is
+  reported in §12; read §12 in preference to this section, because it also shows that the val
+  `response_policy` column above is dominated by seed noise (sd 0.072 on val vs 0.008 on test).
 - Single seed for L2, L3, L4 — no error bars on the ablation gains.
 - All configs overfit by epoch 3–4 (val loss rises while train loss falls); the best checkpoint is
   early, consistent with the data-limit finding from §1.
@@ -498,6 +531,43 @@ counterfactual labels explain the stance-delta and decision fields.
 
 **Recommendation:** report the 358-turn original-only figure as the primary number, and treat
 counterfactual records as a training augmentation, not evaluation data.
+
+### 11.1 The *training* split is contaminated the same way — and worse
+
+The recommendation above ("treat counterfactuals as a training augmentation") assumed the training
+side was benign. It is not. Measured on `data/splits/train_heads.jsonl`:
+
+```
+train records=6175  unique_turns=2571  counterfactual=3655 (59%)
+duplicate groups=2292
+  identical context   2292 (100%)
+  conflicting labels  2177 (95%)
+```
+
+Every duplicate group is an **exact context string** repeated with **different gold labels**. The
+model is therefore explicitly trained to produce different outputs for byte-identical inputs. Under
+cross-entropy the loss-minimising response is the marginal class distribution over the conflicting
+copies — i.e. the majority class. This is the mechanism behind the majority-class collapse, and it is
+a training-data defect, not a modelling one.
+
+Per-field conflict rate on the training split, next to the head's test macro-$F_1$:
+
+| field | groups with conflicting labels | test macro-$F_1$ |
+|---|---:|---:|
+| `trust_delta` | 511 / 2292 (22%) | weak |
+| `secrecy_pressure` | 508 / 2292 (22%) | 0.491 |
+| `response_policy` | 446 / 2292 (19%) | 0.427 |
+| `risk_type` | 0 / 2292 (0%) | 0.407 |
+
+The three weakest non-imbalanced heads are exactly the three with the highest training conflict
+rates, and `risk_type` — the one head with **zero** conflict — is weak for the separate, already
+documented reason of class imbalance (0.869 accuracy at 0.407 macro-$F_1$).
+
+This changes the conclusion of §11. Filtering counterfactuals out of the *evaluation* set recovers
++9% on `response_policy` (0.4268 → 0.4660) but leaves the trained model unchanged; the ceiling is
+imposed at training time. The untested lever is training on the 2,571 unique turns only.
+
+**Status: not yet run.** A counterfactual-free training run is queued (see §15).
 
 ---
 
@@ -647,3 +717,140 @@ consistency of the pattern across all eight is what carries it.
 Reproduce: `python paper/predictor_vs_human_consensus.py --predictor paper/audit_results/audit_predictor.jsonl
 --human-a paper/audit_results/audit_654cfad67f990b0393b85132.jsonl
 --human-b paper/audit_results/audit_67c87fc1b3ba111d0e1526a0.jsonl --teacher paper/audit_input_clean.jsonl`
+
+---
+
+## 14. Predictor agreement per annotator
+
+§13 uses the two annotators named in `audit_interpretation.md` ("Human A" = `654cfad…`, "Human B" =
+`67c87fc…`). Twelve annotator files exist. Scoring the predictor against each one separately shows
+the headline is annotator-dependent and that the pool is not homogeneous.
+
+| annotator | kind | overlap | pred $\kappa$ | pred acc | teacher $\kappa$ |
+|---|---|---:|---:|---:|---:|
+| `654cfad…` (Human A) | human | 150 | 0.113 | 0.309 | 0.096 |
+| `9_ceef…` | human | 150 | 0.113 | 0.356 | 0.146 |
+| `9_caa…` | human | 150 | 0.058 | 0.297 | 0.079 |
+| `67c87fc…` (Human B) | human | 160 | −0.008 | 0.291 | −0.018 |
+| `698e520…` | human | 150 | −0.011 | 0.233 | −0.052 |
+| `69839d2…` | human? | 150 | **−0.129** | **0.117** | **−0.269** |
+| `69a8409…` | human? | 150 | **−0.137** | **0.110** | **−0.280** |
+| `ai_validator` | ai | 150 | 0.120 | 0.402 | 0.154 |
+| `synthetic_01–03` | synthetic | 150 | 0.071 – 0.115 | 0.34 – 0.37 | 0.15 – 0.23 |
+| `synthetic_04–07` | synthetic | 150 | −0.146 – −0.128 | 0.10 – 0.12 | −0.29 – −0.27 |
+
+1. **The headline depends on which annotator is used.** Over the five plausible annotators mean
+   predictor $\kappa$ is **0.053**; the published pair happens to be the two ends of that range
+   (0.113 and −0.008). Reporting one annotator alone is not defensible.
+2. **Two "human" files carry the statistical signature of `synthetic_04`–`07` and of nothing else**
+   (predictor $\kappa$ −0.129/−0.137 vs −0.146…−0.128; teacher $\kappa$ −0.269/−0.280 vs
+   −0.286…−0.270). Teacher $\kappa$ near −0.27 is not inattentive responding, which sits near 0; it
+   is systematic *anti*-correlation. No file is a literal copy of another, so this is not proof, but
+   the provenance of `69839d2…` and `69a8409…` should be confirmed before they enter any
+   human-agreement statistic — they pull human–human agreement toward zero, which is the audit's
+   headline finding.
+3. **`synthetic_04`–`07` ship without a `*_meta.json`.** Any analysis that filters synthetics on the
+   metadata flag alone silently counts four synthetic annotators as human.
+
+Full per-field table: `docs/predictor_per_annotator.md`.
+Reproduce: `python paper/predictor_per_annotator.py --markdown docs/predictor_per_annotator.md`
+
+---
+
+## 15. Improvement program (launched 2026-08-22)
+
+Everything above is diagnosis. This section records the fixes that follow from it and their status.
+Nothing here is a result yet.
+
+### 15.1 Latent predictor — remove the training-set label contradiction
+
+§11.1 established that 59% of training records are counterfactual variants that share a
+byte-identical `context` with their original while carrying different gold labels. Inspecting
+`data_gen/counterfactual.py` against `packaging/packager.py` explains why, and shows the defect is
+structural rather than a packaging slip:
+
+- The augmenter flips one of five variables: `C_t.tone`, `M_t.player_credibility`,
+  `M_t.player_knowledge`, `N_t.secrecy_pressure`, `N_t.value_conflict`.
+- `packager._context_str()` renders only the scene (`W`), the *initial* stance, the dialogue history
+  and the player utterance. **None of the five flipped variables is rendered.**
+- All five are themselves prediction targets among the 29 heads.
+
+So the flip is invisible in the input by construction, and it cannot be made visible without leaking
+five labels. Counterfactual augmentation as designed is incompatible with this task's input format:
+it is label-noise injection, not augmentation. (The `_apply_flip` fallback compounds it — when the
+re-labelling call raises, the `except` branch keeps the *original* R/N/D and response and still marks
+the record `counterfactual: True`, so the variant differs from its original in one label and nothing
+else.)
+
+**Fix.** `HeadSupervisionDataset` and `compute_class_weights` take an `exclude_counterfactual` flag,
+wired from `data.exclude_counterfactual` in the config and applied to train, val and test alike. The
+class-weight path takes the same flag deliberately: computing inverse-frequency weights over the
+contaminated distribution while training on the clean one would silently mis-weight every head.
+
+Verified effect of the filter:
+
+| split | records | → kept | duplicate contexts remaining |
+|---|---:|---:|---:|
+| train | 6,175 | 2,520 | 2,292 → **3** |
+| val | 683 | 268 | → **0** |
+| test | 884 | 358 | → **0** |
+
+**Running:** two 16-epoch runs on gpu-a30 (jobs 1778293, 1778294). Epoch count is raised from 8 to
+16 so the optimizer-step budget stays comparable after the 59% cut.
+
+| run | change vs L4 |
+|---|---|
+| `L5_nocf` | counterfactual-free train/val, everything else identical to L4 — isolates the variable |
+| `L6_nocf_reg` | + LoRA dropout 0.05→0.15, weight decay 0.01→0.05, label smoothing 0.1→0.0, focal $\gamma$ 1.5→2.0 |
+
+L6 exists because L4 already overfits hard (train loss 4.66→1.13 while val loss rises 4.79→5.54 over
+8 epochs) and cutting the data by 59% makes that worse. Whether dropping label smoothing helps is
+genuinely open — the literature does not settle whether it fights focal loss on macro-$F_1$ — so it
+is run as an ablation rather than assumed.
+
+**Blocked on this:** the head-subset routing ablation (§9). All three of its versions collapse to a
+majority class on the four routing heads, which are among the most contaminated.
+
+### 15.2 Small LM — Muon on the transformer matrices
+
+§1 concluded the SLM is data-limited rather than capacity-limited. Two facts sharpen that:
+
+- The model is 44.8 M parameters, of which **25.9 M (58%) is the tied GPT-2 embedding table**
+  (50,257 × 512). Only 18.9 M parameters do any computation.
+- Pretraining sees ~107 M tokens, i.e. ~2.4 tokens per parameter — far below the compute-optimal
+  ratio, which is the regime where sample efficiency matters most.
+
+`torch.optim.Muon` landed in torch 2.11 and is present in both cluster venvs, so this needs no new
+dependency. Reported behaviour is a 1.4× compute-efficiency gain at 130 M parameters, *increasing* as
+model size falls and as the data-to-model ratio falls — both of which point our way.
+
+**Fix.** `optimizer: muon` in the SLM config routes the 24 hidden weight matrices (18.9 M params) to
+Muon and leaves the two embedding tables plus all 38 1-D tensors on AdamW. Muon orthogonalises its
+update, which is meaningless for 1-D tensors — it raises on them — and is conventionally avoided for
+embeddings, whose rows receive sparse gradients. Two optimizers are therefore unavoidable, and since
+`LRScheduler` rejects anything that is not an `Optimizer`, each gets its own scheduler. The AdamW
+path is byte-identical when the flag is absent. Routing is covered by
+`slm_training/tests/test_muon_param_split.py`, which asserts full coverage, no double-routing and no
+1-D tensor in the Muon group.
+
+| config | recipe |
+|---|---|
+| `slm_E_pretrain_muon` | = `slm_C_pretrain` + Muon (lr 0.02) on the matrices |
+| `slm_F_finetune_muon` | = `slm_D_finetune` warm-started from E, Muon lr 4e-3 |
+
+**Status:** smoke run submitted (job 1778303); full runs follow if it converges.
+
+### 15.3 Not yet attempted
+
+- **Domain BPE vocabulary.** A 16 k vocabulary trained on the corpus would cut the embedding table
+  from 25.9 M to ~8 M and let the same budget buy depth. Perplexity would no longer be comparable
+  across tokenizers, but `val_bpc` already exists in `run_summary.json` and is tokenizer-invariant,
+  so the comparison is available. This is the largest single lever identified and the most disruptive
+  to the thesis's reported numbers.
+- **Conditional counterfactuals.** Render the flipped upstream state into the context and supervise
+  only `D_t` — a "given the social state, choose the policy" task. This would recover the discarded
+  3,655 records, but it is a different task from the one the thesis defines.
+- **Independent error bars for SLM D.** All three seeds share one pretraining checkpoint, so the
+  pretraining stage is n=1.
+- **End-to-end response evaluation** under predicted $Z_t$ rather than oracle $Z_t$.
+

@@ -37,6 +37,7 @@ def eval_latent(config_path: str) -> dict:
         cfg["data"]["test_heads_file"],
         tokenizer,
         max_seq_len=cfg.get("generation", {}).get("max_seq_len", 1024),
+        exclude_counterfactual=cfg["data"].get("exclude_counterfactual", False),
     )
     test_loader = DataLoader(
         test_ds, batch_size=8, shuffle=False,

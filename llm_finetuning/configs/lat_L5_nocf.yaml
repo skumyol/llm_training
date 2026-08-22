@@ -1,0 +1,88 @@
+base_model: Qwen/Qwen3-4B
+debug_model: Qwen/Qwen3-1.7B
+
+quantization: 4bit
+bnb_4bit_compute_dtype: bfloat16
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]
+  bias: none
+  task_type: CAUSAL_LM
+
+pooling: mean
+
+training:
+  lr: 2.0e-4
+  head_lr: 4.0e-4  # 2x backbone LR for classification heads
+  use_progressive_lr: true  # Higher LR for heads vs backbone
+  lr_scheduler: cosine
+  warmup_ratio: 0.05
+  epochs: 16  # 2571 records after CF filter vs 6175; keeps optimizer-step count comparable
+  max_seq_len: 1024
+  batch_size: 1
+  grad_accum: 32
+  gradient_checkpointing: true
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  dataloader_num_workers: 0
+  eval_steps: 500
+  save_steps: 1000
+  logging_steps: 20
+  load_best_model_at_end: true
+  metric_for_best_model: val/mean_macro_f1
+  use_weighted_sampler: false  # decouple: sampler reweights ALL heads by whichever field is rarest per record
+  label_smoothing: 0.1  # 0.0 to disable
+  focal_gamma: 1.5      # targets weak heads (R group / relational deltas); set 0.0 for CE baseline
+
+loss_weights:
+  lambda_C: 1.0
+  lambda_A: 1.0
+  lambda_M: 1.5
+  lambda_R: 2.0
+  lambda_N: 1.0
+  lambda_D: 2.0
+
+jepa:
+  enabled: false
+  target: social_state
+  fields:
+    - trust_delta
+    - respect_delta
+    - dominance_delta
+    - secrecy_pressure
+    - player_knowledge
+    - response_policy
+    - reveal_decision
+  horizons: [1]
+  horizon_weights:
+    1: 1.0
+  emb_dim: 64
+  target_dim: 128
+  predictor_dim: 256
+  dropout: 0.1
+  lambda_jepa: 0.05
+  var_weight: 0.01
+
+data:
+  train_file: data/splits/train_heads.jsonl
+  exclude_counterfactual: true
+  val_file: data/splits/val_heads.jsonl
+  artifact_type: head_supervision
+
+output:
+  checkpoint_dir: checkpoints/L5_nocf
+  best_model_dir: checkpoints/L5_nocf_best
+
+mlflow:
+  experiment_name: latent_state_prediction
+  run_name: L5_nocf
+  tracking_uri: mlruns
+
+schema_version: v1
+seed: 42
