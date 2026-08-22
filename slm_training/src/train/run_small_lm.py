@@ -445,6 +445,7 @@ def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
     cond_dim: int, use_amp: bool, max_batches: int = 0,
     amp_dtype: str = "float16",
+    bytes_per_token: float = 0.0,
     condition_mode: str = "ocean_vad",
     extractor: Optional[EmbeddingExtractor] = None,
     tokenizer: Optional[Any] = None,
@@ -524,6 +525,13 @@ def evaluate(
     }
     if total_bytes:
         metrics["val_bits_per_byte"] = total_nll / (math.log(2) * total_bytes)
+    elif bytes_per_token > 0:
+        # The plain-text pipeline yields (x, y) tuples with no byte counts, so the
+        # exact per-batch total is unavailable. The corpus-level bytes-per-token
+        # ratio gives the same aggregate figure, and this is the only metric that
+        # is comparable ACROSS tokenizers — perplexity is not, so a run with a
+        # different vocabulary cannot be read without it.
+        metrics["val_bits_per_byte"] = mean / (math.log(2) * bytes_per_token)
     for source, nll in sorted(source_nll.items()):
         metrics[f"source_ppl/{source}"] = math.exp(
             min(nll / max(source_tokens[source], 1), 20)
@@ -673,6 +681,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         )
         train_ids: List[int] = []
         val_ids: List[int] = []
+        val_bytes_per_token = 0.0  # this pipeline reports exact per-batch byte counts
         train_token_count = train_ds.target_token_count
         val_token_count = val_ds.target_token_count
         log.info(
@@ -696,6 +705,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         val_ids    = tokenizer.encode(val_text)
         train_token_count = len(train_ids)
         val_token_count = len(val_ids)
+        # Needed for bits-per-byte, the only metric comparable across tokenizers.
+        val_bytes_per_token = len(val_text.encode("utf-8")) / max(len(val_ids), 1)
         # Overlapping windows for training (stride < seq_len multiplies the number
         # of examples); non-overlapping for val so every token is scored once.
         train_stride = int(cfg.get("train_stride") or cfg["seq_len"])
@@ -1126,6 +1137,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         cfg["cond_dim"],
                         bool(policy["amp_enabled"]),
                         amp_dtype=policy["amp_dtype"],
+                        bytes_per_token=val_bytes_per_token,
                         condition_mode=cfg.get("condition_mode", "ocean_vad"),
                         extractor=extractor,
                         tokenizer=tokenizer,
@@ -1151,6 +1163,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             cfg["cond_dim"],
             bool(policy["amp_enabled"]),
             amp_dtype=policy["amp_dtype"],
+            bytes_per_token=val_bytes_per_token,
             condition_mode=cfg.get("condition_mode", "ocean_vad"),
             extractor=extractor,
             tokenizer=tokenizer,

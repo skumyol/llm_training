@@ -992,6 +992,43 @@ first epoch or two of every run, and any future run or larger validation set tha
 threshold — a config genuinely worse than ppl 193 would have been recorded as `inf` and quietly
 dropped from best-checkpoint selection rather than reported as bad.
 
+### 15.2.2 Domain BPE vocabulary (running)
+
+58% of the 44.8 M-parameter model is the GPT-2 embedding table. A byte-level BPE trained on this
+project's own corpus reaches **4.10 chars/token at 16,384 entries against GPT-2's 4.08 at 50,257** —
+the same compression from a third of the vocabulary.
+
+| configuration | vocab | embedding | blocks | total |
+|---|---:|---:|---:|---:|
+| baseline, 6 layers | 50,257 | 25.9 M | 18.9 M | 44.7 M |
+| `slm_I_bpe16k_6L` | 16,384 | 8.5 M | 18.9 M | 27.4 M |
+| `slm_J_bpe16k_12L` | 16,384 | 8.5 M | 37.7 M | 46.3 M |
+
+I isolates the vocabulary; J spends the 17.3 M freed from the embedding on depth at an unchanged
+total budget.
+
+**Raw loss cannot be compared across tokenizers.** bpe16k encodes the training corpus in 101.99 M
+tokens against GPT-2's 107.34 M — 0.9502× as many — so its per-token cross-entropy is over a larger
+slice of text and is mechanically higher at equal quality. Renormalising by that ratio:
+
+| step | gpt2-50k Muon 6L | bpe16k Muon 6L | bpe16k Muon 12L |
+|---:|---:|---:|---:|
+| 400 (raw) | 3.5884 | 3.7379 | 3.7298 |
+| 400 (normalised) | 3.5884 | **3.5518** | **3.5441** |
+| 800 (raw) | 3.2918 | 3.4802 | — |
+| 800 (normalised) | **3.2918** | 3.3069 | — |
+
+Both BPE runs lead at step 400 and the 6-layer one is marginally behind by step 800. **Too early to
+call** — the fp16 Muon crossover in §15.2 happened at step 1,800, and reading a run at step 800
+is exactly the error made twice already in this section.
+
+The rigorous metric is `val_bits_per_byte`, which divides out the tokenizer entirely. It was only
+computed on the record pipeline (which carries per-batch byte counts); the text pipeline these runs
+use produced nothing. `evaluate()` now takes a corpus-level `bytes_per_token` ratio and computes it
+either way. The in-flight runs predate that fix, so their bits-per-byte is recovered post-hoc from
+`val_loss` and the logged token counts — the same arithmetic. Regression test:
+`slm_training/tests/test_bpc_invariance.py`.
+
 ### 15.3 Integrity checks that came back clean
 
 Before attributing anything to the model, the splits were checked for the two failure modes that
