@@ -454,3 +454,196 @@ val/mean_macro_f1.
   early, consistent with the data-limit finding from §1.
 
 Source: `slurm_logs/lat_{L1,L2,L3,L4}_*.out`, `checkpoints/L{1-4}_*_best/`.
+
+---
+
+# Addendum — findings recovered 2026-08-22
+
+Sections 11-13 were computed on 2026-08-21/22 and were lost when this file was
+rewritten; they are restored here. They supersede parts of sections 9 and 10.
+
+## 11. The evaluation set contains counterfactual duplicates
+
+Every packaged split carries **up to four records per turn**: one original plus counterfactual
+variants. Across the 335 duplicated groups in the test split, **100% share an identical `context`
+string** and **91% carry differing labels**. The same input therefore appears several times with
+conflicting gold labels, which mechanically caps what any deterministic classifier can score.
+
+| split | records | unique turns | counterfactual records |
+|---|---:|---:|---:|
+| train | 6,175 | 2,571 | — |
+| val | 683 | 274 | — |
+| test | 884 | **363** | **526 (60%)** |
+
+`packager.py` tags and counts `counterfactual` deliberately, but **no evaluation code filters on
+it** — not `eval_latent.py`, not `eval_response.py`, not `dataset.py`. Every latent metric reported
+anywhere in this project, including §2 above, was computed over a set that is 60% augmentations.
+
+The per-field conflict rate tracks the weak-head pattern:
+
+| field | groups with conflicting labels | test macro-$F_1$ |
+|---|---:|---:|
+| `valence` | 0% | 0.802 |
+| `reveal_decision` | 10% | 0.659 |
+| `response_policy` | 15% | 0.427 |
+| `secrecy_pressure` | 22% | 0.491 |
+| `trust_delta` | 23% | weak |
+
+Re-evaluating the same checkpoint on originals only (`test_heads_original.jsonl`, 358 records,
+358 unique turns) raises `response_policy` macro-$F_1$ from **0.4268 to 0.4660** (+9%).
+
+This is a second, independent cause alongside class imbalance. `risk_type` has 0% conflict yet still
+collapses (0.869 accuracy, 0.407 macro-$F_1$), so imbalance explains that one; conflicting
+counterfactual labels explain the stance-delta and decision fields.
+
+**Recommendation:** report the 358-turn original-only figure as the primary number, and treat
+counterfactual records as a training augmentation, not evaluation data.
+
+---
+
+## 12. Configuration sweep — what actually helps
+
+Four configurations, each isolating one variable, all selecting on `val/mean_macro_f1` rather than
+the noisier `val/response_policy_f1`. Test = 884 records.
+
+| run | change | val macro-$F_1$ | test macro-$F_1$ | test acc | test `response_policy` | test stance-delta |
+|---|---|---:|---:|---:|---:|---:|
+| L1_control (s42) | current recipe | 0.5277 | 0.5407 | 0.6819 | 0.4731 | 0.5930 |
+| L1_control (s43) | " | 0.5193 | 0.5404 | 0.6825 | 0.4731 | 0.6043 |
+| L1_control (s44) | " | 0.5297 | 0.5357 | 0.6771 | 0.4557 | 0.5853 |
+| L2_nosampler | weighted sampler removed | 0.5376 | 0.5348 | 0.6853 | 0.4575 | 0.5892 |
+| L3_meanpool | + mean pooling | 0.5550 | 0.5502 | 0.6972 | 0.4525 | 0.6126 |
+| **L4_ctx1024** | + 1024 context, 8 epochs | **0.5590** | **0.5531** | **0.7066** | 0.4310 | **0.6283** |
+
+### 4.1 The sampler hypothesis is rejected
+
+Removing the `WeightedRandomSampler` (L2) did **not** improve the weak heads: test macro-$F_1$ falls
+slightly (0.5348 vs 0.5407) and `response_policy` falls (0.4575 vs 0.4731). The earlier conjecture
+that the sampler distorts other heads' marginals by oversampling on the per-record rarest field is
+**not supported**. The limitation is not a sampler artefact.
+
+### 4.2 Pooling and context help the aggregate, not the decision head
+
+Mean pooling (L3) and longer context (L4) improve mean macro-$F_1$ by 1.8% and 2.3%, accuracy by
+2.2% and 3.6%, and stance-delta accuracy by 3.3% and 6.0%. None improves `response_policy`; L4 is in
+fact the worst on it (0.4310). Across all six runs `response_policy` stays in **0.43--0.47** on test.
+
+### 4.3 The chapter's 0.621 is a selection artefact, not a generalisation gap
+
+This is the most consequential result of the sweep. Three seeds of the identical control
+configuration:
+
+| | seed 42 | seed 43 | seed 44 | sd |
+|---|---:|---:|---:|---:|
+| **val** `response_policy` | 0.5519 | 0.3988 | 0.3989 | **0.072** |
+| **test** `response_policy` | 0.4731 | 0.4731 | 0.4557 | **0.008** |
+
+Validation `response_policy` has a seed spread nine times larger than test. The original checkpoint
+was selected with `metric_for_best_model: val/response_policy_f1`, i.e. the best epoch *for that
+specific noisy metric on the selection split*, which is the textbook way to obtain an optimistic
+point estimate. Selecting instead on `val/mean_macro_f1` yields a checkpoint whose test
+`response_policy` is **better** (0.4731 vs the original checkpoint's 0.4268).
+
+So the earlier framing — "validation 0.622 collapses to 0.427 on test, a 31% generalisation gap" —
+is wrong. The model was never at 0.62 in any unbiased sense. Its unbiased performance is ~0.45--0.47
+on both splits, and the validation figure was inflated by maximising the reported metric over epochs.
+
+---
+
+## 13. Predictor--human agreement (the third leg of the triangle)
+
+Previously the study reported human--teacher, human--human and AI-validator--teacher agreement, but
+never predictor--human. It is now computed. All 78 annotated episodes fall in the **test** split, so
+the predictor never trained on them, and all 356 audit turns join to the packaged records at 100%.
+
+Cohen's $\kappa$, 150 turns shared by both annotators, eight annotated fields:
+
+| field | pred--teacher | pred--Human A | pred--Human B | human--human | human--teacher | AI--teacher |
+|---|---:|---:|---:|---:|---:|---:|
+| valence | 0.498 | 0.230 | 0.040 | −0.06 | 0.12 | 0.32 |
+| arousal | 0.364 | 0.071 | 0.004 | 0.07 | −0.01 | 0.04 |
+| secrecy_pressure | 0.174 | −0.013 | −0.034 | −0.01 | −0.01 | 0.15 |
+| reveal_decision | 0.197 | 0.075 | −0.013 | 0.03 | −0.01 | 0.15 |
+| response_policy | 0.410 | 0.313 | 0.012 | 0.00 | 0.14 | 0.40 |
+| repair_strategy | 0.310 | 0.176 | −0.040 | 0.04 | 0.04 | 0.14 |
+| trust_level | 0.299 | 0.038 | −0.047 | 0.05 | 0.04 | 0.02 |
+| familiarity_level | 0.192 | 0.014 | 0.018 | −0.02 | −0.02 | 0.02 |
+| **mean** | **0.305** | **0.113** | **−0.008** | **0.013** | **0.036** | **0.155** |
+
+Three readings, in decreasing order of confidence:
+
+1. **The predictor reproduces the teacher far better than humans do** (0.305 vs 0.036) and better
+   than the zero-shot AI validator (0.155). This is expected and is *imitation*, not validation: the
+   predictor was trained on teacher labels, so this measures how well it learned its supervision.
+2. **Predictor--human agreement is near chance** (0.053 averaged over the two annotators), which is
+   approximately where human--human agreement already sits (0.013). The predictor is not measurably
+   closer to human judgement than two humans are to each other.
+3. **The comparison has no usable ceiling.** Because inter-annotator reliability is at chance, there
+   is no stable "human judgement" for any model to agree with, and predictor--human $\kappa$ cannot
+   be read as a validity measure in either direction. The honest conclusion is that **this annotation
+   study cannot validate the predictor**, and computing the third leg confirms that rather than
+   resolving it.
+
+The one field with signal across every rater pair is `response_policy` (pred--teacher 0.410,
+pred--Human A 0.313, AI--teacher 0.40), suggesting it is the most objectively determined of the
+eight. Note also the sharp disagreement between annotators: pred--Human A averages 0.113 while
+pred--Human B averages −0.008, consistent with `audit_interpretation.md`'s observation that the two
+used very different label distributions.
+
+**Excluded:** seven `audit_synthetic_*.jsonl` files carry `"synthetic": true` in their metadata and
+are not human annotations. Only `654cfad…` (Human A) and `67c87fc…` (Human B) are used, matching the
+pairing in `audit_interpretation.md`.
+
+Reproduce:
+```
+python paper/predict_audit_turns.py --config llm_finetuning/configs/eval_test.yaml \
+    --audit paper/audit_input_clean.jsonl --heads-file data/splits/test_heads.jsonl \
+    --out paper/audit_results/audit_predictor.jsonl
+python paper/compute_audit_agreement.py --a paper/audit_results/audit_predictor.jsonl \
+    --b paper/audit_results/audit_654cfad67f990b0393b85132.jsonl \
+    --teacher paper/audit_input_clean.jsonl --output paper/audit_results/agreement_pred_vs_humanA.json
+```
+Note `compute_audit_agreement.py` labels its columns `ht_*` and `hh_*` for the human study; with the
+predictor passed as `--a`, `ht_*` is predictor--teacher and `hh_*` is predictor--annotator.
+
+---
+
+
+### 13.1 Conditioning on human consensus
+
+The kappa values above are not directly interpretable: with inter-annotator agreement at chance there
+is no stable human judgement for any model to agree with, so the comparison has no ceiling.
+Restricting to turns where the two annotators independently chose the **same** label gives a subset
+on which a reliable human label does exist.
+
+| field | n consensus | consensus rate | predictor acc | 95% CI | teacher acc | majority floor |
+|---|---:|---:|---:|---|---:|---:|
+| valence | 49 | 0.33 | 0.531 | [0.388, 0.673] | 0.490 | 0.571 |
+| arousal | 62 | 0.41 | 0.435 | [0.306, 0.565] | 0.403 | 0.726 |
+| secrecy_pressure | 17 | 0.11 | 0.118 | [0.000, 0.294] | 0.059 | 0.882 |
+| reveal_decision | 48 | 0.32 | 0.458 | [0.312, 0.604] | 0.417 | 0.646 |
+| response_policy | 17 | 0.11 | 0.353 | [0.118, 0.588] | 0.294 | 0.529 |
+| repair_strategy | 16 | 0.11 | 0.188 | [0.000, 0.375] | 0.188 | 0.750 |
+| trust_level | 48 | 0.32 | 0.125 | [0.042, 0.229] | 0.146 | 0.500 |
+| familiarity_level | 24 | 0.16 | 0.208 | [0.083, 0.375] | 0.083 | 0.917 |
+| **mean (unweighted)** | | 0.23 | **0.302** | | 0.260 | 0.690 |
+| **pooled (by n)** | | | **0.345** | | 0.310 | 0.662 |
+
+1. **Annotators reach consensus on only 11-41% of turns** (mean 23%). For `secrecy_pressure`,
+   `response_policy` and `repair_strategy` it is 11%, i.e. 16-17 turns of 150. This, not the
+   predictor, is the binding constraint on what the annotation study can establish.
+2. **The teacher also fails against human consensus** (0.310 pooled), and the predictor is marginally
+   *better* than it (0.345). Combined with predictor-teacher kappa = 0.305, the picture is coherent:
+   the predictor faithfully reproduces a labelling scheme that humans do not reproduce. The
+   divergence lives in the supervision, not in the model.
+3. **The majority-floor comparison is biased and must not be quoted as failure.** Both predictor and
+   teacher fall below majority-class accuracy (0.662), but conditioning on consensus enriches the
+   subset for common labels, because annotators agree more readily on them. The floor is inflated by
+   that selection. The predictor-vs-teacher comparison on the *same* turns is the sound one.
+
+Per-field intervals are wide (n = 16-62) and no single field's difference is significant alone; the
+consistency of the pattern across all eight is what carries it.
+
+Reproduce: `python paper/predictor_vs_human_consensus.py --predictor paper/audit_results/audit_predictor.jsonl
+--human-a paper/audit_results/audit_654cfad67f990b0393b85132.jsonl
+--human-b paper/audit_results/audit_67c87fc1b3ba111d0e1526a0.jsonl --teacher paper/audit_input_clean.jsonl`
