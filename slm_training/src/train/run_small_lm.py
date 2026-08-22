@@ -1078,6 +1078,17 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     _opt.zero_grad(set_to_none=True)
                 global_step += 1
 
+                # A diverged run is unrecoverable: every later step trains on NaN and
+                # the job burns its full wall-clock producing a garbage checkpoint.
+                # Under fp16 the GradScaler legitimately produces inf/nan grad norms on
+                # steps it then skips, so only the loss is trusted as a divergence signal.
+                if not math.isfinite(running_loss):
+                    raise RuntimeError(
+                        f"training diverged: non-finite loss at step {global_step} "
+                        f"(epoch {epoch}, grad_norm={gn:.4g}). Lower the learning rate "
+                        f"or switch amp_dtype to bfloat16."
+                    )
+
                 if global_step % cfg["log_every"] == 0:
                     avg  = running_loss / running_n
                     ppl  = math.exp(min(avg, 20))
