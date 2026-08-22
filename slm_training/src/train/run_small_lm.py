@@ -174,6 +174,7 @@ def runtime_policy(
     num_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     fused_optimizer: bool = True,
+    amp_dtype: str = "float16",
 ) -> Dict[str, Any]:
     """Return conservative fast defaults for CUDA, Apple MPS, and CPU."""
     if device_type not in {"cuda", "mps", "cpu"}:
@@ -187,7 +188,7 @@ def runtime_policy(
     amp_enabled = bool(use_amp and device_type in {"cuda", "mps"})
     return {
         "amp_enabled": amp_enabled,
-        "amp_dtype": "float16" if amp_enabled else "float32",
+        "amp_dtype": (amp_dtype if amp_enabled else "float32"),
         "num_workers": int(num_workers),
         "pin_memory": bool(pin_memory),
         "non_blocking": bool(pin_memory and device_type == "cuda"),
@@ -410,9 +411,12 @@ class TokenDataset(Dataset):
 
 # ── AMP context ───────────────────────────────────────────────────────────────
 
-def amp_ctx(device: torch.device, enabled: bool):
+def amp_ctx(device: torch.device, enabled: bool, dtype: str = "float16"):
     if enabled and device.type in {"cuda", "mps"}:
-        return torch.autocast(device_type=device.type, dtype=torch.float16)
+        # bfloat16 has fp32's exponent range, so it needs no GradScaler and does not
+        # overflow the way fp16 does. mps only supports fp16.
+        want = torch.bfloat16 if dtype == "bfloat16" and device.type == "cuda" else torch.float16
+        return torch.autocast(device_type=device.type, dtype=want)
     return torch.autocast(device_type="cpu", enabled=False)
 
 
@@ -422,6 +426,7 @@ def amp_ctx(device: torch.device, enabled: bool):
 def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
     cond_dim: int, use_amp: bool, max_batches: int = 0,
+    amp_dtype: str = "float16",
     condition_mode: str = "ocean_vad",
     extractor: Optional[EmbeddingExtractor] = None,
     tokenizer: Optional[Any] = None,
@@ -450,7 +455,7 @@ def evaluate(
             batch_sources = ["legacy_text"] * x.size(0)
         x = x.to(device, non_blocking=device.type == "cuda")
         y = y.to(device, non_blocking=device.type == "cuda")
-        with amp_ctx(device, use_amp):
+        with amp_ctx(device, use_amp, amp_dtype):
             if isinstance(model, PrefixTinyGPTLM):
                 if aligned_cond is not None:
                     cond = aligned_cond.to(device, non_blocking=device.type == "cuda")
@@ -613,6 +618,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         num_workers=cfg.get("num_workers"),
         pin_memory=cfg.get("pin_memory"),
         fused_optimizer=bool(cfg.get("fused_optimizer", True)),
+        amp_dtype=str(cfg.get("amp_dtype", "float16")),
     )
     if device.type == "cuda":
         torch.set_float32_matmul_precision(
@@ -854,7 +860,9 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     optimizer = optimizers[0]  # for logging the primary LR
     scaler = torch.amp.GradScaler(
         device.type,
-        enabled=bool(policy["amp_enabled"]),
+        # bf16 carries fp32's exponent range, so loss scaling is unnecessary; leaving
+        # the scaler on would add its inf/nan checks and skipped steps for nothing.
+        enabled=bool(policy["amp_enabled"]) and policy["amp_dtype"] != "bfloat16",
     )
 
     updates_per_epoch = max(1, math.ceil(len(train_loader) / int(cfg["grad_accum"])))
@@ -1002,7 +1010,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             x = x.to(device, non_blocking=bool(policy["non_blocking"]))
             y = y.to(device, non_blocking=bool(policy["non_blocking"]))
 
-            with amp_ctx(device, bool(policy["amp_enabled"])):
+            with amp_ctx(device, bool(policy["amp_enabled"]), policy["amp_dtype"]):
                 if isinstance(model, PrefixTinyGPTLM):
                     if aligned_cond is not None:
                         mask = condition_mask.to(
@@ -1088,6 +1096,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         device,
                         cfg["cond_dim"],
                         bool(policy["amp_enabled"]),
+                        amp_dtype=policy["amp_dtype"],
                         condition_mode=cfg.get("condition_mode", "ocean_vad"),
                         extractor=extractor,
                         tokenizer=tokenizer,
@@ -1112,6 +1121,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             device,
             cfg["cond_dim"],
             bool(policy["amp_enabled"]),
+            amp_dtype=policy["amp_dtype"],
             condition_mode=cfg.get("condition_mode", "ocean_vad"),
             extractor=extractor,
             tokenizer=tokenizer,

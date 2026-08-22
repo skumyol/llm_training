@@ -894,6 +894,39 @@ first epoch or two of every run, and any future run or larger validation set tha
 threshold — a config genuinely worse than ppl 193 would have been recorded as `inf` and quietly
 dropped from best-checkpoint selection rather than reported as bad.
 
+### 15.1.1 Scoring the existing checkpoints on the clean test set
+
+Before any new run finishes, the checkpoints from §12 were re-scored on the 358 counterfactual-free
+test turns instead of the 884-record split. Same model, same weights, different evaluation set — so
+this isolates the evaluation half of the contamination from the training half.
+
+| checkpoint | test set | mean macro-$F_1$ | mean acc | `response_policy` $F_1$ |
+|---|---|---:|---:|---:|
+| L1_control (s42) | 884 (contaminated) | 0.5407 | 0.6819 | 0.4731 |
+| L1_control (s42) | **358 (clean)** | **0.5567** | **0.6886** | **0.5205** |
+| L3_meanpool | 884 (contaminated) | 0.5502 | 0.6972 | 0.4525 |
+| L3_meanpool | **358 (clean)** | **0.5649** | **0.7032** | **0.4891** |
+| L4_ctx1024 | 884 (contaminated) | 0.5531 | 0.7066 | 0.4310 |
+| L4_ctx1024 | **358 (clean)** | **0.5629** | **0.7108** | **0.4740** |
+
+Removing counterfactuals from the evaluation set alone is worth **+1.0 to +1.6 macro-$F_1$ points**
+and **+8 to +10% relative on `response_policy`** — 0.4731 → 0.5205 for the control, and L4's
+0.4310 → 0.4740, the largest relative gain of the three. This confirms the
++9% estimated in §11 and extends it to the aggregate metric.
+
+Two consequences for the write-up:
+
+1. **The clean figure is the one to quote.** `response_policy` on the control is 0.52, not 0.43. The
+   contaminated number is not a conservative estimate of the model — it is an estimate of a different
+   quantity, because the same input appears several times with conflicting gold labels and no
+   deterministic classifier can score above the resulting ceiling.
+2. **Ordering is preserved.** On both evaluation sets L3 and L4 beat L1 on aggregate macro-$F_1$ and
+   accuracy while losing to it on `response_policy`. The §12 conclusion — pooling and context help the
+   aggregate but never the decision head — survives intact; only the absolute values move.
+
+This is the *evaluation* half only. L5/L6 test whether removing the same contamination from training
+moves it further.
+
 ### 15.3 Integrity checks that came back clean
 
 Before attributing anything to the model, the splits were checked for the two failure modes that
