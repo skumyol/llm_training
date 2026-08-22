@@ -470,8 +470,13 @@ def evaluate(
                 out  = model(x, cond, y, cond_mask=mask)
             else:
                 out  = model(x, y)
+        # .float() is load-bearing: this call sits OUTSIDE amp_ctx, so under
+        # float16 AMP the logits arrive as fp16 and the per-token losses come back
+        # as fp16 too. Summing ~12k of them at ~5 nats overflows fp16's 65504 max,
+        # so val_loss silently becomes inf for any run above ~5.3 nats — which is
+        # every run early in training, and every larger validation set.
         token_losses = F.cross_entropy(
-            out.logits.reshape(-1, out.logits.size(-1)),
+            out.logits.reshape(-1, out.logits.size(-1)).float(),
             y.reshape(-1),
             ignore_index=-100,
             reduction="none",

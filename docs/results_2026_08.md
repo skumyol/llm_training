@@ -838,9 +838,70 @@ path is byte-identical when the flag is absent. Routing is covered by
 | `slm_E_pretrain_muon` | = `slm_C_pretrain` + Muon (lr 0.02) on the matrices |
 | `slm_F_finetune_muon` | = `slm_D_finetune` warm-started from E, Muon lr 4e-3 |
 
-**Status:** smoke run submitted (job 1778303); full runs follow if it converges.
+**Smoke result (40 steps, identical recipe otherwise, job 1778309):**
 
-### 15.3 Not yet attempted
+| optimizer | train loss @ step 40 | train ppl | grad norm |
+|---|---:|---:|---:|
+| AdamW (`slm_C_smoke`) | 6.099 | 445.2 | 0.393 |
+| **Muon (`slm_E_smoke`)** | **5.056** | **156.9** | 0.391 |
+
+Muon is a full nat ahead after 40 steps with matched grad norms, so it is converging faster rather
+than taking larger steps. Forty steps is not a result — it is a go/no-go — but it is enough to
+justify the full run. Full pretrain submitted as job 1778314.
+
+### 15.2.1 A float16 overflow was silently capping `val_loss` at inf
+
+The smoke runs reported `val_ppl = 485,165,195.41` — which is `exp(20)`, the clamp in
+`evaluate()` for a non-finite loss. The AdamW control reported exactly the same value, which is what
+identified the cause: it is not the optimizer.
+
+`evaluate()` builds logits inside `amp_ctx` (float16 on CUDA) but calls `F.cross_entropy` **outside**
+that block. The losses therefore come back as fp16, and `token_losses[valid].sum()` accumulates in
+fp16 as well. For this validation set that sum is `12,455 tokens × mean nats`, which exceeds fp16's
+maximum of 65,504 once the mean passes **≈5.26 nats**. Above that, `val_loss` is `inf` — silently,
+with no warning — and `val_loss` is what drives checkpoint selection and early stopping.
+
+Fixed by casting the logits to float32 for that call. Regression test:
+`slm_training/tests/test_eval_fp16_overflow.py`.
+
+**Does this invalidate §1?** No, but it was close. The threshold is a mean of 5.26 nats, i.e. ppl
+≈ 193. The reported runs sit far below it — `slm_D_finetune` at ppl 18.11 is 2.90 nats
+(sum ≈ 36,100) and the `slm_A_baseline` at 42.18 is 3.74 nats (sum ≈ 60,700, the closest to the
+ceiling at 93% of it). Every published number is finite and correct. What the bug did destroy is the
+first epoch or two of every run, and any future run or larger validation set that crosses the
+threshold — a config genuinely worse than ppl 193 would have been recorded as `inf` and quietly
+dropped from best-checkpoint selection rather than reported as bad.
+
+### 15.3 Integrity checks that came back clean
+
+Before attributing anything to the model, the splits were checked for the two failure modes that
+would invalidate every number above. Both are clean:
+
+| check | train∩test | train∩val | val∩test |
+|---|---:|---:|---:|
+| identical `context` strings | 2 | 0 | 0 |
+| shared `episode_id` | **0** | **0** | **0** |
+
+No episode appears in two splits, so §13's claim that the predictor never trained on the audit turns
+holds. The two shared contexts out of 6,175 are not a leak of any consequence.
+
+Majority-class floors on the 358 clean test turns, for reading the head metrics against:
+
+| field | classes | majority label | floor accuracy |
+|---|---:|---|---:|
+| `risk_type` | 5 | `secret-risk` | **0.835** |
+| `secrecy_pressure` | 3 | `high` | 0.573 |
+| `valence` | 3 | `negative` | 0.559 |
+| `reveal_decision` | 4 | `hint` | 0.534 |
+| `trust_delta` | 5 | `-` | 0.380 |
+| `response_policy` | 8 | `deflect` | 0.349 |
+
+`risk_type`'s reported 0.869 accuracy is **3.4 points above its 0.835 floor** — it is not a
+functioning head, and its accuracy should never be quoted without the floor beside it. The same
+comparison rehabilitates `response_policy`: its 0.43--0.47 macro-$F_1$ looks poor in isolation, but
+it is the hardest head here (8 classes, floor 0.349), so it is the one carrying the most real signal.
+
+### 15.4 Not yet attempted
 
 - **Domain BPE vocabulary.** A 16 k vocabulary trained on the corpus would cut the embedding table
   from 25.9 M to ~8 M and let the same budget buy depth. Perplexity would no longer be comparable
