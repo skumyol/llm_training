@@ -370,7 +370,25 @@ class CharTokenizer:
         return [self.stoi[c] for c in text if c in self.stoi]
 
 
-def build_tokenizer(text: str):
+class BPETokenizer:
+    """Adapter for a `tokenizers` BPE file, matching the tiktoken surface used here."""
+
+    def __init__(self, path: str) -> None:
+        from tokenizers import Tokenizer as _HFTok
+        self._tok = _HFTok.from_file(path)
+        self.vocab_size = self._tok.get_vocab_size()
+        self.name = f"bpe:{Path(path).stem}"
+
+    def encode(self, text: str) -> List[int]:
+        return self._tok.encode(text).ids
+
+    def decode(self, ids: List[int]) -> str:
+        return self._tok.decode(ids)
+
+
+def build_tokenizer(text: str, bpe_path: Optional[str] = None):
+    if bpe_path:
+        return BPETokenizer(bpe_path)
     if _TIKTOKEN_OK:
         enc = tiktoken.get_encoding("gpt2")
         enc.name = "tiktoken:gpt2"  # type: ignore[attr-defined]
@@ -673,7 +691,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 raise FileNotFoundError(str(p))
         train_text = Path(cfg["train_text"]).read_text(encoding="utf-8")
         val_text   = Path(cfg["val_text"]).read_text(encoding="utf-8")
-        tokenizer  = build_tokenizer(train_text)
+        tokenizer  = build_tokenizer(train_text, cfg.get("bpe_tokenizer"))
         train_ids  = tokenizer.encode(train_text)
         val_ids    = tokenizer.encode(val_text)
         train_token_count = len(train_ids)
