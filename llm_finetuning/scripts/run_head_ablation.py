@@ -58,7 +58,11 @@ def parse_args():
                    help="Load full model but evaluate with only the specified heads (masking ablation)")
     p.add_argument("--baseline-checkpoint", default=None,
                    help="Full model checkpoint to load for masking ablation (defaults to config latent_predictor_checkpoint)")
-    p.add_argument("--epochs", type=int, default=3)
+    p.add_argument("--epochs", type=int, default=None,
+                   help="Override epochs; defaults to the training config's value")
+    p.add_argument("--train-config", default="llm_finetuning/configs/train_latent.yaml",
+                   help="Training recipe (lora/lr/epochs/loss) to reuse, so the ablation "
+                        "measures the head set rather than a weaker bespoke recipe")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--train-heads-file", default=None,
@@ -74,7 +78,8 @@ def _filter_head_specs(full_specs: dict, keep_heads: set) -> dict:
     return {k: v for k, v in full_specs.items() if k in keep_heads}
 
 
-def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, batch_size: int, lr: float):
+def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, batch_size: int, lr: float,
+                   train_cfg_path: str | None = None):
     from src.training.model import HEAD_SPECS, build_latent_predictor
 
     ablated_specs = _filter_head_specs(HEAD_SPECS, keep_heads)
@@ -84,11 +89,37 @@ def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, bat
     quantization = cfg.get("quantization", "4bit")
     torch_dtype = cfg.get("torch_dtype", "bfloat16")
 
+    # The ablation must use the SAME recipe as the main training run, or it measures
+    # the recipe rather than the head set. Pulling lora/lr/epochs/loss settings from
+    # the training config fixes four divergences, the first of which was fatal:
+    #   1. cfg here is the EVAL config, which has no `lora:` key, so lora_config was
+    #      None -> no adapter was ever created and only linear heads trained on
+    #      frozen 4-bit features.
+    #   2. one lr of 2e-5 for everything vs progressive 2e-4 backbone / 4e-4 heads.
+    #   3. plain cross_entropy vs class weights + focal(1.5) + label smoothing(0.1),
+    #      which is what keeps imbalanced heads off the majority class.
+    #   4. 3 epochs vs 5.
+    train_cfg: dict = {}
+    if train_cfg_path and Path(train_cfg_path).exists():
+        with open(train_cfg_path) as f:
+            train_cfg = yaml.safe_load(f) or {}
+        print(f"Using training recipe from {train_cfg_path}")
+
+    lora_cfg = train_cfg.get("lora") or cfg.get("lora")
+    if lora_cfg is None:
+        raise ValueError(
+            "No `lora:` section available. The evaluation config has none, so without "
+            "--train-config the backbone would be frozen and only the heads would train, "
+            "which is what made every previous ablation degenerate."
+        )
+    tcfg = train_cfg.get("training", {})
+
     predictor, tokenizer = build_latent_predictor(
         model_name,
         quantization=quantization,
-        lora_config=cfg.get("lora", None),
+        lora_config=lora_cfg,
         torch_dtype=torch_dtype,
+        pooling=train_cfg.get("pooling", cfg.get("pooling", "last")),
     )
     # Replace heads with ablated set
     predictor.head_specs = ablated_specs
@@ -118,56 +149,76 @@ def _train_ablated(cfg: dict, keep_heads: set, output_dir: str, epochs: int, bat
         raise ValueError(
             f"Ablation train file == eval file ({train_file}); results would be train-on-eval."
         )
+    # Use the TRAINING context length, not the eval config's. They differ (512 vs
+    # 1024), and training the ablation at a different sequence length from the main
+    # run is another way to measure the recipe instead of the head set.
+    ablation_seq_len = int(tcfg.get("max_seq_len", cfg.get("generation", {}).get("max_seq_len", 1024)))
+    print(f"Ablation max_seq_len={ablation_seq_len} batch_size={batch_size}")
     train_ds = HeadSupervisionDataset(
         train_file,
         tokenizer,
-        max_seq_len=cfg.get("generation", {}).get("max_seq_len", 1024),
+        max_seq_len=ablation_seq_len,
     )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
         collate_fn=collate_head_batch, num_workers=0,
     )
 
-    optimizer = torch.optim.AdamW(predictor.parameters(), lr=lr)
+    # Same loss as the main run: inverse-frequency class weights + focal + label
+    # smoothing. Plain cross-entropy let the imbalanced heads collapse to the
+    # majority class, which is what produced the always-careful router.
+    from src.training.dataset import LABEL_MAPS
+    from src.training.loss import MultiHeadLoss, compute_class_weights
+
+    class_weights = compute_class_weights(train_file, LABEL_MAPS)
+    loss_fn = MultiHeadLoss(
+        train_cfg.get("loss_weights", cfg.get("loss_weights", {})),
+        class_weights=class_weights,
+        label_smoothing=float(tcfg.get("label_smoothing", 0.0)),
+        focal_gamma=float(tcfg.get("focal_gamma", 0.0)),
+    )
+
+    # Progressive LR, as in the main run: heads learn faster than the adapter.
+    base_lr = float(tcfg.get("lr", lr))
+    head_lr = float(tcfg.get("head_lr", base_lr * 2))
+    weight_decay = float(tcfg.get("weight_decay", 0.01))
+    backbone_params = [p for _, p in predictor.backbone.named_parameters() if p.requires_grad]
+    if not backbone_params:
+        raise ValueError("No trainable backbone parameters — the LoRA adapter was not attached.")
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": predictor.heads.parameters(), "lr": head_lr, "weight_decay": weight_decay},
+            {"params": backbone_params, "lr": base_lr, "weight_decay": weight_decay},
+        ],
+        lr=base_lr,
+    )
+    grad_accum = int(tcfg.get("grad_accum", 1))
+    max_grad_norm = float(tcfg.get("max_grad_norm", 1.0))
+    print(f"Ablation recipe: lr={base_lr} head_lr={head_lr} epochs={epochs} "
+          f"grad_accum={grad_accum} focal={tcfg.get('focal_gamma', 0.0)} "
+          f"label_smoothing={tcfg.get('label_smoothing', 0.0)} "
+          f"trainable_backbone_tensors={len(backbone_params)}")
 
     for epoch in range(epochs):
         predictor.train()
         total_loss = 0.0
         n_batches = 0
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
-            input_ids = batch["input_ids"].to(predictor.backbone.device)
-            attention_mask = batch["attention_mask"].to(predictor.backbone.device)
-            out = predictor(input_ids=input_ids, attention_mask=attention_mask)
+        optimizer.zero_grad()
+        for step, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
+            batch = {k: (v.to(predictor.backbone.device) if isinstance(v, torch.Tensor) else v)
+                     for k, v in batch.items()}
+            out = predictor(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
 
-            losses = []
-            for field in ablated_specs:
-                label_key = f"label_{field}"
-                if label_key not in batch:
-                    continue
-                gold = batch[label_key].to(predictor.backbone.device)
-                logits = out["logits"][field]
-                if field == "dialogue_act":
-                    valid = gold.sum(dim=1) > 0
-                    if not valid.any():
-                        continue
-                    loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                        logits[valid], gold[valid].float()
-                    )
-                else:
-                    valid = gold != -1
-                    if not valid.any():
-                        continue
-                    loss = torch.nn.functional.cross_entropy(
-                        logits[valid], gold[valid]
-                    )
-                losses.append(loss)
+            # MultiHeadLoss skips any field absent from `logits`, so passing the
+            # ablated logit dict restricts the loss to the kept heads automatically.
+            loss, _ = loss_fn(out["logits"], batch)
+            (loss / grad_accum).backward()
 
-            if not losses:
-                continue
-            loss = sum(losses) / len(losses)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if (step + 1) % grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(predictor.parameters(), max_grad_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+
             total_loss += loss.item()
             n_batches += 1
 
@@ -292,9 +343,15 @@ def main():
     checkpoint_dir = str(results_dir / "checkpoint")
 
     if args.train:
+        _tc = {}
+        if args.train_config and Path(args.train_config).exists():
+            with open(args.train_config) as _f:
+                _tc = yaml.safe_load(_f) or {}
+        _epochs = args.epochs if args.epochs is not None else int(_tc.get("training", {}).get("epochs", 5))
         predictor, tokenizer = _train_ablated(
             cfg, keep_heads, checkpoint_dir,
-            args.epochs, args.batch_size, args.lr
+            _epochs, args.batch_size, args.lr,
+            train_cfg_path=args.train_config,
         )
 
     # Determine which checkpoint to evaluate from

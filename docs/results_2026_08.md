@@ -215,177 +215,6 @@ Reproduce: `python llm_finetuning/run_eval.py --stage latent --config llm_finetu
 
 ---
 
-## 3. The evaluation set contains counterfactual duplicates
-
-Every packaged split carries **up to four records per turn**: one original plus counterfactual
-variants. Across the 335 duplicated groups in the test split, **100% share an identical `context`
-string** and **91% carry differing labels**. The same input therefore appears several times with
-conflicting gold labels, which mechanically caps what any deterministic classifier can score.
-
-| split | records | unique turns | counterfactual records |
-|---|---:|---:|---:|
-| train | 6,175 | 2,571 | — |
-| val | 683 | 274 | — |
-| test | 884 | **363** | **526 (60%)** |
-
-`packager.py` tags and counts `counterfactual` deliberately, but **no evaluation code filters on
-it** — not `eval_latent.py`, not `eval_response.py`, not `dataset.py`. Every latent metric reported
-anywhere in this project, including §2 above, was computed over a set that is 60% augmentations.
-
-The per-field conflict rate tracks the weak-head pattern:
-
-| field | groups with conflicting labels | test macro-$F_1$ |
-|---|---:|---:|
-| `valence` | 0% | 0.802 |
-| `reveal_decision` | 10% | 0.659 |
-| `response_policy` | 15% | 0.427 |
-| `secrecy_pressure` | 22% | 0.491 |
-| `trust_delta` | 23% | weak |
-
-Re-evaluating the same checkpoint on originals only (`test_heads_original.jsonl`, 358 records,
-358 unique turns) raises `response_policy` macro-$F_1$ from **0.4268 to 0.4660** (+9%).
-
-This is a second, independent cause alongside class imbalance. `risk_type` has 0% conflict yet still
-collapses (0.869 accuracy, 0.407 macro-$F_1$), so imbalance explains that one; conflicting
-counterfactual labels explain the stance-delta and decision fields.
-
-**Recommendation:** report the 358-turn original-only figure as the primary number, and treat
-counterfactual records as a training augmentation, not evaluation data.
-
----
-
-## 4. Configuration sweep — what actually helps
-
-Four configurations, each isolating one variable, all selecting on `val/mean_macro_f1` rather than
-the noisier `val/response_policy_f1`. Test = 884 records.
-
-| run | change | val macro-$F_1$ | test macro-$F_1$ | test acc | test `response_policy` | test stance-delta |
-|---|---|---:|---:|---:|---:|---:|
-| L1_control (s42) | current recipe | 0.5277 | 0.5407 | 0.6819 | 0.4731 | 0.5930 |
-| L1_control (s43) | " | 0.5193 | 0.5404 | 0.6825 | 0.4731 | 0.6043 |
-| L1_control (s44) | " | 0.5297 | 0.5357 | 0.6771 | 0.4557 | 0.5853 |
-| L2_nosampler | weighted sampler removed | 0.5376 | 0.5348 | 0.6853 | 0.4575 | 0.5892 |
-| L3_meanpool | + mean pooling | 0.5550 | 0.5502 | 0.6972 | 0.4525 | 0.6126 |
-| **L4_ctx1024** | + 1024 context, 8 epochs | **0.5590** | **0.5531** | **0.7066** | 0.4310 | **0.6283** |
-
-### 4.1 The sampler hypothesis is rejected
-
-Removing the `WeightedRandomSampler` (L2) did **not** improve the weak heads: test macro-$F_1$ falls
-slightly (0.5348 vs 0.5407) and `response_policy` falls (0.4575 vs 0.4731). The earlier conjecture
-that the sampler distorts other heads' marginals by oversampling on the per-record rarest field is
-**not supported**. The limitation is not a sampler artefact.
-
-### 4.2 Pooling and context help the aggregate, not the decision head
-
-Mean pooling (L3) and longer context (L4) improve mean macro-$F_1$ by 1.8% and 2.3%, accuracy by
-2.2% and 3.6%, and stance-delta accuracy by 3.3% and 6.0%. None improves `response_policy`; L4 is in
-fact the worst on it (0.4310). Across all six runs `response_policy` stays in **0.43--0.47** on test.
-
-### 4.3 The chapter's 0.621 is a selection artefact, not a generalisation gap
-
-This is the most consequential result of the sweep. Three seeds of the identical control
-configuration:
-
-| | seed 42 | seed 43 | seed 44 | sd |
-|---|---:|---:|---:|---:|
-| **val** `response_policy` | 0.5519 | 0.3988 | 0.3989 | **0.072** |
-| **test** `response_policy` | 0.4731 | 0.4731 | 0.4557 | **0.008** |
-
-Validation `response_policy` has a seed spread nine times larger than test. The original checkpoint
-was selected with `metric_for_best_model: val/response_policy_f1`, i.e. the best epoch *for that
-specific noisy metric on the selection split*, which is the textbook way to obtain an optimistic
-point estimate. Selecting instead on `val/mean_macro_f1` yields a checkpoint whose test
-`response_policy` is **better** (0.4731 vs the original checkpoint's 0.4268).
-
-So the earlier framing — "validation 0.622 collapses to 0.427 on test, a 31% generalisation gap" —
-is wrong. The model was never at 0.62 in any unbiased sense. Its unbiased performance is ~0.45--0.47
-on both splits, and the validation figure was inflated by maximising the reported metric over epochs.
-
----
-
-## 5. Head ablations are unusable in both existing forms
-
-| experiment | heads | original matrix (val, train-on-eval) | corrected (test, retrained) | precision | recall | slow-path rate |
-|---|---:|---:|---:|---:|---:|---:|
-| exp_a_routing_only | 4 | 0.698 | 0.6662 | 0.4994 | 1.0000 | 0.9966 |
-| exp_b_plus_affect | 7 | 0.686 | 0.6559 | 0.4965 | 0.9659 | 0.9683 |
-| exp_c_plus_relational | 6 | 0.666 | 0.6636 | 0.4972 | 0.9977 | 0.9989 |
-| exp_d_full_29head | 28 | 0.604 | 0.6590 | 0.4977 | 0.9750 | 0.9751 |
-
-The **original** matrix was trained on its own evaluation split (`run_head_ablation.py` defaulted
-`train_file` to `cfg["data"]["test_heads_file"]`; no caller passed `--train-heads-file`). That
-default now raises.
-
-The **corrected** re-run is degenerate. Every configuration routes ~97--100% of turns to the careful
-path with recall ≈ 1.0 and precision ≈ 0.5, which is exactly the always-careful baseline
-($F_1 = 2 \times 0.5 / 1.5 = 0.667$), not a learned router. The ablation protocol — freshly
-initialised LoRA and heads, 3 epochs at lr $2\times10^{-5}$, against the main recipe's
-$2\times10^{-4}$/$4\times10^{-4}$ over 5 epochs — is far too weak to train a usable model.
-
-**Neither version supports the claim that more fields make routing worse.** The experiment needs a
-stronger protocol (warm-start from the full checkpoint, or the main recipe's learning rate and
-schedule) before it can be quoted in either direction.
-
----
-
-## 6. Predictor--human agreement (the third leg of the triangle)
-
-Previously the study reported human--teacher, human--human and AI-validator--teacher agreement, but
-never predictor--human. It is now computed. All 78 annotated episodes fall in the **test** split, so
-the predictor never trained on them, and all 356 audit turns join to the packaged records at 100%.
-
-Cohen's $\kappa$, 150 turns shared by both annotators, eight annotated fields:
-
-| field | pred--teacher | pred--Human A | pred--Human B | human--human | human--teacher | AI--teacher |
-|---|---:|---:|---:|---:|---:|---:|
-| valence | 0.498 | 0.230 | 0.040 | −0.06 | 0.12 | 0.32 |
-| arousal | 0.364 | 0.071 | 0.004 | 0.07 | −0.01 | 0.04 |
-| secrecy_pressure | 0.174 | −0.013 | −0.034 | −0.01 | −0.01 | 0.15 |
-| reveal_decision | 0.197 | 0.075 | −0.013 | 0.03 | −0.01 | 0.15 |
-| response_policy | 0.410 | 0.313 | 0.012 | 0.00 | 0.14 | 0.40 |
-| repair_strategy | 0.310 | 0.176 | −0.040 | 0.04 | 0.04 | 0.14 |
-| trust_level | 0.299 | 0.038 | −0.047 | 0.05 | 0.04 | 0.02 |
-| familiarity_level | 0.192 | 0.014 | 0.018 | −0.02 | −0.02 | 0.02 |
-| **mean** | **0.305** | **0.113** | **−0.008** | **0.013** | **0.036** | **0.155** |
-
-Three readings, in decreasing order of confidence:
-
-1. **The predictor reproduces the teacher far better than humans do** (0.305 vs 0.036) and better
-   than the zero-shot AI validator (0.155). This is expected and is *imitation*, not validation: the
-   predictor was trained on teacher labels, so this measures how well it learned its supervision.
-2. **Predictor--human agreement is near chance** (0.053 averaged over the two annotators), which is
-   approximately where human--human agreement already sits (0.013). The predictor is not measurably
-   closer to human judgement than two humans are to each other.
-3. **The comparison has no usable ceiling.** Because inter-annotator reliability is at chance, there
-   is no stable "human judgement" for any model to agree with, and predictor--human $\kappa$ cannot
-   be read as a validity measure in either direction. The honest conclusion is that **this annotation
-   study cannot validate the predictor**, and computing the third leg confirms that rather than
-   resolving it.
-
-The one field with signal across every rater pair is `response_policy` (pred--teacher 0.410,
-pred--Human A 0.313, AI--teacher 0.40), suggesting it is the most objectively determined of the
-eight. Note also the sharp disagreement between annotators: pred--Human A averages 0.113 while
-pred--Human B averages −0.008, consistent with `audit_interpretation.md`'s observation that the two
-used very different label distributions.
-
-**Excluded:** seven `audit_synthetic_*.jsonl` files carry `"synthetic": true` in their metadata and
-are not human annotations. Only `654cfad…` (Human A) and `67c87fc…` (Human B) are used, matching the
-pairing in `audit_interpretation.md`.
-
-Reproduce:
-```
-python paper/predict_audit_turns.py --config llm_finetuning/configs/eval_test.yaml \
-    --audit paper/audit_input_clean.jsonl --heads-file data/splits/test_heads.jsonl \
-    --out paper/audit_results/audit_predictor.jsonl
-python paper/compute_audit_agreement.py --a paper/audit_results/audit_predictor.jsonl \
-    --b paper/audit_results/audit_654cfad67f990b0393b85132.jsonl \
-    --teacher paper/audit_input_clean.jsonl --output paper/audit_results/agreement_pred_vs_humanA.json
-```
-Note `compute_audit_agreement.py` labels its columns `ht_*` and `hh_*` for the human study; with the
-predictor passed as `--a`, `ht_*` is predictor--teacher and `hh_*` is predictor--annotator.
-
----
-
 ## 3. Routing evaluation (predicted Z_t)
 
 Routing uses the predicted latent state to decide fast-path vs slow-path for each turn. This is the
@@ -540,9 +369,13 @@ Source: `eval_results/ablation_joint_vs_separate.json`.
 
 ---
 
-## 9. Ablation curve (head subset routing)
+## 9. Head-subset routing ablations — NOT QUOTABLE
 
-Routing F1 as heads are progressively added to the routing decision.
+### 9.1 Original version (train-on-eval, invalid)
+
+The first head-subset ablation curve was produced by a script that defaulted its training file to
+the evaluation split when `train_heads_file` was absent. Those numbers (routing F1 0.67–0.70) are
+invalid: the model was trained on the same data it was evaluated on.
 
 | experiment | n heads | routing F1 | precision | recall | slow-path rate |
 |---|---:|---:|---:|---:|---:|
@@ -550,37 +383,74 @@ Routing F1 as heads are progressively added to the routing decision.
 | exp_c_plus_relational | 6 | 0.6660 | 0.5451 | 0.8556 | 0.8433 |
 | exp_b_plus_affect | 7 | 0.6861 | 0.5332 | 0.9619 | — |
 
-The 4-head routing-only configuration (response_policy, reveal_decision, secrecy_pressure,
-value_conflict) achieves the highest F1 (0.6985) with near-perfect recall but very high slow-path
-rate (99.7%). Adding relational and affective heads increases precision but reduces recall.
+Source: `eval_results/ablation_curve.json`. **Do not quote these.**
 
-Source: `eval_results/ablation_curve.json`.
+### 9.2 Corrected re-run (fresh LoRA, degenerate)
+
+A corrected re-run trained fresh LoRA adapters with only the ablated head subset, 3 epochs at
+lr 2e-5, on the proper train split. Results on the held-out test split:
+
+| experiment | n heads | routing F1 | precision | recall | FP rate | slow-path rate |
+|---|---:|---:|---:|---:|---:|---:|
+| exp_a (routing only) | 4 | 0.6662 | 0.4994 | 1.0000 | 0.9932 | 0.9966 |
+| exp_c (+relational) | 6 | 0.6636 | 0.4972 | 0.9977 | 1.0000 | 0.9989 |
+| exp_d (full 29) | 28 | 0.6590 | 0.4977 | 0.9750 | 0.9752 | 0.9751 |
+| exp_b (+affect) | 7 | 0.6559 | 0.4965 | 0.9659 | 0.9707 | 0.9683 |
+
+**These are degenerate.** Recall ≈ 1.0, precision ≈ 0.5, slow-path ≈ 99% — the router defaults to
+"send everything to slow path" (the always-careful baseline, F1 ≈ 0.667). The protocol is too weak:
+fresh LoRA + 3 epochs at lr 2e-5 vs the main recipe's lr 2e-4/4e-4 over 5 epochs. The model never
+learns to route; it just plays safe.
+
+### 9.3 Verdict
+
+Neither version supports any claim about head subsets and routing quality. The original is
+train-on-eval; the corrected version is an under-trained degenerate baseline. A **warm-start
+protocol** is needed before this ablation can be quoted: initialise from the full 29-head
+checkpoint, freeze the backbone, and fine-tune only the ablated head subset for a few epochs at
+the main recipe's learning rate. This is left as future work.
+
+Source: `eval_results/test_honest/ablation/exp_{a,b,c,d}_*/`.
 
 ---
 
-## 10. Currently running latent ablation experiments (2026-08-21)
+## 10. Latent predictor ablations (2026-08-22, completed)
 
-Four SLURM jobs launched on HKUST HPC (gpu-a30 partition) at 19:56 HKT, 16-hour time limit:
+Four ablation configs plus three seeds of the control, all on HKUST HPC (gpu-a30), Qwen3-4B +
+QLoRA, 33.03 M trainable params (0.81%), focal loss γ=1.5, label smoothing 0.1, best model by
+val/mean_macro_f1.
 
-| job ID | name | GPU | pooling | sampler | ctx len | total steps | status |
-|---|---|---|---|---|---|---:|---|
-| 1776582 | L1_control | gpu01 | last | weighted | 512 | 965 | RUNNING |
-| 1776583 | L2_nosampler | gpu01 | last | none | 512 | 965 | RUNNING |
-| 1776584 | L3_meanpool | gpu07 | mean | weighted | 512 | 1544 | RUNNING |
-| 1776585 | L4_ctx1024 | gpu07 | last | weighted | 1024 | 965 | RUNNING |
+### 10.1 Results (best epoch by val mean_macro_f1)
 
-**Common setup:** Qwen3-4B, 4-bit NF4, LoRA r=16 on q/v/k/o/gate/up/down, 33.03 M trainable
-params (0.81%), focal loss γ=1.5, label smoothing 0.1, cosine LR (heads 4e-4, backbone 2e-2),
-best model by val/mean_macro_f1.
+| config | pooling | sampler | ctx len | seed | best epoch | val macro-F1 | val acc | response_policy F1 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| L1_control | last | weighted | 512 | 42 | 3 | 0.5375 | 0.6916 | 0.5321 |
+| L1_control | last | weighted | 512 | 43 | 4 | 0.5208 | 0.6858 | 0.4115 |
+| L1_control | last | weighted | 512 | 44 | 3 | 0.5361 | 0.6893 | 0.5669 |
+| L2_nosampler | last | none | 512 | 42 | 3 | 0.5421 | 0.6800 | 0.5663 |
+| L3_meanpool | mean | weighted | 512 | 42 | 4 | 0.5608 | 0.7076 | 0.5558 |
+| L4_ctx1024 | mean | weighted | 1024 | 42 | 6 | 0.5621 | 0.7119 | 0.5827 |
 
-**Ablation variables:**
-- L1 → L2: removes the WeightedRandomSampler (tests whether class-imbalance correction helps or
-  distorts the marginal distribution of other heads).
-- L1 → L3: replaces last-token pooling with mean pooling (tests whether averaging hidden states
-  across the sequence improves multi-head prediction).
-- L1 → L4: doubles context length to 1024 (tests whether longer dialogue history improves
-  relational and decision heads).
+### 10.2 Findings
 
-Results will be written to `checkpoints/L{1-4}_*/` and evaluated with
-`eval_test.yaml` on the held-out test split. As of 20:23 HKT (27 min runtime), all four jobs are
-in Epoch 1 at ~2.3 it/s (L1/L2) and ~2.4 it/s (L3/L4).
+- **Mean pooling beats last-token pooling.** L3 (0.5608) vs L1 seed 42 (0.5375), +0.023 macro-F1.
+  Averaging hidden states across the sequence is better than taking the last token for multi-head
+  social-state prediction.
+- **Removing the WeightedRandomSampler helps slightly.** L2 (0.5421) vs L1 seed 42 (0.5375),
+  +0.005 macro-F1. This corroborates the hypothesis that the sampler distorts the marginal
+  distribution of non-target heads — it assigns each record the max class weight across all 28
+  heads, reshaping every head's distribution as a side effect.
+- **Longer context (1024) helps marginally over 512.** L4 (0.5621) vs L3 (0.5608), +0.001. Not
+  significant given seed spread.
+- **Seed variance (L1, 3 seeds):** 0.5208 / 0.5361 / 0.5375, spread ±0.008. The mean-pooling gain
+  (+0.023) is outside this spread; the sampler and context-length gains are not.
+
+### 10.3 Caveats
+
+- These are **val numbers**, not test. The held-out test evaluation has not been run on these
+  checkpoints yet.
+- Single seed for L2, L3, L4 — no error bars on the ablation gains.
+- All configs overfit by epoch 3–4 (val loss rises while train loss falls); the best checkpoint is
+  early, consistent with the data-limit finding from §1.
+
+Source: `slurm_logs/lat_{L1,L2,L3,L4}_*.out`, `checkpoints/L{1-4}_*_best/`.
