@@ -1,0 +1,98 @@
+base_model: Qwen/Qwen3-4B
+bnb_4bit_compute_dtype: bfloat16
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
+data:
+  artifact_type: head_supervision
+  train_file: data/splits/train_heads.jsonl
+  val_file: data/splits/val_heads.jsonl
+debug_model: Qwen/Qwen3-1.7B
+head_overrides:
+  repair_strategy:
+    depth: 3
+    dropout: 0.1
+    mid_size: 512
+  response_policy:
+    depth: 3
+    dropout: 0.1
+    mid_size: 512
+  reveal_decision:
+    depth: 3
+    dropout: 0.1
+    mid_size: 512
+jepa:
+  dropout: 0.1
+  emb_dim: 64
+  enabled: false
+  fields:
+  - trust_delta
+  - respect_delta
+  - dominance_delta
+  - secrecy_pressure
+  - player_knowledge
+  - response_policy
+  - reveal_decision
+  horizon_weights:
+    '1': 1.0
+  horizons:
+  - 1
+  lambda_jepa: 0.05
+  predictor_dim: 256
+  target: social_state
+  target_dim: 128
+  var_weight: 0.01
+lora:
+  alpha: 32
+  bias: none
+  dropout: 0.05
+  r: 16
+  target_modules:
+  - q_proj
+  - v_proj
+  - k_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  task_type: CAUSAL_LM
+loss_weights:
+  lambda_A: 1.0
+  lambda_C: 1.0
+  lambda_D: 2.0
+  lambda_M: 1.5
+  lambda_N: 1.0
+  lambda_R: 2.0
+mlflow:
+  experiment_name: latent_state_prediction
+  run_name: M2_deephead
+  tracking_uri: mlruns
+output:
+  best_model_dir: checkpoints/M2_deephead_best
+  checkpoint_dir: checkpoints/M2_deephead
+pooling: mean
+quantization: 4bit
+schema_version: v1
+seed: 42
+training:
+  batch_size: 1
+  bf16: true
+  dataloader_num_workers: 0
+  epochs: 5
+  eval_steps: 500
+  focal_gamma: 1.5
+  grad_accum: 32
+  gradient_checkpointing: true
+  head_lr: 0.0004
+  label_smoothing: 0.1
+  load_best_model_at_end: true
+  logging_steps: 20
+  lr: 0.0002
+  lr_scheduler: cosine
+  max_grad_norm: 1.0
+  max_seq_len: 512
+  metric_for_best_model: val/mean_macro_f1
+  save_steps: 1000
+  use_progressive_lr: true
+  use_weighted_sampler: false
+  warmup_ratio: 0.05
+  weight_decay: 0.01

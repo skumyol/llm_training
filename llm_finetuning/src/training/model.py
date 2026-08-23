@@ -36,30 +36,46 @@ for dim in STANCE_DIMS:
 
 
 class ClassificationHead(nn.Module):
-    def __init__(self, hidden_size: int, n_classes: int, dropout: float = 0.1):
+    def __init__(self, hidden_size: int, n_classes: int, dropout: float = 0.1,
+                 mid_size: int = 256, depth: int = 2):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(hidden_size, 256),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, n_classes),
-        )
+        layers: list = []
+        if depth <= 1:
+            layers.append(nn.Linear(hidden_size, n_classes))
+        else:
+            layers.append(nn.Linear(hidden_size, mid_size))
+            for _ in range(depth - 2):
+                layers.append(nn.GELU())
+                layers.append(nn.Dropout(dropout))
+                layers.append(nn.Linear(mid_size, mid_size))
+            layers.append(nn.GELU())
+            layers.append(nn.Dropout(dropout))
+            layers.append(nn.Linear(mid_size, n_classes))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
 class LatentStatePredictor(nn.Module):
-    def __init__(self, backbone: nn.Module, hidden_size: int, head_specs: dict = HEAD_SPECS, pooling: str = "last"):
+    def __init__(self, backbone: nn.Module, hidden_size: int, head_specs: dict = HEAD_SPECS,
+                 pooling: str = "last", head_overrides: dict | None = None):
         super().__init__()
         self.backbone = backbone
         self.hidden_size = hidden_size
         self.pooling = pooling
-        self.heads = nn.ModuleDict({
-            name: ClassificationHead(hidden_size, spec["n_classes"])
-            for name, spec in head_specs.items()
-        })
+        head_overrides = head_overrides or {}
+        self.heads = nn.ModuleDict()
+        for name, spec in head_specs.items():
+            override = head_overrides.get(name, {})
+            self.heads[name] = ClassificationHead(
+                hidden_size, spec["n_classes"],
+                mid_size=override.get("mid_size", 256),
+                depth=override.get("depth", 2),
+                dropout=override.get("dropout", 0.1),
+            )
         self.head_specs = head_specs
+        self.head_overrides = head_overrides
         # Registered here, not lazily inside forward(): a Parameter created during
         # the first forward is absent from the optimizer's param groups (already
         # built) and from state_dict at save time, so it would never train and
@@ -173,9 +189,13 @@ def build_latent_predictor(
     lora_config: Optional[dict] = None,
     torch_dtype: str = "bfloat16",
     pooling: str = "last",
+    head_overrides: dict | None = None,
+    head_specs: dict | None = None,
 ) -> tuple:
     backbone, tokenizer, hidden_size = load_backbone(model_name, quantization, lora_config, torch_dtype)
-    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling)
+    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling,
+                                     head_overrides=head_overrides,
+                                     head_specs=head_specs or HEAD_SPECS)
     _move_heads_to_backbone_device(predictor)
     return predictor, tokenizer
 
@@ -202,7 +222,8 @@ def save_predictor(predictor: LatentStatePredictor, save_dir: str) -> None:
     # with mean/attention pooling was silently evaluated with a different pooling
     # than it was trained with — the heads read a vector built a different way.
     (save_dir / "predictor_config.json").write_text(
-        json.dumps({"pooling": predictor.pooling, "hidden_size": predictor.hidden_size}, indent=2)
+        json.dumps({"pooling": predictor.pooling, "hidden_size": predictor.hidden_size,
+                     "head_overrides": getattr(predictor, "head_overrides", {})}, indent=2)
     )
     print(f"Saved predictor to {save_dir} (pooling={predictor.pooling})")
 
@@ -257,7 +278,26 @@ def load_predictor(
         except (json.JSONDecodeError, OSError):
             pass
 
-    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling)
+    # Restore head overrides from checkpoint config
+    head_overrides = {}
+    if cfg_path.exists():
+        try:
+            cfg_json = json.loads(cfg_path.read_text())
+            head_overrides = cfg_json.get("head_overrides", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Build predictor with correct head architecture
+    # If head_overrides is non-empty, we need to rebuild HEAD_SPECS with remapped n_classes
+    from src.training.dataset import get_active_label_list, _ACTIVE_LABEL_REMAP
+    head_specs = HEAD_SPECS.copy()
+    for field_name in list(head_specs.keys()):
+        active_list = get_active_label_list(field_name)
+        if active_list is not None:
+            head_specs[field_name] = {"n_classes": len(active_list), "multi_label": False}
+
+    predictor = LatentStatePredictor(backbone, hidden_size, pooling=pooling,
+                                     head_overrides=head_overrides, head_specs=head_specs)
     heads_path = save_dir / "heads.pt"
     if heads_path.exists():
         head_state = torch.load(heads_path, map_location="cpu")

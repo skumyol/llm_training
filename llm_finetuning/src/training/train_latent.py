@@ -102,6 +102,26 @@ def train_latent(config_path: str, debug: bool = False) -> None:
 
     print(f"Loading model: {model_name}")
     pooling = cfg.get("pooling", "last")
+    # Label remap config (e.g. {"response_policy": "clean7"})
+    label_remap_cfg = cfg.get("data", {}).get("label_remap", {})
+    head_overrides = cfg.get("head_overrides", {})
+
+    # Build head specs with remapped n_classes if label remap is active
+    from src.training.model import HEAD_SPECS
+    from src.training.dataset import set_label_remap, get_active_label_list
+    head_specs = HEAD_SPECS.copy()
+    if label_remap_cfg:
+        set_label_remap(label_remap_cfg)
+        for field_name in list(head_specs.keys()):
+            active_list = get_active_label_list(field_name)
+            if active_list is not None:
+                head_specs[field_name] = {"n_classes": len(active_list), "multi_label": False}
+        print(f"[data] label remap active: {label_remap_cfg}")
+        for fn in head_specs:
+            al = get_active_label_list(fn)
+            if al is not None:
+                print(f"  {fn}: {len(al)} classes = {al}")
+
     predictor, tokenizer = build_latent_predictor(
         model_name=model_name,
         quantization=cfg.get("quantization", "4bit"),
@@ -114,6 +134,8 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         },
         torch_dtype=cfg.get("torch_dtype", "bfloat16"),
         pooling=pooling,
+        head_overrides=head_overrides,
+        head_specs=head_specs,
     )
     print(f"Pooling strategy: {pooling}")
 
@@ -132,6 +154,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         jepa_horizons=jepa_horizons if jepa_enabled else None,
         shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
         exclude_counterfactual=exclude_cf,
+        label_remap=label_remap_cfg if label_remap_cfg else None,
     )
     val_ds = HeadSupervisionDataset(
         cfg["data"]["val_file"],
@@ -141,6 +164,7 @@ def train_latent(config_path: str, debug: bool = False) -> None:
         jepa_horizons=jepa_horizons if jepa_enabled else None,
         shuffle_future_labels=jepa_shuffle if jepa_enabled else False,
         exclude_counterfactual=exclude_cf,
+        label_remap=label_remap_cfg if label_remap_cfg else None,
     )
 
     # Compute class weights early (needed for sampler and loss)

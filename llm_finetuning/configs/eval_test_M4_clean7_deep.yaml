@@ -1,0 +1,49 @@
+base_model: Qwen/Qwen3-4B
+data:
+  label_remap:
+    response_policy: clean7
+  test_heads_file: data/splits/test_heads.jsonl
+  test_sft_file: data/splits/test_sft.jsonl
+  test_trace_file: data/splits/test_trace.jsonl
+generation:
+  do_sample: true
+  length_aware_max_tokens: true
+  length_multiplier: 1.3
+  max_new_tokens: 200
+  temperature: 0.7
+  top_p: 0.9
+joint_checkpoint: checkpoints/joint_model_best_consist05
+latent_predictor_checkpoint: checkpoints/M4_clean7_deep_best
+mlflow:
+  experiment_name: routing_and_policy_eval_test
+  tracking_uri: mlruns
+output:
+  n_sample_generations: 100
+  results_dir: eval_results/test_M4_clean7_deep
+  save_confusion_matrices: true
+  save_sample_generations: true
+predicted_zt_file: eval_results/predicted_zt_test.jsonl
+quantization: 4bit
+response_checkpoint: checkpoints/response_generator_best
+routing_missing_predictions: error
+routing_mode: predicted
+schema_version: v1
+semantic_eval:
+  batch_size: 8
+  bertscore: true
+  bertscore_lang: en
+  bertscore_model_type: roberta-large
+  bertscore_rescale_with_baseline: false
+  enabled: true
+  mauve: false
+  mauve_max_text_length: 256
+  sentiment_alignment: true
+  sentiment_model: cardiffnlp/twitter-roberta-base-sentiment-latest
+thresholds:
+  contradiction_rate: 0.08
+  response_policy_f1: 0.75
+  rouge_l_drop_max: 0.05
+  router_false_positive_rate: 0.15
+  secret_leakage_rate: 0.05
+  stance_delta_accuracy: 0.7
+torch_dtype: bfloat16
