@@ -18,6 +18,63 @@ STANCE_LEVEL_LABELS = ["VL", "L", "N", "H", "VH"]
 STANCE_DELTA_LABELS = ["--", "-", "0", "+", "++"]
 VALUE_CONFLICT_LABELS = ["none", "mild", "strong", ""]
 RESPONSE_POLICY_LABELS = ["answer", "partial", "withhold", "deflect", "challenge", "soothe", "test", "threaten", "negotiate", "clarify"]
+
+# Cleaned 7-class variant: merge rare/near-impossible classes
+RESPONSE_POLICY_CLEAN7_LABELS = ["deflect", "soothe", "threaten", "challenge", "clarify", "negotiate", "test"]
+RESPONSE_POLICY_REMAP_7 = {
+    "answer": "clarify",     # 18 samples -> clarify (both are informative)
+    "partial": "clarify",    # 46 samples -> clarify
+    "withhold": "deflect",   # 12 samples -> deflect (both are evasive)
+    "defect": "deflect",     # 11 samples (typo) -> deflect
+    "hint": "clarify",       # 1 sample (noise) -> clarify
+    "redirect": "deflect",   # 5 samples -> deflect
+    "challenged": "challenge",  # 1 sample (typo) -> challenge
+}
+
+# Binary routing: careful (threaten+negotiate) vs ordinary (rest)
+RESPONSE_POLICY_BINARY_LABELS = ["ordinary", "careful"]
+RESPONSE_POLICY_REMAP_BINARY = {
+    "answer": "ordinary", "partial": "ordinary", "withhold": "ordinary",
+    "deflect": "ordinary", "challenge": "ordinary", "soothe": "ordinary",
+    "test": "ordinary", "clarify": "ordinary",
+    "threaten": "careful", "negotiate": "careful",
+    "defect": "ordinary", "hint": "ordinary", "redirect": "ordinary",
+    "challenged": "ordinary",
+}
+
+# Active remap -- set by HeadSupervisionDataset.__init__ from config
+_ACTIVE_LABEL_REMAP: dict = {}
+
+def set_label_remap(remap_cfg: dict) -> None:
+    """Configure label remapping at module level.
+
+    remap_cfg maps field names to remap variant names:
+      {"response_policy": "clean7"}  -> use RESPONSE_POLICY_REMAP_7
+      {"response_policy": "binary"}  -> use RESPONSE_POLICY_REMAP_BINARY
+    """
+    global _ACTIVE_LABEL_REMAP
+    _ACTIVE_LABEL_REMAP = {}
+    for field, variant in remap_cfg.items():
+        if field == "response_policy" and variant == "clean7":
+            _ACTIVE_LABEL_REMAP["response_policy"] = RESPONSE_POLICY_REMAP_7
+        elif field == "response_policy" and variant == "binary":
+            _ACTIVE_LABEL_REMAP["response_policy"] = RESPONSE_POLICY_REMAP_BINARY
+
+def get_remapped_labels(field: str, val) -> str:
+    """Apply active remap if configured, else return original."""
+    if field in _ACTIVE_LABEL_REMAP and isinstance(val, str):
+        return _ACTIVE_LABEL_REMAP[field].get(val, val)
+    return val
+
+def get_active_label_list(field: str):
+    """Return the label list for a field if remapped, else None."""
+    if field == "response_policy":
+        if "response_policy" in _ACTIVE_LABEL_REMAP:
+            if _ACTIVE_LABEL_REMAP["response_policy"] is RESPONSE_POLICY_REMAP_7:
+                return RESPONSE_POLICY_CLEAN7_LABELS
+            elif _ACTIVE_LABEL_REMAP["response_policy"] is RESPONSE_POLICY_REMAP_BINARY:
+                return RESPONSE_POLICY_BINARY_LABELS
+    return None
 REVEAL_LABELS       = ["none", "hint", "partial", "full"]
 REPAIR_LABELS       = ["none", "soften", "apologize", "clarify", "redirect"]
 STANCE_DIMS         = ["affection", "respect", "dominance", "familiarity", "trust", "obligation"]
@@ -71,7 +128,15 @@ def _encode_labels(labels: dict) -> dict[str, torch.Tensor]:
         else:
             if isinstance(val, list):
                 val = val[0] if val else ""
-            idx = idx_map.get(str(val), -1)
+            # Apply label remap if active for this field
+            val = get_remapped_labels(field, str(val))
+            # Use remapped label map if active, else the default
+            active_list = get_active_label_list(field)
+            if active_list is not None:
+                remap_idx = {v: i for i, v in enumerate(active_list)}
+                idx = remap_idx.get(str(val), -1)
+            else:
+                idx = idx_map.get(str(val), -1)
             encoded[field] = torch.tensor(idx, dtype=torch.long)
 
     return encoded
@@ -87,7 +152,12 @@ class HeadSupervisionDataset(Dataset):
         jepa_horizons: Optional[list[int]] = None,
         shuffle_future_labels: bool = False,
         shuffle_seed: int = 42,
+        exclude_counterfactual: bool = False,
+        label_remap: Optional[dict] = None,
     ):
+        # Apply label remap if provided (must be set before any encoding)
+        if label_remap:
+            set_label_remap(label_remap)
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.jepa_fields = jepa_fields or []
@@ -95,11 +165,25 @@ class HeadSupervisionDataset(Dataset):
         self.shuffle_future_labels = shuffle_future_labels
         self._shuffle_rng = random.Random(shuffle_seed) if shuffle_future_labels else None
         self.records: list[dict] = []
+        n_dropped = 0
         with open(jsonl_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    self.records.append(json.loads(line))
+                if not line:
+                    continue
+                rec = json.loads(line)
+                # Counterfactual variants share a byte-identical `context` with their
+                # original (the flipped variable lives in C_t/M_t/N_t, none of which
+                # packager._context_str renders) while carrying different gold labels.
+                # Keeping them trains the model to emit different outputs for the same
+                # input, whose loss-minimiser is the majority class.
+                if exclude_counterfactual and rec.get("counterfactual"):
+                    n_dropped += 1
+                    continue
+                self.records.append(rec)
+        if n_dropped:
+            print(f"[dataset] {Path(jsonl_path).name}: dropped {n_dropped} counterfactual "
+                  f"records, kept {len(self.records)}")
         self._future_index: dict[tuple[str, int], dict] = {}
         self._all_label_records: list[dict] = []  # used for shuffling
         if self.jepa_fields and self.jepa_horizons:
@@ -221,6 +305,9 @@ class SFTDataset(Dataset):
             state_dropout_prob: Probability of dropping each latent state head during
                 training to improve robustness. Only applies when conditioning_mode="predicted".
         """
+        # Apply label remap if provided (must be set before any encoding)
+        if label_remap:
+            set_label_remap(label_remap)
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.mask_secret_spans = bool(mask_secret_spans)

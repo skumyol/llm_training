@@ -369,9 +369,13 @@ Source: `eval_results/ablation_joint_vs_separate.json`.
 
 ---
 
-## 9. Ablation curve (head subset routing)
+## 9. Head-subset routing ablations — NOT QUOTABLE
 
-Routing F1 as heads are progressively added to the routing decision.
+### 9.1 Original version (train-on-eval, invalid)
+
+The first head-subset ablation curve was produced by a script that defaulted its training file to
+the evaluation split when `train_heads_file` was absent. Those numbers (routing F1 0.67–0.70) are
+invalid: the model was trained on the same data it was evaluated on.
 
 | experiment | n heads | routing F1 | precision | recall | slow-path rate |
 |---|---:|---:|---:|---:|---:|
@@ -379,37 +383,74 @@ Routing F1 as heads are progressively added to the routing decision.
 | exp_c_plus_relational | 6 | 0.6660 | 0.5451 | 0.8556 | 0.8433 |
 | exp_b_plus_affect | 7 | 0.6861 | 0.5332 | 0.9619 | — |
 
-The 4-head routing-only configuration (response_policy, reveal_decision, secrecy_pressure,
-value_conflict) achieves the highest F1 (0.6985) with near-perfect recall but very high slow-path
-rate (99.7%). Adding relational and affective heads increases precision but reduces recall.
+Source: `eval_results/ablation_curve.json`. **Do not quote these.**
 
-Source: `eval_results/ablation_curve.json`.
+### 9.2 Corrected re-run (fresh LoRA, degenerate)
+
+A corrected re-run trained fresh LoRA adapters with only the ablated head subset, 3 epochs at
+lr 2e-5, on the proper train split. Results on the held-out test split:
+
+| experiment | n heads | routing F1 | precision | recall | FP rate | slow-path rate |
+|---|---:|---:|---:|---:|---:|---:|
+| exp_a (routing only) | 4 | 0.6662 | 0.4994 | 1.0000 | 0.9932 | 0.9966 |
+| exp_c (+relational) | 6 | 0.6636 | 0.4972 | 0.9977 | 1.0000 | 0.9989 |
+| exp_d (full 29) | 28 | 0.6590 | 0.4977 | 0.9750 | 0.9752 | 0.9751 |
+| exp_b (+affect) | 7 | 0.6559 | 0.4965 | 0.9659 | 0.9707 | 0.9683 |
+
+**These are degenerate.** Recall ≈ 1.0, precision ≈ 0.5, slow-path ≈ 99% — the router defaults to
+"send everything to slow path" (the always-careful baseline, F1 ≈ 0.667). The protocol is too weak:
+fresh LoRA + 3 epochs at lr 2e-5 vs the main recipe's lr 2e-4/4e-4 over 5 epochs. The model never
+learns to route; it just plays safe.
+
+### 9.3 Verdict
+
+Neither version supports any claim about head subsets and routing quality. The original is
+train-on-eval; the corrected version is an under-trained degenerate baseline. A **warm-start
+protocol** is needed before this ablation can be quoted: initialise from the full 29-head
+checkpoint, freeze the backbone, and fine-tune only the ablated head subset for a few epochs at
+the main recipe's learning rate. This is left as future work.
+
+Source: `eval_results/test_honest/ablation/exp_{a,b,c,d}_*/`.
 
 ---
 
-## 10. Currently running latent ablation experiments (2026-08-21)
+## 10. Latent predictor ablations (2026-08-22, completed)
 
-Four SLURM jobs launched on HKUST HPC (gpu-a30 partition) at 19:56 HKT, 16-hour time limit:
+Four ablation configs plus three seeds of the control, all on HKUST HPC (gpu-a30), Qwen3-4B +
+QLoRA, 33.03 M trainable params (0.81%), focal loss γ=1.5, label smoothing 0.1, best model by
+val/mean_macro_f1.
 
-| job ID | name | GPU | pooling | sampler | ctx len | total steps | status |
-|---|---|---|---|---|---|---:|---|
-| 1776582 | L1_control | gpu01 | last | weighted | 512 | 965 | RUNNING |
-| 1776583 | L2_nosampler | gpu01 | last | none | 512 | 965 | RUNNING |
-| 1776584 | L3_meanpool | gpu07 | mean | weighted | 512 | 1544 | RUNNING |
-| 1776585 | L4_ctx1024 | gpu07 | last | weighted | 1024 | 965 | RUNNING |
+### 10.1 Results (best epoch by val mean_macro_f1)
 
-**Common setup:** Qwen3-4B, 4-bit NF4, LoRA r=16 on q/v/k/o/gate/up/down, 33.03 M trainable
-params (0.81%), focal loss γ=1.5, label smoothing 0.1, cosine LR (heads 4e-4, backbone 2e-2),
-best model by val/mean_macro_f1.
+| config | pooling | sampler | ctx len | seed | best epoch | val macro-F1 | val acc | response_policy F1 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| L1_control | last | weighted | 512 | 42 | 3 | 0.5375 | 0.6916 | 0.5321 |
+| L1_control | last | weighted | 512 | 43 | 4 | 0.5208 | 0.6858 | 0.4115 |
+| L1_control | last | weighted | 512 | 44 | 3 | 0.5361 | 0.6893 | 0.5669 |
+| L2_nosampler | last | none | 512 | 42 | 3 | 0.5421 | 0.6800 | 0.5663 |
+| L3_meanpool | mean | weighted | 512 | 42 | 4 | 0.5608 | 0.7076 | 0.5558 |
+| L4_ctx1024 | mean | weighted | 1024 | 42 | 6 | 0.5621 | 0.7119 | 0.5827 |
 
-**Ablation variables:**
-- L1 → L2: removes the WeightedRandomSampler (tests whether class-imbalance correction helps or
-  distorts the marginal distribution of other heads).
-- L1 → L3: replaces last-token pooling with mean pooling (tests whether averaging hidden states
-  across the sequence improves multi-head prediction).
-- L1 → L4: doubles context length to 1024 (tests whether longer dialogue history improves
-  relational and decision heads).
+### 10.2 Findings
 
-Results will be written to `checkpoints/L{1-4}_*/` and evaluated with
-`eval_test.yaml` on the held-out test split. As of 20:23 HKT (27 min runtime), all four jobs are
-in Epoch 1 at ~2.3 it/s (L1/L2) and ~2.4 it/s (L3/L4).
+- **Mean pooling beats last-token pooling.** L3 (0.5608) vs L1 seed 42 (0.5375), +0.023 macro-F1.
+  Averaging hidden states across the sequence is better than taking the last token for multi-head
+  social-state prediction.
+- **Removing the WeightedRandomSampler helps slightly.** L2 (0.5421) vs L1 seed 42 (0.5375),
+  +0.005 macro-F1. This corroborates the hypothesis that the sampler distorts the marginal
+  distribution of non-target heads — it assigns each record the max class weight across all 28
+  heads, reshaping every head's distribution as a side effect.
+- **Longer context (1024) helps marginally over 512.** L4 (0.5621) vs L3 (0.5608), +0.001. Not
+  significant given seed spread.
+- **Seed variance (L1, 3 seeds):** 0.5208 / 0.5361 / 0.5375, spread ±0.008. The mean-pooling gain
+  (+0.023) is outside this spread; the sampler and context-length gains are not.
+
+### 10.3 Caveats
+
+- These are **val numbers**, not test. The held-out test evaluation has not been run on these
+  checkpoints yet.
+- Single seed for L2, L3, L4 — no error bars on the ablation gains.
+- All configs overfit by epoch 3–4 (val loss rises while train loss falls); the best checkpoint is
+  early, consistent with the data-limit finding from §1.
+
+Source: `slurm_logs/lat_{L1,L2,L3,L4}_*.out`, `checkpoints/L{1-4}_*_best/`.

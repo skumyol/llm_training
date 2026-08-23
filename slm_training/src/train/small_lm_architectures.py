@@ -307,6 +307,177 @@ class TinyGPTLM(nn.Module):
 
 
 # =============================================================================
+# 3b. TinyLlamaLM — modern decoder block
+# =============================================================================
+# TinyGPTLM is the 2019 recipe: learned position embeddings, LayerNorm, a 4x GELU
+# MLP and biases. Everything below is standard in current small-LM recipes
+# (Llama/Qwen/SmolLM) and each piece earns its place here:
+#
+#   RoPE       relative positions injected at every layer instead of one learned
+#              table; removes max_seq_len x n_embd parameters and lets a model
+#              trained at 256 be evaluated at longer context.
+#   RMSNorm    no mean subtraction and no bias — cheaper, and empirically equal
+#              or better at this scale.
+#   SwiGLU     gated MLP. Sized to 8/3 x n_embd so the parameter count matches
+#              the 4x GELU it replaces, making the comparison about the shape of
+#              the non-linearity rather than about capacity.
+#   QK-norm    normalises Q and K before the dot product, which bounds attention
+#              logits. This is what makes higher learning rates survivable —
+#              slm_J_bpe16k_12L diverged at Muon lr 0.01 without it.
+#
+# No biases anywhere: they cost parameters and do nothing measurable in a
+# pre-norm residual transformer.
+
+
+@dataclass
+class LlamaConfig:
+    vocab_size:  int   = 50257
+    n_embd:      int   = 512
+    n_head:      int   = 8
+    n_layer:     int   = 6
+    dropout:     float = 0.0
+    max_seq_len: int   = 256
+    tie_weights: bool  = True
+    rope_theta:  float = 10000.0
+    qk_norm:     bool  = True
+    ffn_multiple_of: int = 64
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # float32 for the reduction: under fp16 AMP the mean of squares over 512
+        # channels is the kind of sum that quietly loses precision.
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x.to(dtype)) * self.weight
+
+
+def _rope_cache(seq_len: int, head_dim: int, theta: float, device, dtype):
+    inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
+    pos = torch.arange(seq_len, device=device).float()
+    freqs = torch.outer(pos, inv)
+    return torch.cos(freqs).to(dtype), torch.sin(freqs).to(dtype)
+
+
+def _apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    # x: (B, n_head, T, head_dim); rotate the even/odd halves as a complex pair.
+    x1, x2 = x.chunk(2, dim=-1)
+    cos = cos[None, None, : x.size(-2), :]
+    sin = sin[None, None, : x.size(-2), :]
+    return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
+
+
+class LlamaAttention(nn.Module):
+    def __init__(self, cfg: LlamaConfig) -> None:
+        super().__init__()
+        assert cfg.n_embd % cfg.n_head == 0
+        self.n_head = cfg.n_head
+        self.head_dim = cfg.n_embd // cfg.n_head
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.dropout_p = cfg.dropout
+        self.q_norm = RMSNorm(self.head_dim) if cfg.qk_norm else nn.Identity()
+        self.k_norm = RMSNorm(self.head_dim) if cfg.qk_norm else nn.Identity()
+
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        Q, K, V = self.qkv(x).split(C, dim=2)
+        shape = lambda t: t.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        Q, K, V = shape(Q), shape(K), shape(V)
+        Q, K = self.q_norm(Q), self.k_norm(K)
+        Q, K = _apply_rope(Q, cos, sin), _apply_rope(K, cos, sin)
+        y = F.scaled_dot_product_attention(
+            Q, K, V,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            is_causal=True,
+        )
+        return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, dim: int, multiple_of: int, dropout: float) -> None:
+        super().__init__()
+        # 8/3 x dim keeps the parameter count level with a 4x GELU MLP (3 matrices
+        # of dim x h against 2 of dim x 4dim).
+        hidden = int(8 * dim / 3)
+        hidden = multiple_of * ((hidden + multiple_of - 1) // multiple_of)
+        self.gate = nn.Linear(dim, hidden, bias=False)
+        self.up = nn.Linear(dim, hidden, bias=False)
+        self.down = nn.Linear(hidden, dim, bias=False)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.drop(self.down(F.silu(self.gate(x)) * self.up(x)))
+
+
+class LlamaBlock(nn.Module):
+    def __init__(self, cfg: LlamaConfig) -> None:
+        super().__init__()
+        self.n1 = RMSNorm(cfg.n_embd)
+        self.attn = LlamaAttention(cfg)
+        self.n2 = RMSNorm(cfg.n_embd)
+        self.ffn = SwiGLU(cfg.n_embd, cfg.ffn_multiple_of, cfg.dropout)
+
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.n1(x), cos, sin)
+        return x + self.ffn(self.n2(x))
+
+
+class TinyLlamaLM(nn.Module):
+    def __init__(self, cfg: LlamaConfig) -> None:
+        super().__init__()
+        self.cfg = cfg
+        self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)
+        self.drop = nn.Dropout(cfg.dropout)
+        self.blocks = nn.ModuleList([LlamaBlock(cfg) for _ in range(cfg.n_layer)])
+        self.ln_f = RMSNorm(cfg.n_embd)
+        self.head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
+        if cfg.tie_weights:
+            self.head.weight = self.tok_emb.weight
+        self.apply(self._init_weights)
+        _scale_residual_init(self, cfg.n_layer)
+        self._cache_len = 0
+
+    def _init_weights(self, m: nn.Module) -> None:
+        if isinstance(m, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(m.weight, std=0.02)
+
+    def _rope(self, T: int, device, dtype):
+        if self._cache_len < T or getattr(self, "_cos", None) is None \
+                or self._cos.device != device or self._cos.dtype != dtype:
+            # _rope_cache emits head_dim/2 frequency columns, which is exactly what
+            # _apply_rope needs after chunking each head into two halves.
+            head_dim = self.cfg.n_embd // self.cfg.n_head
+            cos, sin = _rope_cache(max(T, self.cfg.max_seq_len), head_dim,
+                                   self.cfg.rope_theta, device, dtype)
+            self._cos, self._sin = cos, sin
+            self._cache_len = cos.size(0)
+        return self._cos[:T], self._sin[:T]
+
+    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None,
+                return_hidden: bool = False) -> LMOutput:
+        B, T = x.shape
+        h = self.drop(self.tok_emb(x))
+        cos, sin = self._rope(T, x.device, h.dtype)
+        for block in self.blocks:
+            h = block(h, cos, sin)
+        hidden = self.ln_f(h)
+        logits = self.head(hidden)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.reshape(-1, self.cfg.vocab_size),
+                                   targets.reshape(-1), ignore_index=-100)
+        return LMOutput(loss=loss, logits=logits,
+                        hidden_states=hidden if return_hidden else None)
+
+
+# =============================================================================
 # 4. PrefixTinyGPT (conditioning via soft-prefix tokens)
 # =============================================================================
 
@@ -677,7 +848,8 @@ def build_model(arch: str, cfg_dict: dict) -> nn.Module:
     if a == "gru":        return SmallGRULM(GRUConfig(**cfg_dict))
     if a == "awdlstm":    return AWDLSTMLM(AWDLSTMConfig(**cfg_dict))
     if a == "gpt":        return TinyGPTLM(GPTConfig(**cfg_dict))
+    if a == "llama":      return TinyLlamaLM(LlamaConfig(**cfg_dict))
     if a == "prefix_gpt": return PrefixTinyGPTLM(PrefixGPTConfig(**cfg_dict))
     if a == "moe":        return TinyMoELM(MoEConfig(**cfg_dict))
     if a == "mamba_like": return MambaLikeLM(MambaLikeConfig(**cfg_dict))
-    raise ValueError(f"Unknown arch: {arch!r}. Choose: gru, awdlstm, gpt, prefix_gpt, moe, mamba_like")
+    raise ValueError(f"Unknown arch: {arch!r}. Choose: gru, awdlstm, gpt, llama, prefix_gpt, moe, mamba_like")

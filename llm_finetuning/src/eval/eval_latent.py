@@ -33,10 +33,13 @@ def eval_latent(config_path: str) -> dict:
     print(f"Loading predictor from {checkpoint} (quantization={quantization}, dtype={torch_dtype})")
     predictor, tokenizer = load_predictor(checkpoint, model_name, quantization=quantization, torch_dtype=torch_dtype)
 
+    label_remap_cfg = cfg.get("data", {}).get("label_remap", {})
     test_ds = HeadSupervisionDataset(
         cfg["data"]["test_heads_file"],
         tokenizer,
         max_seq_len=cfg.get("generation", {}).get("max_seq_len", 1024),
+        exclude_counterfactual=cfg["data"].get("exclude_counterfactual", False),
+        label_remap=label_remap_cfg if label_remap_cfg else None,
     )
     test_loader = DataLoader(
         test_ds, batch_size=8, shuffle=False,

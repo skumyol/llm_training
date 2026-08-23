@@ -174,6 +174,7 @@ def runtime_policy(
     num_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     fused_optimizer: bool = True,
+    amp_dtype: str = "float16",
 ) -> Dict[str, Any]:
     """Return conservative fast defaults for CUDA, Apple MPS, and CPU."""
     if device_type not in {"cuda", "mps", "cpu"}:
@@ -187,7 +188,7 @@ def runtime_policy(
     amp_enabled = bool(use_amp and device_type in {"cuda", "mps"})
     return {
         "amp_enabled": amp_enabled,
-        "amp_dtype": "float16" if amp_enabled else "float32",
+        "amp_dtype": (amp_dtype if amp_enabled else "float32"),
         "num_workers": int(num_workers),
         "pin_memory": bool(pin_memory),
         "non_blocking": bool(pin_memory and device_type == "cuda"),
@@ -369,7 +370,25 @@ class CharTokenizer:
         return [self.stoi[c] for c in text if c in self.stoi]
 
 
-def build_tokenizer(text: str):
+class BPETokenizer:
+    """Adapter for a `tokenizers` BPE file, matching the tiktoken surface used here."""
+
+    def __init__(self, path: str) -> None:
+        from tokenizers import Tokenizer as _HFTok
+        self._tok = _HFTok.from_file(path)
+        self.vocab_size = self._tok.get_vocab_size()
+        self.name = f"bpe:{Path(path).stem}"
+
+    def encode(self, text: str) -> List[int]:
+        return self._tok.encode(text).ids
+
+    def decode(self, ids: List[int]) -> str:
+        return self._tok.decode(ids)
+
+
+def build_tokenizer(text: str, bpe_path: Optional[str] = None):
+    if bpe_path:
+        return BPETokenizer(bpe_path)
     if _TIKTOKEN_OK:
         enc = tiktoken.get_encoding("gpt2")
         enc.name = "tiktoken:gpt2"  # type: ignore[attr-defined]
@@ -410,9 +429,12 @@ class TokenDataset(Dataset):
 
 # ── AMP context ───────────────────────────────────────────────────────────────
 
-def amp_ctx(device: torch.device, enabled: bool):
+def amp_ctx(device: torch.device, enabled: bool, dtype: str = "float16"):
     if enabled and device.type in {"cuda", "mps"}:
-        return torch.autocast(device_type=device.type, dtype=torch.float16)
+        # bfloat16 has fp32's exponent range, so it needs no GradScaler and does not
+        # overflow the way fp16 does. mps only supports fp16.
+        want = torch.bfloat16 if dtype == "bfloat16" and device.type == "cuda" else torch.float16
+        return torch.autocast(device_type=device.type, dtype=want)
     return torch.autocast(device_type="cpu", enabled=False)
 
 
@@ -422,6 +444,8 @@ def amp_ctx(device: torch.device, enabled: bool):
 def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device,
     cond_dim: int, use_amp: bool, max_batches: int = 0,
+    amp_dtype: str = "float16",
+    bytes_per_token: float = 0.0,
     condition_mode: str = "ocean_vad",
     extractor: Optional[EmbeddingExtractor] = None,
     tokenizer: Optional[Any] = None,
@@ -450,7 +474,7 @@ def evaluate(
             batch_sources = ["legacy_text"] * x.size(0)
         x = x.to(device, non_blocking=device.type == "cuda")
         y = y.to(device, non_blocking=device.type == "cuda")
-        with amp_ctx(device, use_amp):
+        with amp_ctx(device, use_amp, amp_dtype):
             if isinstance(model, PrefixTinyGPTLM):
                 if aligned_cond is not None:
                     cond = aligned_cond.to(device, non_blocking=device.type == "cuda")
@@ -470,8 +494,13 @@ def evaluate(
                 out  = model(x, cond, y, cond_mask=mask)
             else:
                 out  = model(x, y)
+        # .float() is load-bearing: this call sits OUTSIDE amp_ctx, so under
+        # float16 AMP the logits arrive as fp16 and the per-token losses come back
+        # as fp16 too. Summing ~12k of them at ~5 nats overflows fp16's 65504 max,
+        # so val_loss silently becomes inf for any run above ~5.3 nats — which is
+        # every run early in training, and every larger validation set.
         token_losses = F.cross_entropy(
-            out.logits.reshape(-1, out.logits.size(-1)),
+            out.logits.reshape(-1, out.logits.size(-1)).float(),
             y.reshape(-1),
             ignore_index=-100,
             reduction="none",
@@ -496,6 +525,13 @@ def evaluate(
     }
     if total_bytes:
         metrics["val_bits_per_byte"] = total_nll / (math.log(2) * total_bytes)
+    elif bytes_per_token > 0:
+        # The plain-text pipeline yields (x, y) tuples with no byte counts, so the
+        # exact per-batch total is unavailable. The corpus-level bytes-per-token
+        # ratio gives the same aggregate figure, and this is the only metric that
+        # is comparable ACROSS tokenizers — perplexity is not, so a run with a
+        # different vocabulary cannot be read without it.
+        metrics["val_bits_per_byte"] = mean / (math.log(2) * bytes_per_token)
     for source, nll in sorted(source_nll.items()):
         metrics[f"source_ppl/{source}"] = math.exp(
             min(nll / max(source_tokens[source], 1), 20)
@@ -608,6 +644,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         num_workers=cfg.get("num_workers"),
         pin_memory=cfg.get("pin_memory"),
         fused_optimizer=bool(cfg.get("fused_optimizer", True)),
+        amp_dtype=str(cfg.get("amp_dtype", "float16")),
     )
     if device.type == "cuda":
         torch.set_float32_matmul_precision(
@@ -644,6 +681,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         )
         train_ids: List[int] = []
         val_ids: List[int] = []
+        val_bytes_per_token = 0.0  # this pipeline reports exact per-batch byte counts
         train_token_count = train_ds.target_token_count
         val_token_count = val_ds.target_token_count
         log.info(
@@ -662,11 +700,13 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 raise FileNotFoundError(str(p))
         train_text = Path(cfg["train_text"]).read_text(encoding="utf-8")
         val_text   = Path(cfg["val_text"]).read_text(encoding="utf-8")
-        tokenizer  = build_tokenizer(train_text)
+        tokenizer  = build_tokenizer(train_text, cfg.get("bpe_tokenizer"))
         train_ids  = tokenizer.encode(train_text)
         val_ids    = tokenizer.encode(val_text)
         train_token_count = len(train_ids)
         val_token_count = len(val_ids)
+        # Needed for bits-per-byte, the only metric comparable across tokenizers.
+        val_bytes_per_token = len(val_text.encode("utf-8")) / max(len(val_ids), 1)
         # Overlapping windows for training (stride < seq_len multiplies the number
         # of examples); non-overlapping for val so every token is scored once.
         train_stride = int(cfg.get("train_stride") or cfg["seq_len"])
@@ -806,16 +846,52 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
     if policy["fused_optimizer"]:
         optimizer_kwargs["fused"] = True
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay_params, "weight_decay": weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ],
-        **optimizer_kwargs,
-    )
+    if str(cfg.get("optimizer", "adamw")).lower() == "muon":
+        # torch.optim.Muon (torch>=2.11) orthogonalises the update, which only makes
+        # sense for the hidden weight matrices — it rejects 1-D tensors outright, and
+        # embeddings/tied LM head are excluded by convention because their rows get
+        # sparse gradients. Those stay on AdamW, so two optimizers are unavoidable.
+        muon_params, adamw_decay = [], []
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad or parameter.ndim < 2:
+                continue
+            if any(k in name.lower() for k in ("emb", "wte", "wpe", "lm_head", "head.weight")):
+                adamw_decay.append(parameter)
+            else:
+                muon_params.append(parameter)
+        muon_lr = float(cfg.get("muon_lr", 0.02))
+        optimizers = [
+            torch.optim.Muon(muon_params, lr=muon_lr, weight_decay=weight_decay,
+                             momentum=float(cfg.get("muon_momentum", 0.95)),
+                             # "original" leaves the update magnitude shape-independent,
+                             # which mis-scales wide matrices (our FFN is 512->2048);
+                             # "match_rms_adamw" rescales per parameter to AdamW's RMS.
+                             adjust_lr_fn=cfg.get("muon_adjust_lr") or None),
+            torch.optim.AdamW(
+                [
+                    {"params": adamw_decay, "weight_decay": weight_decay},
+                    {"params": no_decay_params, "weight_decay": 0.0},
+                ],
+                **optimizer_kwargs,
+            ),
+        ]
+        log.info("Optimizer: Muon(%d tensors, lr=%.4g, adjust_lr=%s) + AdamW(%d tensors, lr=%.4g)",
+                 len(muon_params), muon_lr, cfg.get("muon_adjust_lr") or "original",
+                 len(adamw_decay) + len(no_decay_params), lr)
+    else:
+        optimizers = [torch.optim.AdamW(
+            [
+                {"params": decay_params, "weight_decay": weight_decay},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ],
+            **optimizer_kwargs,
+        )]
+    optimizer = optimizers[0]  # for logging the primary LR
     scaler = torch.amp.GradScaler(
         device.type,
-        enabled=bool(policy["amp_enabled"]),
+        # bf16 carries fp32's exponent range, so loss scaling is unnecessary; leaving
+        # the scaler on would add its inf/nan checks and skipped steps for nothing.
+        enabled=bool(policy["amp_enabled"]) and policy["amp_dtype"] != "bfloat16",
     )
 
     updates_per_epoch = max(1, math.ceil(len(train_loader) / int(cfg["grad_accum"])))
@@ -824,17 +900,20 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         planned_steps = min(planned_steps, int(cfg["max_steps"]))
 
     # ── LR Scheduler ────────────────────────────────────────────────────────
-    scheduler = None
+    schedulers: List[Any] = []
     sched_name = cfg.get("scheduler", "none")
     if sched_name == "warmup_cosine":
         warmup_steps = int(planned_steps * float(cfg.get("warmup_ratio", 0.02)))
         min_lr_ratio = float(cfg.get("min_lr_ratio", 0.1))
-        scheduler = LambdaLR(
-            optimizer,
-            lr_lambda=lambda step: warmup_cosine_multiplier(
-                step, planned_steps, warmup_steps, min_lr_ratio
-            ),
-        )
+        schedulers = [
+            LambdaLR(
+                opt,
+                lr_lambda=lambda step: warmup_cosine_multiplier(
+                    step, planned_steps, warmup_steps, min_lr_ratio
+                ),
+            )
+            for opt in optimizers
+        ]
         log.info(
             "Scheduler: warmup_cosine (steps=%d, warmup=%d, min_ratio=%.3f)",
             planned_steps,
@@ -845,12 +924,10 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
         T_0 = int(cfg.get("T_0", 5))
         T_mult = int(cfg.get("T_mult", 2))
         eta_min = float(cfg.get("eta_min", 1e-6))
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=T_0,
-            T_mult=T_mult,
-            eta_min=eta_min,
-        )
+        schedulers = [
+            CosineAnnealingWarmRestarts(opt, T_0=T_0, T_mult=T_mult, eta_min=eta_min)
+            for opt in optimizers
+        ]
         log.info(f"Scheduler: CosineAnnealingWarmRestarts (T_0={T_0}, T_mult={T_mult})")
     else:
         log.info("Scheduler: none (constant LR)")
@@ -938,7 +1015,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for epoch in range(1, cfg["epochs"] + 1):
         log.info(f"── Epoch {epoch}/{cfg['epochs']} ──────────────────────────────────")
         model.train()
-        optimizer.zero_grad(set_to_none=True)
+        for _opt in optimizers:
+            _opt.zero_grad(set_to_none=True)
         active_train_loader = (
             curriculum_loader
             if curriculum_loader is not None and epoch <= curriculum_epochs
@@ -961,7 +1039,7 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             x = x.to(device, non_blocking=bool(policy["non_blocking"]))
             y = y.to(device, non_blocking=bool(policy["non_blocking"]))
 
-            with amp_ctx(device, bool(policy["amp_enabled"])):
+            with amp_ctx(device, bool(policy["amp_enabled"]), policy["amp_dtype"]):
                 if isinstance(model, PrefixTinyGPTLM):
                     if aligned_cond is not None:
                         mask = condition_mask.to(
@@ -1010,19 +1088,35 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
             if bi % cfg["grad_accum"] == 0 or bi == len(active_train_loader):
                 if policy["amp_enabled"]:
-                    scaler.unscale_(optimizer)
+                    for _opt in optimizers:
+                        scaler.unscale_(_opt)
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
-                    scaler.step(optimizer); scaler.update()
+                    for _opt in optimizers:
+                        scaler.step(_opt)
+                    scaler.update()
                 else:
                     gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
-                    optimizer.step()
-                if scheduler is not None:
+                    for _opt in optimizers:
+                        _opt.step()
+                for _sched in schedulers:
                     if sched_name == "cosine_warm_restarts":
-                        scheduler.step(epoch - 1 + bi / len(active_train_loader))
+                        _sched.step(epoch - 1 + bi / len(active_train_loader))
                     else:
-                        scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                        _sched.step()
+                for _opt in optimizers:
+                    _opt.zero_grad(set_to_none=True)
                 global_step += 1
+
+                # A diverged run is unrecoverable: every later step trains on NaN and
+                # the job burns its full wall-clock producing a garbage checkpoint.
+                # Under fp16 the GradScaler legitimately produces inf/nan grad norms on
+                # steps it then skips, so only the loss is trusted as a divergence signal.
+                if not math.isfinite(running_loss):
+                    raise RuntimeError(
+                        f"training diverged: non-finite loss at step {global_step} "
+                        f"(epoch {epoch}, grad_norm={gn:.4g}). Lower the learning rate "
+                        f"or switch amp_dtype to bfloat16."
+                    )
 
                 if global_step % cfg["log_every"] == 0:
                     avg  = running_loss / running_n
@@ -1042,6 +1136,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         device,
                         cfg["cond_dim"],
                         bool(policy["amp_enabled"]),
+                        amp_dtype=policy["amp_dtype"],
+                        bytes_per_token=val_bytes_per_token,
                         condition_mode=cfg.get("condition_mode", "ocean_vad"),
                         extractor=extractor,
                         tokenizer=tokenizer,
@@ -1066,6 +1162,8 @@ def train(cfg: Dict[str, Any]) -> Dict[str, Any]:
             device,
             cfg["cond_dim"],
             bool(policy["amp_enabled"]),
+            amp_dtype=policy["amp_dtype"],
+            bytes_per_token=val_bytes_per_token,
             condition_mode=cfg.get("condition_mode", "ocean_vad"),
             extractor=extractor,
             tokenizer=tokenizer,
