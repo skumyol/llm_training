@@ -1,0 +1,35 @@
+# Generative structured prediction of the latent state (see src/training/latent_sft.py).
+# Trains on the FULL split including counterfactuals — §15.1.0 showed filtering
+# them from training costs 0.137 on response_policy.
+base_model: Qwen/Qwen3-4B
+quantization: 4bit
+torch_dtype: bfloat16
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  lr: 2.0e-4
+  epochs: 1
+  max_seq_len: 1024
+  batch_size: 1
+  grad_accum: 32
+  gradient_checkpointing: true
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+
+data:
+  train_file: data/splits/train_heads.jsonl
+  val_file: data/splits/val_heads.jsonl
+  exclude_counterfactual: false
+
+output:
+  best_model_dir: checkpoints/S1_SMOKE_best
+
+seed: 42

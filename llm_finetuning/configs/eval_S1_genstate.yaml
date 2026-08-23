@@ -1,0 +1,11 @@
+base_model: Qwen/Qwen3-4B
+quantization: 4bit
+torch_dtype: bfloat16
+adapter: checkpoints/S1_genstate_best
+max_seq_len: 1024
+max_new_tokens: 320
+data:
+  test_heads_file: data/splits/test_heads.jsonl
+  exclude_counterfactual: true   # §15.1.1: originals-only is the honest eval set
+output:
+  results_dir: eval_results/test_S1_genstate_orig
