@@ -827,6 +827,47 @@ is run as an ablation rather than assumed.
 **Blocked on this:** the head-subset routing ablation (§9). All three of its versions collapse to a
 majority class on the four routing heads, which are among the most contaminated.
 
+### 15.1.0 Result: removing counterfactuals from TRAINING makes the model worse
+
+**The hypothesis in §15.1 is refuted.** Both counterfactual-free runs finished 16 epochs and were
+scored on the same 358 clean test turns as everything else:
+
+| run | training data | mean macro-$F_1$ | mean acc | `response_policy` $F_1$ |
+|---|---|---:|---:|---:|
+| L1_control (3 seeds) | 6,175 records, counterfactuals **in** | **0.5530 ± 0.0032** | **0.6860 ± 0.0034** | **0.5179 ± 0.0107** |
+| L5_nocf | 2,520 records, counterfactuals **out** | 0.5365 | 0.6490 | 0.3814 |
+| L6_nocf_reg | 2,520 records, + more regularisation | 0.5323 | 0.6471 | 0.3610 |
+
+Filtering the training set costs **−0.017 macro-$F_1$, −0.037 accuracy and −0.137 on
+`response_policy`** — the last is thirteen times the seed spread, so this is not noise. The extra
+regularisation in L6 made it worse still, so the loss is not an overfitting artefact of the smaller
+set.
+
+The mechanism argued in §11.1 is real — 95% of duplicate groups do carry conflicting labels, and the
+loss-minimiser for byte-identical inputs is the marginal — but the conclusion drawn from it was
+wrong. **The label noise costs less than the data volume.** Cutting 59% of the records leaves 2,520
+examples for 33 M trainable LoRA parameters, and whatever the conflicting copies teach about the
+shared structure of the task outweighs what they corrupt about the specific field.
+
+The correct recommendation is therefore the opposite of §11's on the training side, and unchanged on
+the evaluation side:
+
+> **Train on everything, including counterfactuals. Evaluate on originals only.**
+
+Evaluation-side filtering is worth +0.051 on `response_policy` (§15.1.1, three seeds); training-side
+filtering costs −0.137. They are separate decisions and they point in opposite directions.
+
+Two caveats that do not rescue the hypothesis but bound it. Best-checkpoint selection for L5/L6 ran
+on 268 clean val records against L1's 683, so their selection signal was noisier; and they trained
+16 epochs against L1's 5. A cleaner test would hold both fixed — but neither confound plausibly
+accounts for a 0.137 gap on the headline head, and both runs agree.
+
+**What this does not settle:** whether counterfactuals help *because* of the augmentation or merely
+as record count. The discriminating experiment is to train on 2,520 originals plus 3,655 records
+drawn from elsewhere — which does not exist here — or to subsample the counterfactual set to
+several intermediate sizes and look at the shape of the curve. That is the honest next step, and it
+is not run.
+
 ### 15.1.1 Scoring the existing checkpoints on the clean test set
 
 Before any new run finishes, the checkpoints from §12 were re-scored on the 358 counterfactual-free
