@@ -1060,11 +1060,22 @@ First-epoch validation perplexity, all on the same 12,358-token validation set:
 | `slm_G_muonrms` | GPT | 50k | 256 | 44.8 M | 94.57 |
 | `slm_I_bpe16k_6L` | GPT | 16k | 256 | 27.4 M | 107.87 |
 | `slm_M_llama_6L` | Llama | 16k | 256 | 27.7 M | 77.08 |
-| **`slm_P_llama_ctx512`** | Llama | 16k | **512** | 27.7 M | **49.70** |
+| **`slm_P_llama_ctx512`** | Llama | 16k | **512** | 27.7 M | **49.70 / 50.26** |
 
-P's first epoch already beats every completed run's *final* number (C 50.57, G 49.25). The block
-alone accounts for a large part of it — M's 77.08 against I's 107.87 is the same vocabulary, the same
-optimizer, the same context and 0.9% more parameters — and context adds more again.
+**Run-to-run noise is about 1%.** The sweep was cancelled externally mid-training and resubmitted
+with the identical config and seed; P's first epoch came back 50.26 against 49.70. M reproduced
+exactly (77.08 both times), so the variance is not uniform across configs — P uses batch 32 against
+M's 64, so its dataloader interleaving differs. Treat gaps below ~1 perplexity as noise.
+
+That correction matters for one claim made here earlier. P's first epoch beats `slm_C_pretrain`'s
+*final* 50.57, but it does **not** beat `slm_G_muonrms`'s final 49.25 — the two overlap. The honest
+statement is that P reaches in one epoch what the baseline recipe needed six to reach, not that it
+beats everything.
+
+The block's contribution is the cleaner number, because it is measured at matched everything: M's
+77.08 against I's 107.87 is the same vocabulary, the same optimizer, the same context and 0.9% more
+parameters — a 29% reduction in perplexity from the block alone. Context adds more again, subject to
+the caveat below.
 
 **One caveat on P, and it is not small.** Scoring the same 12,358 validation tokens in 24 windows of
 512 rather than 48 of 256 halves the number of positions that start a window with no context. Longer
