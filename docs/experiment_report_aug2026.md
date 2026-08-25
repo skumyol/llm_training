@@ -252,13 +252,18 @@ this domain. Fine-tuning is necessary.
 | 26 | L6 nocf reg | classification (mean, no CF, γ=2) | unseeded | 0.3193 | 0.5106 | 0.6358 | 0.5549 |
 | 27 | M2 deephead | classification (mean, deep head) | 42 | 0.0936 | 0.4866 | 0.5975 | 0.0600 |
 | 28 | M6 hilr | classification (mean, 2× head LR) | 42 | 0.0754 | 0.4922 | 0.6020 | 0.0509 |
-| — | *Qwen3.8-27B (zero-shot)* | *API, no fine-tune* | — | *0.2160* | *0.2926* | *0.4908* | *0.4383* |
-| — | *Llama-4 Scout 17B (zero-shot)* | *API, no fine-tune* | — | *0.1442* | *0.2618* | *0.3860* | *0.1812* |
+| — | *Qwen3.8-27B (zero-shot, 358 orig)* | *API, no fine-tune* | — | *0.2048* | *—* | *—* | *0.4106* |
+| — | *Llama-4 Scout 17B (zero-shot, 358 orig)* | *API, no fine-tune* | — | *0.1449* | *—* | *—* | *0.1760* |
 
 **Note on `_orig` suffix:** some experiments were evaluated twice — once with the original eval
 code and once with a corrected version that handles label remapping. The `_orig` runs use the
 original eval pipeline. Differences between `_orig` and non-`_orig` are small (< 0.02) and come
 from argmax tie-breaking under different GPU kernels.
+
+**Note on denominators:** all fine-tuned models (rows 1–28) were evaluated with
+`exclude_counterfactual: true` — 358 original test records, no counterfactuals. The zero-shot
+frontier models (italicised rows) were rescored on the same 358 originals for a matched
+comparison. See §9 for details.
 
 ---
 
@@ -437,46 +442,62 @@ checkpoints are no longer saved (disabled to prevent disk exhaustion).
 ## 9. Frontier model comparison (zero-shot, no fine-tuning)
 
 To establish whether fine-tuning is necessary, we evaluated frontier LLMs via OpenRouter API
-on the same held-out test split (884 records). Each model receives the same system prompt
-(describing the 29 fields and their valid values) and the same dialogue context, and must
-output a `<state>` block. Responses are parsed through the same pipeline as the SFT eval.
+on the same held-out test split. Each model receives the same system prompt (describing the 29
+fields and their valid values) and the same dialogue context, and must output a `<state>` block.
+Responses are parsed through the same pipeline as the SFT eval.
 
 ### 9.1 Setup
 
 | item | value |
 |---|---|
 | API | OpenRouter (`https://openrouter.ai/api/v1/chat/completions`) |
-| Models | Qwen3.8-27B, Llama-4 Scout 17B, Qwen3.8-Max (with reasoning) |
+| Models | Qwen3.8-27B, Llama-4 Scout 17B (Qwen3.8-Max and DeepSeek-V4-Flash pending) |
 | Temperature | 0.0 (greedy) |
 | Max tokens | 2048 (non-reasoning), 4096 (reasoning) |
 | Concurrency | 4–8 parallel requests |
 | Prompt | System: field schema + output format; User: dialogue context |
 | Reasoning | Disabled where possible (Qwen3.8-Max requires it) |
 
-### 9.2 Results
+**Excluded runs:** Four API runs produced empty responses due to provider errors (403 ToS
+violations for Google/Anthropic models, 402 credit exhaustion for DeepSeek-V4-Pro, and
+rate-limiting for Qwen3.7-flash). These are API failures, not wrong predictions, so they are
+excluded from the comparison entirely. Only the two models with 100% parse rate are reported.
 
-| model | params | reasoning | parse rate | **RP F1** | RP acc | mean acc | mean macro-F1 | mean weighted F1 |
-|---|---:|---|---:|---:|---:|---:|---:|---:|
-| **Qwen3.8-Max** | ~480B (MoE) | yes | — | *pending* | — | — | — | — |
-| **Qwen3.8-27B** | 27B | no | 100% | **0.2160** | 0.4383 | 0.4908 | 0.2926 | 0.4364 |
-| **Llama-4 Scout** | 17B (16e) | no | 100% | **0.1442** | 0.1812 | 0.3860 | 0.2618 | 0.3699 |
+### 9.2 Results — matched denominator (358 originals)
 
-### 9.3 Comparison with fine-tuned models
+The fine-tuned models were evaluated with `exclude_counterfactual: true` (358 original records,
+no counterfactuals). To make the comparison fair, the zero-shot models are rescored on the same
+358 originals using the identical metric pipeline. The `per_record.jsonl` output from each
+OpenRouter run maps record-by-record to the test file via `idx`, so the rescore is exact.
 
-| model | params | fine-tuned? | **RP F1** | mean acc | mean macro-F1 |
-|---|---:|---|---:|---:|---:|
-| Qwen3-4B + SFT (S2 reg) | 4B | yes (LoRA) | **0.5362** | 0.7076 | 0.5283 |
-| Qwen3-4B + SFT (S1) | 4B | yes (LoRA) | **0.5167** | 0.7225 | 0.5465 |
-| Qwen3-4B + heads (L1 s43) | 4B | yes (LoRA) | **0.4731** | 0.6825 | 0.5404 |
-| Qwen3.8-27B | 27B | no (zero-shot) | 0.2160 | 0.4908 | 0.2926 |
-| Llama-4 Scout 17B | 17B | no (zero-shot) | 0.1442 | 0.3860 | 0.2618 |
+| model | params | fine-tuned? | n records | **RP F1** | RP acc | RP weighted F1 |
+|---|---:|---|---:|---:|---:|---:|
+| Qwen3-4B + SFT (S2 reg) | 4B | yes (LoRA) | 358 | **0.5362** | 0.6927 | — |
+| Qwen3-4B + SFT (S1) | 4B | yes (LoRA) | 358 | **0.5167** | 0.6899 | — |
+| Qwen3-4B + heads (L1 s43) | 4B | yes (LoRA) | 358 | **0.4731** | 0.6636 | — |
+| Qwen3.8-27B | 27B | no (zero-shot) | 358 | **0.2048** | 0.4106 | 0.3257 |
+| Llama-4 Scout 17B | 17B | no (zero-shot) | 358 | **0.1449** | 0.1760 | 0.2562 |
 
-### 9.4 Analysis
+**For reference, the zero-shot numbers on all 884 records (including 526 counterfactuals):**
 
-1. **Fine-tuning a 4B model outperforms a 27B zero-shot model by 2.5×.** The S2 SFT model
-   achieves RP F1 0.5362 vs Qwen3.8-27B's 0.2160 — a 0.32 absolute improvement. Despite having
-   6.7× fewer parameters, the fine-tuned model is dramatically better because it has learned the
-   domain-specific label schema and the mapping from dialogue context to latent state.
+| model | n records | RP F1 | RP acc |
+|---|---:|---:|---:|
+| Qwen3.8-27B | 884 | 0.2160 | 0.4383 |
+| Llama-4 Scout | 884 | 0.1442 | 0.1812 |
+
+The counterfactual records share byte-identical contexts with their originals but carry
+different gold labels. Zero-shot models predict the same output for both, so their accuracy on
+counterfactuals is lower by construction. This is why the 884-record RP F1 (0.216) is slightly
+higher than the 358-original RP F1 (0.205) for Qwen3.8-27B — the counterfactuals dilute the
+effect of wrong predictions on rare classes. The 358-original number is the honest comparison.
+
+### 9.3 Analysis
+
+1. **Fine-tuning a 4B model outperforms a 27B zero-shot model by 2.6×.** The S2 SFT model
+   achieves RP F1 0.5362 vs Qwen3.8-27B's 0.2048 — a 0.33 absolute improvement on the same 358
+   originals. Despite having 6.7× fewer parameters, the fine-tuned model is dramatically better
+   because it has learned the domain-specific label schema and the mapping from dialogue context
+   to latent state.
 
 2. **Zero-shot frontier models cannot follow the label schema.** Both models produce well-formed
    `<state>` blocks (100% parse rate), but they invent their own field names and values instead
@@ -486,54 +507,34 @@ output a `<state>` block. Responses are parsed through the same pipeline as the 
 
 3. **The zero-shot models understand the dialogue but not the task.** Qwen3.8-27B gets 84%
    accuracy on `risk_type` and 74% on `player_credibility` — fields where the label names are
-   self-explanatory. But it gets 0% on `duty_pressure` and `repair_strategy` — fields where the
-   label semantics are domain-specific and not inferable from the label name alone.
+   self-explanatory. But it gets low accuracy on `duty_pressure` and `repair_strategy` — fields
+   where the label semantics are domain-specific and not inferable from the label name alone.
 
-4. **Even the zero-shot models' best fields are far below fine-tuned performance.** The best
-   zero-shot field accuracy (risk_type: 84%) is below the fine-tuned SFT mean accuracy (71%).
-   The fine-tuned model's domain knowledge compensates for its smaller size.
+4. **The 0.75 target is not reachable by zero-shot frontier models either.** Even a 27B model
+   with 100× more parameters than our 4B base achieves only 0.20 RP F1 without fine-tuning on
+   the matched 358 originals. This confirms that the task requires learning domain-specific label
+   semantics that are not present in pretraining data.
 
-5. **The 0.75 target is not reachable by zero-shot frontier models either.** Even a 27B model
-   with 100× more parameters than our 4B base achieves only 0.22 RP F1 without fine-tuning.
-   This confirms that the task requires learning domain-specific label semantics that are not
-   present in pretraining data.
+### 9.4 Per-class response-policy breakdown (358 originals)
 
-### 9.5 Per-field breakdown: zero-shot vs fine-tuned
+| class | gold n | Qwen3.8-27B pred n | Qwen3.8-27B F1 | Llama-4 pred n | Llama-4 F1 |
+|---|---:|---:|---:|---:|---:|
+| deflect | 125 | 283 | 0.5931 | 60 | 0.4324 |
+| soothe | 90 | 6 | 0.1250 | 14 | 0.2115 |
+| threaten | 51 | 9 | 0.3000 | 11 | 0.2903 |
+| challenge | 39 | 12 | 0.2745 | 1 | 0.0500 |
+| negotiate | 21 | 4 | 0.1600 | 4 | 0.0800 |
+| clarify | 18 | 4 | 0.0909 | 0 | 0.0000 |
+| test | 12 | 0 | 0.0000 | 0 | 0.0000 |
+| answer | 2 | 19 | 0.0952 | 19 | 0.0952 |
+| partial | 0 | 14 | 0.0000 | 161 | 0.0000 |
+| withhold | 0 | 7 | 0.0000 | 1 | 0.0000 |
 
-| field | Qwen3.8-27B acc | Llama-4 acc | S2 SFT acc | S1 SFT acc |
-|---|---:|---:|---:|---:|
-| risk_type | 0.8439 | 0.4163 | — | — |
-| player_credibility | 0.7353 | 0.6391 | — | — |
-| player_intent | 0.6584 | 0.1957 | — | — |
-| face_pressure | 0.6516 | 0.4502 | — | — |
-| threat | 0.6324 | 0.5351 | — | — |
-| secrecy_pressure | 0.6298 | 0.5879 | — | — |
-| familiarity_level | 0.6275 | 0.5123 | — | — |
-| trust_level | 0.6183 | 0.5360 | — | — |
-| value_conflict | 0.6075 | 0.5079 | — | — |
-| repair_strategy | 0.5905 | 0.1731 | — | — |
-| duty_pressure | 0.5724 | 0.5633 | — | — |
-| arousal | 0.5701 | 0.3937 | — | — |
-| valence | 0.5419 | 0.5339 | — | — |
-| tone | 0.5034 | 0.4208 | — | — |
-| response_policy | 0.4383 | 0.1812 | 0.6927 | 0.6899 |
-| player_knowledge | 0.4389 | 0.4061 | — | — |
-| dominance_level | 0.4478 | 0.4512 | — | — |
-| reveal_decision | 0.4548 | 0.3281 | — | — |
-| respect_level | 0.3541 | 0.3506 | — | — |
-| control | 0.3609 | 0.3462 | — | — |
-| respect_delta | 0.3511 | 0.2877 | — | — |
-| obligation_level | 0.3244 | 0.2453 | — | — |
-| dominance_delta | 0.3111 | 0.2986 | — | — |
-| affection_delta | 0.2888 | 0.2741 | — | — |
-| familiarity_delta | 0.2627 | 0.2616 | — | — |
-| trust_delta | 0.2220 | 0.1823 | — | — |
-| affection_level | 0.1908 | 0.2414 | — | — |
-| obligation_delta | 0.5136 | 0.4887 | — | — |
-
-**Pattern:** Fields with self-explanatory label names (risk_type, player_credibility,
-player_intent) score well zero-shot. Fields with domain-specific semantics (affection_level,
-trust_delta, response_policy) score poorly. Fine-tuning teaches the model these semantics.
+**Pattern:** Qwen3.8-27B over-predicts `deflect` (283 predictions vs 125 gold) — the majority
+class. It barely predicts `soothe` (6 vs 90 gold). Llama-4 Scout over-predicts `partial` (161
+predictions vs 0 gold) — a class that doesn't even appear in the test set. Both models are
+essentially guessing the majority class for most records, with occasional correct predictions
+on the common classes.
 
 ---
 
