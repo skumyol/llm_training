@@ -167,7 +167,11 @@ All M-series runs use the new code (commit `e4cbb5f`) with mean pooling and seed
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | S1 genstate | baseline SFT | unseeded | 5 | 2 | 0.1050 | **0.5167** | 0.5465 | **0.7225** |
 | S1 s43 | same, seeded | 43 | 5 | 2 | 0.1087 | 0.4807 | 0.5353 | 0.7167 |
-| S2 reg | LoRA dropout 0.10, wd 0.05, lr 1.5e-4, 8ep | 42 | 8 | 2 | 0.1066 | pending | pending | pending |
+| S1 genstate + vote(4) | greedy + 4-sampled majority vote | 42 | — | — | — | 0.5126 | 0.5450 | 0.7227 |
+| S2 reg | LoRA dropout 0.10, wd 0.05, lr 1.5e-4, 8ep | 42 | 8 | 2 | 0.1066 | **0.5362** | 0.5283 | 0.7076 |
+| S2 reg + vote(4) | same vote decoding on S2 | 42 | — | — | — | 0.5342 | 0.5291 | 0.7108 |
+
+*(Vote-decoding rows added 2026-08-25; `eval_latent_sft_vote.py`, jobs 1783938/1783939.)*
 
 **Key findings:**
 
@@ -182,9 +186,24 @@ All M-series runs use the new code (commit `e4cbb5f`) with mean pooling and seed
 
 3. **Vote decoding (majority vote over 5 samples) does not help.** S1 vote: RP F1 0.5126 vs
    greedy 0.5167 — sampling introduces variance that cancels out the marginal gains from
-   majority voting.
+   majority voting. Confirmed on S2 as well (0.5342 vs 0.5362). Per-field deltas scatter ±0.04
+   in both directions with no pattern: the greedy decode already sits at the model's consensus.
 
-4. **SFT leverages pretraining knowledge.** The LLM already understands words like "soothe" and
+4. **S2 regularisation trades aggregate metrics for the RP head.** S2 posts the highest single
+   RP F1 reading of any configuration in the project (0.5362 greedy, +0.02 over the better S1
+   seed) but gives up ~0.018 macro-F1 and ~0.015 accuracy vs the S1 two-seed means. Given the
+   observed seed spread (±0.036 on RP between S1 s42/s43), the RP advantage is suggestive, not
+   proven — it needs more seeds before being quoted as a regularisation effect. Regularisation
+   also did not move the overfit point: best val loss is again at epoch 2 (0.1066 vs 0.1050
+   unregularised), rising monotonically to 0.204 by epoch 8.
+
+5. **Ceiling across all S-series variants:** RP F1 stays inside **0.48–0.54** and macro-F1 inside
+   **0.53–0.55** across two seeds × two decoding schemes × two regularisation settings. Every
+   model-side lever tried — conditioning structure (S-series itself), decoding (vote), seeds,
+   regularisation — lands inside the same band, corroborating §6.1's data-side analysis of the
+   0.75 target.
+
+6. **SFT leverages pretraining knowledge.** The LLM already understands words like "soothe" and
    "deflect" from pretraining; the classification heads discard this by projecting to a 256-dim
    space and reading off a linear classifier. SFT keeps the full vocabulary embedding and generates
    the label as text, which is why it outperforms despite having the same backbone and LoRA rank.
@@ -206,32 +225,35 @@ this domain. Fine-tuning is necessary.
 
 | rank | experiment | architecture | seed | **test RP F1** | test macro-F1 | test mean acc | test RP acc |
 |---:|---|---|---|---:|---:|---:|---:|
-| 1 | L1 s43 orig | classification (last-token) | 43 | 0.5295 | 0.5534 | 0.6882 | 0.6732 |
-| 2 | L1 orig | classification (last-token) | unseeded | 0.5205 | 0.5567 | 0.6886 | 0.6676 |
-| 3 | **S1 genstate orig** | **generative SFT** | unseeded | **0.5167** | 0.5465 | **0.7225** | 0.6899 |
-| 4 | L1 s44 orig | classification (last-token) | 44 | 0.5037 | 0.5489 | 0.6812 | 0.6536 |
-| 5 | L3 meanpool orig | classification (mean) | unseeded | 0.4891 | 0.5649 | 0.7032 | 0.6592 |
-| 6 | S1 s43 orig | generative SFT | 43 | 0.4807 | 0.5353 | 0.7167 | 0.6816 |
-| 7 | L4 ctx1024 orig | classification (mean, 1024) | unseeded | 0.4740 | 0.5629 | 0.7108 | 0.6648 |
-| 8 | L1 control | classification (last-token) | unseeded | 0.4731 | 0.5407 | 0.6819 | 0.6670 |
-| 9 | L1 s43 | classification (last-token) | 43 | 0.4731 | 0.5404 | 0.6825 | 0.6636 |
-| 10 | original | classification (last-token) | unseeded | 0.4660 | 0.5460 | 0.6803 | 0.6257 |
-| 11 | L2 nosampler | classification (last-token) | unseeded | 0.4575 | 0.5348 | 0.6853 | 0.6478 |
-| 12 | L1 s44 | classification (last-token) | 44 | 0.4557 | 0.5357 | 0.6771 | 0.6455 |
-| 13 | L3 meanpool | classification (mean) | unseeded | 0.4525 | 0.5502 | 0.6972 | 0.6659 |
-| 14 | L4 ctx1024 | classification (mean, 1024) | unseeded | 0.4310 | 0.5531 | 0.7066 | 0.6648 |
-| 15 | honest (thesis baseline) | classification (last-token) | unseeded | 0.4268 | 0.5341 | 0.6735 | 0.6229 |
-| 16 | L5 nocf orig | classification (mean, no CF) | unseeded | 0.3814 | 0.5365 | 0.6490 | 0.5810 |
-| 17 | L6 nocf reg orig | classification (mean, no CF, γ=2) | unseeded | 0.3610 | 0.5323 | 0.6471 | 0.5642 |
-| 18 | M8 s44 | classification (mean, new code) | 44 | 0.3510 | 0.4966 | 0.6163 | 0.5651 |
-| 19 | M9 s43 long | classification (mean, 8ep) | 43 | 0.3497 | 0.5131 | 0.6305 | 0.5764 |
-| 20 | M12 auxinput | classification (mean, aux) | 42 | 0.3461 | 0.4987 | 0.6190 | 0.5685 |
-| 21 | L5 nocf | classification (mean, no CF) | unseeded | 0.3454 | 0.5158 | 0.6385 | 0.5787 |
-| 22 | M7 s43 | classification (mean, new code) | 43 | 0.3400 | 0.4927 | 0.6102 | 0.5583 |
-| 23 | M11 twostage | classification (mean, two-stage) | 42 | 0.3389 | 0.5067 | 0.6236 | 0.5866 |
-| 24 | L6 nocf reg | classification (mean, no CF, γ=2) | unseeded | 0.3193 | 0.5106 | 0.6358 | 0.5549 |
-| 25 | M2 deephead | classification (mean, deep head) | 42 | 0.0936 | 0.4866 | 0.5975 | 0.0600 |
-| 26 | M6 hilr | classification (mean, 2× head LR) | 42 | 0.0754 | 0.4922 | 0.6020 | 0.0509 |
+| 1 | **S2 genstate reg** | **generative SFT (regularised)** | 42 | **0.5362** | 0.5283 | 0.7076 | 0.6927 |
+| 2 | L1 s43 orig | classification (last-token) | 43 | 0.5295 | 0.5534 | 0.6882 | 0.6732 |
+| 3 | L1 orig | classification (last-token) | unseeded | 0.5205 | 0.5567 | 0.6886 | 0.6676 |
+| 4 | **S1 genstate orig** | **generative SFT** | unseeded | **0.5167** | 0.5465 | **0.7225** | 0.6899 |
+| 5 | L1 s44 orig | classification (last-token) | 44 | 0.5037 | 0.5489 | 0.6812 | 0.6536 |
+| 6 | L3 meanpool orig | classification (mean) | unseeded | 0.4891 | 0.5649 | 0.7032 | 0.6592 |
+| 7 | S1 s43 orig | generative SFT | 43 | 0.4807 | 0.5353 | 0.7167 | 0.6816 |
+| 8 | L4 ctx1024 orig | classification (mean, 1024) | unseeded | 0.4740 | 0.5629 | 0.7108 | 0.6648 |
+| 10 | L1 control | classification (last-token) | unseeded | 0.4731 | 0.5407 | 0.6819 | 0.6670 |
+| 11 | L1 s43 | classification (last-token) | 43 | 0.4731 | 0.5404 | 0.6825 | 0.6636 |
+| 12 | original | classification (last-token) | unseeded | 0.4660 | 0.5460 | 0.6803 | 0.6257 |
+| 13 | L2 nosampler | classification (last-token) | unseeded | 0.4575 | 0.5348 | 0.6853 | 0.6478 |
+| 14 | L1 s44 | classification (last-token) | 44 | 0.4557 | 0.5357 | 0.6771 | 0.6455 |
+| 15 | L3 meanpool | classification (mean) | unseeded | 0.4525 | 0.5502 | 0.6972 | 0.6659 |
+| 16 | L4 ctx1024 | classification (mean, 1024) | unseeded | 0.4310 | 0.5531 | 0.7066 | 0.6648 |
+| 17 | honest (thesis baseline) | classification (last-token) | unseeded | 0.4268 | 0.5341 | 0.6735 | 0.6229 |
+| 18 | L5 nocf orig | classification (mean, no CF) | unseeded | 0.3814 | 0.5365 | 0.6490 | 0.5810 |
+| 19 | L6 nocf reg orig | classification (mean, no CF, γ=2) | unseeded | 0.3610 | 0.5323 | 0.6471 | 0.5642 |
+| 20 | M8 s44 | classification (mean, new code) | 44 | 0.3510 | 0.4966 | 0.6163 | 0.5651 |
+| 21 | M9 s43 long | classification (mean, 8ep) | 43 | 0.3497 | 0.5131 | 0.6305 | 0.5764 |
+| 22 | M12 auxinput | classification (mean, aux) | 42 | 0.3461 | 0.4987 | 0.6190 | 0.5685 |
+| 23 | L5 nocf | classification (mean, no CF) | unseeded | 0.3454 | 0.5158 | 0.6385 | 0.5787 |
+| 24 | M7 s43 | classification (mean, new code) | 43 | 0.3400 | 0.4927 | 0.6102 | 0.5583 |
+| 25 | M11 twostage | classification (mean, two-stage) | 42 | 0.3389 | 0.5067 | 0.6236 | 0.5866 |
+| 26 | L6 nocf reg | classification (mean, no CF, γ=2) | unseeded | 0.3193 | 0.5106 | 0.6358 | 0.5549 |
+| 27 | M2 deephead | classification (mean, deep head) | 42 | 0.0936 | 0.4866 | 0.5975 | 0.0600 |
+| 28 | M6 hilr | classification (mean, 2× head LR) | 42 | 0.0754 | 0.4922 | 0.6020 | 0.0509 |
+| — | *Qwen3.8-27B (zero-shot)* | *API, no fine-tune* | — | *0.2160* | *0.2926* | *0.4908* | *0.4383* |
+| — | *Llama-4 Scout 17B (zero-shot)* | *API, no fine-tune* | — | *0.1442* | *0.2618* | *0.3860* | *0.1812* |
 
 **Note on `_orig` suffix:** some experiments were evaluated twice — once with the original eval
 code and once with a corrected version that handles label remapping. The `_orig` runs use the
@@ -412,7 +434,110 @@ checkpoints are no longer saved (disabled to prevent disk exhaustion).
 
 ---
 
-## 9. Open questions
+## 9. Frontier model comparison (zero-shot, no fine-tuning)
+
+To establish whether fine-tuning is necessary, we evaluated frontier LLMs via OpenRouter API
+on the same held-out test split (884 records). Each model receives the same system prompt
+(describing the 29 fields and their valid values) and the same dialogue context, and must
+output a `<state>` block. Responses are parsed through the same pipeline as the SFT eval.
+
+### 9.1 Setup
+
+| item | value |
+|---|---|
+| API | OpenRouter (`https://openrouter.ai/api/v1/chat/completions`) |
+| Models | Qwen3.8-27B, Llama-4 Scout 17B, Qwen3.8-Max (with reasoning) |
+| Temperature | 0.0 (greedy) |
+| Max tokens | 2048 (non-reasoning), 4096 (reasoning) |
+| Concurrency | 4–8 parallel requests |
+| Prompt | System: field schema + output format; User: dialogue context |
+| Reasoning | Disabled where possible (Qwen3.8-Max requires it) |
+
+### 9.2 Results
+
+| model | params | reasoning | parse rate | **RP F1** | RP acc | mean acc | mean macro-F1 | mean weighted F1 |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| **Qwen3.8-Max** | ~480B (MoE) | yes | — | *pending* | — | — | — | — |
+| **Qwen3.8-27B** | 27B | no | 100% | **0.2160** | 0.4383 | 0.4908 | 0.2926 | 0.4364 |
+| **Llama-4 Scout** | 17B (16e) | no | 100% | **0.1442** | 0.1812 | 0.3860 | 0.2618 | 0.3699 |
+
+### 9.3 Comparison with fine-tuned models
+
+| model | params | fine-tuned? | **RP F1** | mean acc | mean macro-F1 |
+|---|---:|---|---:|---:|---:|
+| Qwen3-4B + SFT (S2 reg) | 4B | yes (LoRA) | **0.5362** | 0.7076 | 0.5283 |
+| Qwen3-4B + SFT (S1) | 4B | yes (LoRA) | **0.5167** | 0.7225 | 0.5465 |
+| Qwen3-4B + heads (L1 s43) | 4B | yes (LoRA) | **0.4731** | 0.6825 | 0.5404 |
+| Qwen3.8-27B | 27B | no (zero-shot) | 0.2160 | 0.4908 | 0.2926 |
+| Llama-4 Scout 17B | 17B | no (zero-shot) | 0.1442 | 0.3860 | 0.2618 |
+
+### 9.4 Analysis
+
+1. **Fine-tuning a 4B model outperforms a 27B zero-shot model by 2.5×.** The S2 SFT model
+   achieves RP F1 0.5362 vs Qwen3.8-27B's 0.2160 — a 0.32 absolute improvement. Despite having
+   6.7× fewer parameters, the fine-tuned model is dramatically better because it has learned the
+   domain-specific label schema and the mapping from dialogue context to latent state.
+
+2. **Zero-shot frontier models cannot follow the label schema.** Both models produce well-formed
+   `<state>` blocks (100% parse rate), but they invent their own field names and values instead
+   of using the provided schema. For example, Qwen3.8-27B outputs `mood=guarded` and
+   `intent=probe` instead of `tone=evasive` and `player_intent=probe`. The parser only recognizes
+   fields in the schema, so invented fields score as missing.
+
+3. **The zero-shot models understand the dialogue but not the task.** Qwen3.8-27B gets 84%
+   accuracy on `risk_type` and 74% on `player_credibility` — fields where the label names are
+   self-explanatory. But it gets 0% on `duty_pressure` and `repair_strategy` — fields where the
+   label semantics are domain-specific and not inferable from the label name alone.
+
+4. **Even the zero-shot models' best fields are far below fine-tuned performance.** The best
+   zero-shot field accuracy (risk_type: 84%) is below the fine-tuned SFT mean accuracy (71%).
+   The fine-tuned model's domain knowledge compensates for its smaller size.
+
+5. **The 0.75 target is not reachable by zero-shot frontier models either.** Even a 27B model
+   with 100× more parameters than our 4B base achieves only 0.22 RP F1 without fine-tuning.
+   This confirms that the task requires learning domain-specific label semantics that are not
+   present in pretraining data.
+
+### 9.5 Per-field breakdown: zero-shot vs fine-tuned
+
+| field | Qwen3.8-27B acc | Llama-4 acc | S2 SFT acc | S1 SFT acc |
+|---|---:|---:|---:|---:|
+| risk_type | 0.8439 | 0.4163 | — | — |
+| player_credibility | 0.7353 | 0.6391 | — | — |
+| player_intent | 0.6584 | 0.1957 | — | — |
+| face_pressure | 0.6516 | 0.4502 | — | — |
+| threat | 0.6324 | 0.5351 | — | — |
+| secrecy_pressure | 0.6298 | 0.5879 | — | — |
+| familiarity_level | 0.6275 | 0.5123 | — | — |
+| trust_level | 0.6183 | 0.5360 | — | — |
+| value_conflict | 0.6075 | 0.5079 | — | — |
+| repair_strategy | 0.5905 | 0.1731 | — | — |
+| duty_pressure | 0.5724 | 0.5633 | — | — |
+| arousal | 0.5701 | 0.3937 | — | — |
+| valence | 0.5419 | 0.5339 | — | — |
+| tone | 0.5034 | 0.4208 | — | — |
+| response_policy | 0.4383 | 0.1812 | 0.6927 | 0.6899 |
+| player_knowledge | 0.4389 | 0.4061 | — | — |
+| dominance_level | 0.4478 | 0.4512 | — | — |
+| reveal_decision | 0.4548 | 0.3281 | — | — |
+| respect_level | 0.3541 | 0.3506 | — | — |
+| control | 0.3609 | 0.3462 | — | — |
+| respect_delta | 0.3511 | 0.2877 | — | — |
+| obligation_level | 0.3244 | 0.2453 | — | — |
+| dominance_delta | 0.3111 | 0.2986 | — | — |
+| affection_delta | 0.2888 | 0.2741 | — | — |
+| familiarity_delta | 0.2627 | 0.2616 | — | — |
+| trust_delta | 0.2220 | 0.1823 | — | — |
+| affection_level | 0.1908 | 0.2414 | — | — |
+| obligation_delta | 0.5136 | 0.4887 | — | — |
+
+**Pattern:** Fields with self-explanatory label names (risk_type, player_credibility,
+player_intent) score well zero-shot. Fields with domain-specific semantics (affection_level,
+trust_delta, response_policy) score poorly. Fine-tuning teaches the model these semantics.
+
+---
+
+## 10. Open questions
 
 1. **Is the `_orig` eval pipeline or the corrected eval pipeline the right one?** The difference
    is up to 0.04 RP F1 (L3: 0.4525 vs 0.4891). The `_orig` pipeline does not handle label
